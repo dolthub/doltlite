@@ -833,6 +833,8 @@ int doltliteStageNamedTables(
   /* Views and triggers are master rows with no catalog entry, which
   ** dolt_status reports under one name. Naming it stages that whole set. */
   int stageSchemas = 0;
+  int stageDatabase = 0;
+  ProllyHash metaSource;
   int rc;
 
   SchemaEntry *aWorkSchema = 0;
@@ -890,15 +892,19 @@ int doltliteStageNamedTables(
   }
 
   {
-    ProllyHash stagedSrc;
-    doltliteGetSessionStaged(db, &stagedSrc);
-    if( prollyHashIsEmpty(&stagedSrc) ){
-      (void)doltliteGetHeadCatalogHash(db, &stagedSrc);
+    doltliteGetSessionStaged(db, &metaSource);
+    if( prollyHashIsEmpty(&metaSource) ){
+      rc = doltliteGetHeadCatalogHash(db, &metaSource);
+      if( rc!=SQLITE_OK ){
+        ADDNAMED_FREE_ALL();
+        sqlite3_result_error_code(context, rc);
+        return rc;
+      }
     }
     rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), pWorkingHash,
                                &aWorkSchema, &nWorkSchema);
-    if( rc==SQLITE_OK && !prollyHashIsEmpty(&stagedSrc) ){
-      rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), &stagedSrc,
+    if( rc==SQLITE_OK && !prollyHashIsEmpty(&metaSource) ){
+      rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), &metaSource,
                                  &aStagedSchema, &nStagedSchema);
     }
     if( rc==SQLITE_OK ){
@@ -932,6 +938,11 @@ int doltliteStageNamedTables(
     }
     if( j<i ) continue;
 
+    if( sqlite3_stricmp(zTable, "dolt_database")==0 ){
+      metaSource = *pWorkingHash;
+      stageDatabase = 1;
+      continue;
+    }
     if( sqlite3_stricmp(zTable, "dolt_schemas")==0
      && !sqlite3FindTable(db, zTable, "main") ){
       stageSchemas = 1;
@@ -1156,7 +1167,7 @@ int doltliteStageNamedTables(
     }
   }
 
-  if( !updateMaster ){
+  if( !updateMaster && !stageDatabase ){
     ADDNAMED_FREE_ALL();
     return SQLITE_OK;
   }
@@ -1205,7 +1216,7 @@ int doltliteStageNamedTables(
     }
   }
 
-  rc = addWriteStagedCatalog(db, cs, aStaged, nStaged, 0, 0);
+  rc = addWriteStagedCatalog(db, cs, aStaged, nStaged, 0, &metaSource);
   ADDNAMED_FREE_ALL();
   #undef ADDNAMED_TOUCH
   #undef ADDNAMED_FREE_ALL

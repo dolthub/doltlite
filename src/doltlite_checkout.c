@@ -18,14 +18,12 @@ struct CheckoutSchemaInfo {
   int hasSource;
   int rebuilt;
   int isSchemas;
+  int isDatabase;
   char *zCurrentSql;
   char *zSourceSql;
 };
 
-/* Views and triggers are master rows with no catalog entry of their own,
-** which dolt_status reports under this one name. */
 #define CHECKOUT_SCHEMAS_NAME "dolt_schemas"
-
 
 static void checkoutSchemaInfoClear(CheckoutSchemaInfo *aInfo, int nInfo){
   int i;
@@ -972,8 +970,6 @@ static int checkoutAdoptVtabShadows(
   return SQLITE_OK;
 }
 
-/* Remember vtabs named by this checkout. Called before the catalog
-** swap, while sqlite_master still names them. */
 static int vtabCollectNamed(
   sqlite3 *db,
   sqlite3_value **argv,
@@ -1007,7 +1003,6 @@ static int vtabCollectNamed(
   return SQLITE_OK;
 }
 
-/* Drop one open vtab transaction so commit cannot flush it. */
 static void vtabRollbackInstance(sqlite3 *db, VTable *pVTab){
 #ifndef SQLITE_OMIT_VIRTUALTABLE
   int i;
@@ -1057,6 +1052,7 @@ static int checkoutTablesInTxn(
   int nWorking = 0, nSource = 0;
   int nSourceSchema = 0, nWorkSchema = 0;
   int fkeys = 0;
+  int restoreDatabase = 0;
   int i, j;
   int rc;
 
@@ -1094,7 +1090,12 @@ static int checkoutTablesInTxn(
       memcpy(&sourceCatHash, &headCatHash, sizeof(ProllyHash));
     }
     if( prollyHashIsEmpty(&sourceCatHash) ){
-      return SQLITE_NOTFOUND;
+      for(i=0; i<nNames; i++){
+        const char *zName = (const char*)sqlite3_value_text(argv[iFirstName+i]);
+        if( !zName || sqlite3_stricmp(zName, "dolt_database")!=0 ){
+          return SQLITE_NOTFOUND;
+        }
+      }
     }
   }
 
@@ -1106,7 +1107,8 @@ static int checkoutTablesInTxn(
       const char *zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
       int srcIdx = -1;
       if( !zName ) continue;
-      if( sqlite3_stricmp(zName, CHECKOUT_SCHEMAS_NAME)==0 ) continue;
+      if( sqlite3_stricmp(zName, CHECKOUT_SCHEMAS_NAME)==0
+       || sqlite3_stricmp(zName, "dolt_database")==0 ) continue;
       for(j=0; j<nSource; j++){
         if( aSource[j].zName && sqlite3_stricmp(aSource[j].zName, zName)==0 ){
           srcIdx = j;
@@ -1114,7 +1116,6 @@ static int checkoutTablesInTxn(
         }
       }
       if( srcIdx<0 ){
-        /* Vtabs have no catalog entry; validate the name against source schema. */
         int hasVtab = 0;
         char *zSql = 0;
         rc = checkoutLoadSourceTableSql(db, aSource, nSource, zName,
@@ -1128,7 +1129,6 @@ static int checkoutTablesInTxn(
           doltliteFreeCatalog(aSource, nSource);
           return rc;
         }
-        /* A ref checkout of "." drops a table the commit does not have. */
         if( !hasVtab && !bDropIfAbsent ){
           if( pzMissing ) *pzMissing = zName;
           doltliteFreeCatalog(aSource, nSource);
@@ -1148,6 +1148,10 @@ static int checkoutTablesInTxn(
   for(i=0; i<nNames; i++){
     const char *zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
     if( !zName ) continue;
+    if( sqlite3_stricmp(zName, "dolt_database")==0 ){
+      aSchema[i].isDatabase = restoreDatabase = 1;
+      continue;
+    }
     if( sqlite3_stricmp(zName, CHECKOUT_SCHEMAS_NAME)==0 ){
       aSchema[i].isSchemas = 1;
       continue;
@@ -1160,8 +1164,6 @@ static int checkoutTablesInTxn(
                                       &aSchema[i].hasSource,
                                       &aSchema[i].zSourceSql);
     }
-    /* Reject an unknown name before the schema pass starts dropping and
-    ** recreating the objects of the names ahead of it. */
     if( rc==SQLITE_OK && !bDropIfAbsent
      && !aSchema[i].hasCurrent && !aSchema[i].hasSource ){
       if( pzMissing ) *pzMissing = zName;
@@ -1186,7 +1188,7 @@ static int checkoutTablesInTxn(
   for(i=0; rc==SQLITE_OK && i<nNames; i++){
     const char *zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
     int bSchemaChanged;
-    if( !zName ) continue;
+    if( !zName || aSchema[i].isDatabase ) continue;
     if( aSchema[i].isSchemas ){
       rc = doltliteRevertViewsAndTriggers(db, aSourceSchema, nSourceSchema);
       if( rc!=SQLITE_OK ){
@@ -1250,7 +1252,7 @@ static int checkoutTablesInTxn(
     const char *zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
     int srcIdx = -1, workIdx = -1;
     if( !zName ) continue;
-    if( aSchema[i].isSchemas ) continue;
+    if( aSchema[i].isSchemas || aSchema[i].isDatabase ) continue;
 
     for(j=0; j<nSource; j++){
       if( aSource[j].zName && sqlite3_stricmp(aSource[j].zName, zName)==0 ){
@@ -1267,8 +1269,6 @@ static int checkoutTablesInTxn(
       if( (aSchema[i].rebuilt || bDropIfAbsent) && !aSchema[i].hasSource ){
         continue;
       }
-      /* Vtab has no catalog entry; schema pass handled the row, content
-      ** rides in the shadow entries adopted below. */
       if( (aSchema[i].hasSource && aSchema[i].zSourceSql
            && sqlite3_strnicmp(aSchema[i].zSourceSql, "CREATE VIRTUAL", 14)==0)
        || (aSchema[i].hasCurrent && aSchema[i].zCurrentSql
@@ -1338,7 +1338,10 @@ static int checkoutTablesInTxn(
   {
     u8 *buf = 0;
     int nBuf = 0;
-    rc = doltliteSerializeCatalogEntries(db, aWorking, nWorking, &buf, &nBuf);
+    rc = restoreDatabase
+       ? doltliteSerializeCatalogEntriesFromCatalog(db, aWorking, nWorking,
+           &sourceCatHash, &buf, &nBuf)
+       : doltliteSerializeCatalogEntries(db, aWorking, nWorking, &buf, &nBuf);
     if( rc==SQLITE_OK ){
       rc = chunkStorePut(cs, buf, nBuf, &newWorkingHash);
     }
@@ -1574,7 +1577,6 @@ static void doltCheckoutParsedFunc(
     return;
   }
 
-  /* `--` before every name checks out tables instead of switching branch. */
   if( (argc>1 || iEndOptions==0) && !isCreateAndSwitch ){
     ProllyHash sourceRef;
     if( iEndOptions!=0

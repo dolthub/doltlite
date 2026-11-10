@@ -173,4 +173,144 @@ do_execsql_test status-metadata-commit-am {
   PRAGMA application_id;
 } {dolt_database 0 modified 1 0 23 24}
 
+foreach pragma {user_version application_id} {
+  foreach boundary {autocommit begin} {
+    reset_db
+    execsql {
+      CREATE TABLE t(id INTEGER PRIMARY KEY);
+      CREATE TABLE u(id INTEGER PRIMARY KEY);
+      SELECT dolt_commit('-Am','base');
+    }
+    if {$boundary eq "begin"} {execsql BEGIN}
+    set prefix database-scoped-$pragma-$boundary
+    execsql "PRAGMA $pragma=5"
+    do_execsql_test $prefix-add-unchanged {
+      SELECT dolt_add('t');
+      SELECT * FROM dolt_status;
+    } {0 dolt_database 0 modified}
+    do_execsql_test $prefix-add-table {
+      INSERT INTO u VALUES(1);
+      SELECT dolt_add('u');
+      SELECT * FROM dolt_status ORDER BY table_name,staged;
+    } {0 dolt_database 0 modified u 1 modified}
+    do_test $prefix-commit-table {
+      execsql {SELECT dolt_commit('-m','table only')}
+      list [execsql "PRAGMA $pragma"] [execsql {SELECT * FROM dolt_status}]
+    } {5 {dolt_database 0 modified}}
+    do_execsql_test $prefix-add-database {
+      INSERT INTO t VALUES(1);
+      SELECT dolt_add('DOLT_DATABASE','dolt_database');
+      SELECT * FROM dolt_status ORDER BY table_name,staged;
+    } {0 dolt_database 1 modified t 0 modified}
+    execsql "PRAGMA $pragma=-7"
+    do_execsql_test $prefix-preserve-staged {
+      SELECT dolt_add('t');
+      SELECT * FROM dolt_status ORDER BY table_name,staged;
+    } {0 dolt_database 0 modified dolt_database 1 modified t 1 modified}
+    do_execsql_test $prefix-reset-table {
+      SELECT dolt_reset('t');
+      SELECT * FROM dolt_status ORDER BY table_name,staged;
+    } {0 dolt_database 0 modified dolt_database 1 modified t 0 modified}
+    do_test $prefix-checkout-staged {
+      execsql {SELECT dolt_checkout('DOLT_DATABASE')}
+      list [execsql "PRAGMA $pragma"] \
+        [execsql {SELECT * FROM dolt_status ORDER BY table_name,staged}]
+    } {5 {dolt_database 1 modified t 0 modified}}
+    do_test $prefix-reset-database {
+      execsql {SELECT dolt_reset('DOLT_DATABASE')}
+      list [execsql "PRAGMA $pragma"] \
+        [execsql {SELECT * FROM dolt_status ORDER BY table_name,staged}]
+    } {5 {dolt_database 0 modified t 0 modified}}
+    do_test $prefix-checkout-database {
+      execsql {SELECT dolt_checkout('dolt_database')}
+      list [execsql "PRAGMA $pragma"] [execsql {SELECT * FROM dolt_status}]
+    } {0 {t 0 modified}}
+    if {$boundary eq "begin"} {execsql COMMIT}
+    do_test $prefix-reopen {
+      db close
+      sqlite3 db test.db
+      list [execsql "PRAGMA $pragma"] [execsql {SELECT * FROM dolt_status}]
+    } {0 {t 0 modified}}
+    do_test $prefix-committed-metadata {
+      execsql {SELECT dolt_checkout('-b','clean')}
+      list [execsql "PRAGMA $pragma"] [execsql {SELECT id FROM u}] \
+        [execsql {SELECT count(*) FROM t}]
+    } {0 1 0}
+  }
+}
+
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY);
+  SELECT dolt_commit('-Am','base');
+  PRAGMA user_version=5;
+  CREATE VIEW v AS SELECT * FROM t;
+}
+do_execsql_test database-scoped-schemas {
+  SELECT dolt_add('dolt_schemas');
+  SELECT * FROM dolt_status ORDER BY table_name,staged;
+  SELECT dolt_reset('dolt_schemas');
+  SELECT * FROM dolt_status ORDER BY table_name,staged;
+} {0 dolt_database 0 modified dolt_schemas 1 {new table} 0 dolt_database 0 modified dolt_schemas 0 {new table}}
+do_execsql_test database-scoped-savepoint {
+  BEGIN;
+  SAVEPOINT meta_sp;
+  SELECT dolt_add('t','dolt_database');
+  SELECT * FROM dolt_status ORDER BY table_name,staged;
+  ROLLBACK TO meta_sp;
+  SELECT * FROM dolt_status ORDER BY table_name,staged;
+  COMMIT;
+} {0 dolt_database 1 modified dolt_schemas 0 {new table} dolt_database 0 modified dolt_schemas 0 {new table}}
+
+reset_db
+do_execsql_test database-scoped-empty {
+  PRAGMA user_version=5;
+  PRAGMA application_id=-7;
+  SELECT dolt_add('dolt_database');
+  SELECT * FROM dolt_status;
+  SELECT dolt_reset('dolt_database');
+  SELECT * FROM dolt_status;
+  SELECT dolt_checkout('dolt_database');
+  PRAGMA user_version;
+  PRAGMA application_id;
+} {0 dolt_database 1 modified 0 dolt_database 0 modified 0 0 0}
+
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY);
+  SELECT dolt_commit('-Am','base');
+  PRAGMA user_version=11;
+  PRAGMA application_id=22;
+  SELECT dolt_commit('-am','metadata');
+  PRAGMA user_version=33;
+  PRAGMA application_id=44;
+  INSERT INTO t VALUES(1);
+  SELECT dolt_add('t');
+}
+foreach command {dolt_add dolt_checkout} {
+  do_catchsql_test database-scoped-atomic-$command "
+    SELECT ${command}('dolt_database','missing_table');
+  " [expr {$command eq "dolt_checkout"
+      ? {1 {no such branch or table: missing_table}}
+      : {1 {table not found: missing_table}}}]
+  do_execsql_test database-scoped-atomic-status-$command {
+    PRAGMA user_version;
+    PRAGMA application_id;
+    SELECT * FROM dolt_status ORDER BY table_name,staged;
+  } {33 44 dolt_database 0 modified t 1 modified}
+}
+do_execsql_test database-scoped-ref {
+  SELECT dolt_checkout('HEAD~1','dolt_database');
+  PRAGMA user_version;
+  PRAGMA application_id;
+  SELECT * FROM dolt_status ORDER BY table_name,staged;
+  SELECT id FROM t;
+} {0 0 0 dolt_database 1 modified t 1 modified 1}
+do_test database-scoped-ref-commit {
+  execsql {SELECT dolt_commit('-m','restore metadata')}
+  execsql {SELECT dolt_checkout('-b','clean')}
+  list [execsql {PRAGMA user_version}] [execsql {PRAGMA application_id}] \
+    [execsql {SELECT id FROM t}] [execsql {SELECT count(*) FROM dolt_status}]
+} {0 0 1 0}
+
 finish_test

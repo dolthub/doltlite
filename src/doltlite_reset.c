@@ -47,7 +47,8 @@ static int resetNameIsTablePath(
   int rc;
 
   *pFound = 0;
-  if( doltliteResolveTableName(db, zName, &iLive)==SQLITE_OK ){
+  if( sqlite3_stricmp(zName, "dolt_database")==0
+   || doltliteResolveTableName(db, zName, &iLive)==SQLITE_OK ){
     *pFound = 1;
     return SQLITE_OK;
   }
@@ -147,6 +148,7 @@ static int resetStageNamedPaths(
   /* Views and triggers are master rows with no catalog entry; naming the one
   ** name dolt_status reports them under unstages that whole set. */
   int resetSchemas = 0;
+  int resetDatabase = 0;
   int p, k;
   int rc;
 
@@ -192,6 +194,17 @@ static int resetStageNamedPaths(
     const char *zHeadTable = iH>=0 ? aHead[iH].zName : 0;
     const char *zStagedTable = iS>=0 ? aStaged[iS].zName : 0;
     char *zDup;
+    if( sqlite3_stricmp(zPath, "dolt_database")==0 ){
+      u32 headVersion, headId, stagedVersion, stagedId;
+      rc = doltliteCatalogReadMeta(db, &headCatHash, &headVersion, &headId);
+      if( rc==SQLITE_OK ){
+        rc = doltliteCatalogReadMeta(db, &stagedHash, &stagedVersion, &stagedId);
+      }
+      if( rc!=SQLITE_OK ) goto done;
+      resetDatabase = 1;
+      if( headVersion!=stagedVersion || headId!=stagedId ) *pbChanged = 1;
+      continue;
+    }
     if( bSchemas ){
       if( resetPathUnchanged(aHead, nHead, aHeadSchema, nHeadSchema, 0,
                             aStaged, nStaged, aStagedSchema, nStagedSchema, 0) ){
@@ -345,7 +358,8 @@ static int resetStageNamedPaths(
     int nBuf = 0;
     ProllyHash newStagedHash;
     rc = doltliteSerializeCatalogEntriesWithFallbackSchema(
-        db, aStaged, nStaged, aHeadSchema, nHeadSchema, &buf, &nBuf);
+        db, aStaged, nStaged, aHeadSchema, nHeadSchema,
+        resetDatabase ? &headCatHash : &stagedHash, &buf, &nBuf);
     if( rc==SQLITE_OK ){
       rc = chunkStorePut(cs, buf, nBuf, &newStagedHash);
     }

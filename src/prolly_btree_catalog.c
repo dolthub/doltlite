@@ -1249,7 +1249,7 @@ int doltliteSerializeCatalogEntries(
   int *pnOut
 ){
   return doltliteSerializeCatalogEntriesWithFallbackSchema(
-      db, aTables, nTables, 0, 0, ppOut, pnOut);
+      db, aTables, nTables, 0, 0, 0, ppOut, pnOut);
 }
 
 int doltliteDisjoinCatalogEntries(
@@ -2144,6 +2144,7 @@ int doltliteSerializeCatalogEntriesWithFallbackSchema(
   int nTables,
   SchemaEntry *aFallbackSchema,
   int nFallbackSchema,
+  const ProllyHash *pMetaCatalog,
   u8 **ppOut,
   int *pnOut
 ){
@@ -2151,7 +2152,7 @@ int doltliteSerializeCatalogEntriesWithFallbackSchema(
   if( db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
   return doltliteSerializeCatalogEntriesForBtreeImpl(
       db->aDb[0].pBt, aTables, nTables,
-      aFallbackSchema, nFallbackSchema, 0, 0, ppOut, pnOut);
+      aFallbackSchema, nFallbackSchema, 0, pMetaCatalog, ppOut, pnOut);
 }
 
 int doltliteSerializeCatalogEntriesForeignDomain(
