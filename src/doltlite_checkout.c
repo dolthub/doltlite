@@ -1624,10 +1624,7 @@ static void doltCheckoutParsedFunc(
   if( hadExplicitTxn && !isCreateAndSwitch
    && !doltliteSavepointIsTopLevelTxn(db) ){
     rc = doltliteEnsureWriteTxnAndSavepoints(db);
-    if( rc!=SQLITE_OK ){
-      doltliteVcResultErrorCode(ctx, db, "checkout failed", rc);
-      return;
-    }
+    if( rc!=SQLITE_OK ) goto checkout_done;
   }
   doltliteGetSessionHead(db, &m.oldCommitHash);
   zCurrentBranch = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
