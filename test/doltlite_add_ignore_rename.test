@@ -181,4 +181,64 @@ foreach key {INTEGER INT} {
   }
 }
 
+foreach key {INTEGER INT} {
+  foreach rows {0 1} {
+    foreach change {rename drop-create} {
+      foreach stage {named dot all commit-all commit-modified} {
+        foreach reopen {0 1} {
+          reset_db
+          execsql "CREATE TABLE keep(id $key PRIMARY KEY,v TEXT)"
+          set expected {}
+          if {$rows} {
+            execsql {INSERT INTO keep VALUES(1,'preserved')}
+            set expected {1 preserved}
+          }
+          execsql {
+            INSERT INTO dolt_ignore VALUES('scratch_%',1);
+            SELECT dolt_commit('-Am','base');
+          }
+          set head [db one {SELECT dolt_hashof('HEAD')}]
+          if {$change eq "rename"} {
+            execsql {ALTER TABLE keep RENAME TO scratch_x}
+          } else {
+            execsql "CREATE TABLE scratch_x(id $key PRIMARY KEY,v TEXT)"
+            execsql {INSERT INTO scratch_x SELECT * FROM keep; DROP TABLE keep}
+          }
+          if {$reopen} {db close; sqlite3 db test.db}
+          set prefix "ignored-rename-conservative-$key-$rows-$change-$stage-$reopen"
+          switch $stage {
+            named {execsql {SELECT dolt_add('keep')}}
+            dot {execsql {SELECT dolt_add('.')}}
+            all {execsql {SELECT dolt_add('-A')}}
+            commit-all {
+              do_catchsql_test $prefix-commit {
+                SELECT dolt_commit('-Am','ignored rename');
+              } {1 {nothing to commit, working tree clean (use dolt_add to stage changes)}}
+            }
+            commit-modified {
+              do_catchsql_test $prefix-commit {
+                SELECT dolt_commit('-am','ignored rename');
+              } {1 {nothing to commit, working tree clean (use dolt_add to stage changes)}}
+            }
+          }
+          foreach phase {first reopen} {
+            if {$phase eq "reopen"} {db close; sqlite3 db test.db}
+            do_execsql_test $prefix-$phase-staged {
+              SELECT count(*) FROM dolt_status WHERE staged=1;
+            } 0
+            do_execsql_test $prefix-$phase-head {
+              SELECT dolt_hashof('HEAD');
+            } $head
+            do_execsql_test $prefix-$phase-preserved {
+              SELECT * FROM dolt_at_keep('HEAD') ORDER BY id;
+              SELECT * FROM scratch_x ORDER BY id;
+              PRAGMA integrity_check;
+            } [concat $expected $expected ok]
+          }
+        }
+      }
+    }
+  }
+}
+
 finish_test
