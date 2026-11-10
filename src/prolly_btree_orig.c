@@ -8,6 +8,12 @@ int origBtreeCloseVt(Btree *p){
   rc = origBtreeClose(p->pOrigBtree);
   p->pOrigBtree = 0;
 
+  if( p->pBt ){
+    p->pOps = &prollyBtreeOps;
+    prollyBtreeClose(p);
+    return rc;
+  }
+
   if( p->pSchema && p->xFreeSchema ) p->xFreeSchema(p->pSchema);
   sqlite3_free(p);
   return rc;
@@ -82,10 +88,13 @@ const char *origBtreeGetJournalnameVt(Btree *p){
 }
 int origBtreeIsReadonlyVt(Btree *p){
   assert( p!=0 && p->pOrigBtree!=0 );
+  if( p->zPendingEngineFilename
+   && (p->pendingEngineVfsFlags & SQLITE_OPEN_READONLY)!=0 ) return 1;
   return origBtreeIsReadonly(p->pOrigBtree);
 }
 int origBtreeBeginTransVt(Btree *p, int wrFlag, int *pSchemaVersion){
   assert( p!=0 && p->pOrigBtree!=0 );
+  if( wrFlag && origBtreeIsReadonlyVt(p) ) return SQLITE_READONLY;
   return origBtreeBeginTrans(p->pOrigBtree, wrFlag, pSchemaVersion);
 }
 int origBtreeCommitPhaseOneVt(Btree *p, const char *zSuperJrnl){

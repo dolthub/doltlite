@@ -1593,6 +1593,20 @@ static int prollyBtreeOpenImpl(
   }
 
   p->iLoadedRefreshGen = pBt->pStore->refreshGen;
+  if( pBt->pStore->readOnly && !pBt->pStore->file.pFile
+   && !pBt->pStore->isMemory && !pBt->pStore->isBuffer
+   && !pBt->pStore->isSharedMemory && !useOriginSource && !zBranchFromPath ){
+    rc = doltliteUriStoreFilename(pBt->pStore->file.zFilename, zFilename,
+                                    &p->zPendingEngineFilename);
+    if( rc!=SQLITE_OK ){
+      *ppBtree = 0;
+      releaseOpenStoreFilename(zStoreFilename, bStoreUri);
+      sqlite3BtreeClose(p);
+      return rc;
+    }
+    p->pendingEngineFlags = flags;
+    p->pendingEngineVfsFlags = vfsFlags;
+  }
   releaseOpenStoreFilename(zStoreFilename, bStoreUri);
   return SQLITE_OK;
 }
@@ -1672,6 +1686,7 @@ int prollyBtreeClose(Btree *p){
   sqlite3_free(p->zRebaseReturnBranch);
   doltliteNonlocalFree(p->pNonlocal);
   sqlite3_free(p->zMergeSourceSpec);
+  sqlite3_free_filename(p->zPendingEngineFilename);
   sqlite3_free(p);
   return SQLITE_OK;
 }
@@ -3259,6 +3274,43 @@ void doltliteBtreeRegistrationDone(sqlite3 *db){
   }
 }
 
+int doltliteBtreeCheckEmptyEngine(Btree *p){
+  int useOrig = 0;
+  int rc;
+  if( !p || !p->zPendingEngineFilename || p->pOrigBtree
+   || p->inTrans!=TRANS_NONE || p->pBt->pStore->file.pFile ) return SQLITE_OK;
+  rc = origBtreeIsSqliteFile(p->pBt->pStore->file.pVfs,
+                              p->zPendingEngineFilename, &useOrig);
+  if( rc==SQLITE_OK && !useOrig ){
+    rc = doltliteEmptyFileInSqliteCreation(p->pBt->pStore->file.pVfs,
+                                            p->zPendingEngineFilename, &useOrig);
+  }
+  return rc==SQLITE_OK && useOrig ? SQLITE_SCHEMA : rc;
+}
+
+static int btreeAdoptSqliteEngine(Btree *p, int iDb){
+  void *inner = 0;
+  Schema *schema;
+  int rc = origBtreeOpen(p->pBt->pStore->file.pVfs,
+      p->zPendingEngineFilename,p->db,&inner,
+      p->pendingEngineFlags,p->pendingEngineVfsFlags);
+  if( rc!=SQLITE_OK ) return rc;
+  origBtreeEnter(inner);
+  schema = origBtreeSchema(inner,sizeof(Schema),sqlite3SchemaClear);
+  origBtreeLeave(inner);
+  if( !schema ){
+    origBtreeClose(inner);
+    return SQLITE_NOMEM;
+  }
+  doltliteBtreeReleasePresence(p);
+  if( p->pSchema ) sqlite3SchemaClear(p->pSchema);
+  p->pOrigBtree = inner;
+  p->pOps = &origBtreeVtOps;
+  p->db->aDb[iDb].pSchema = schema;
+  sqlite3ExpirePreparedStatements(p->db,0);
+  return SQLITE_OK;
+}
+
 int doltliteBtreeRunDeferredWork(sqlite3 *db){
   int i;
   int rc = SQLITE_OK;
@@ -3267,6 +3319,15 @@ int doltliteBtreeRunDeferredWork(sqlite3 *db){
   if( !db || db->init.busy || db->nVdbeExec ) return SQLITE_OK;
   for(i=0; i<db->nDb; i++){
     Btree *p = db->aDb[i].pBt;
+    if( db->nVdbeRead==0 ){
+      rc = doltliteBtreeCheckEmptyEngine(p);
+      if( rc==SQLITE_SCHEMA ){
+        sqlite3BtreeLeaveAll(db);
+        rc = btreeAdoptSqliteEngine(p,i);
+        sqlite3BtreeEnterAll(db);
+      }
+      if( rc!=SQLITE_OK ) break;
+    }
     if( p && sqlite3BtreeIsDeferred(p) ){
       rc = doltliteBtreeHydrateDeferred(p);
       if( rc!=SQLITE_OK ) break;

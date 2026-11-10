@@ -306,7 +306,7 @@ static void test_unlinked_lock_replacement(int backup){
 #endif
 }
 
-static void test_zero_byte_open_keeps_peer_lock(void){
+static void test_zero_byte_open_keeps_peer_lock(int readOnlyFirst){
 #ifndef _WIN32
   const char *zPath = DOLTLITE_TEST_TMPDIR "/test_zero_byte_peer_lock.db";
   const char *zUri =
@@ -325,12 +325,20 @@ static void test_zero_byte_open_keeps_peer_lock(void){
   if( !f ) return;
   fclose(f);
 
+  if( readOnlyFirst ){
+    check("zero_lock_readonly_peer_open", sqlite3_open_v2(zPath, &peer,
+        SQLITE_OPEN_READONLY, 0)==SQLITE_OK);
+    check("zero_lock_readonly_peer_empty", exec_sql(peer,
+        "SELECT count(*) FROM sqlite_master")==SQLITE_OK);
+  }
   rc = sqlite3_open_v2(zUri, &owner,
     SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI, 0);
   check("zero_lock_owner_open", rc==SQLITE_OK);
   check("zero_lock_owner_begin", exec_sql(owner,
     "BEGIN IMMEDIATE; CREATE TABLE s(x)")==SQLITE_OK);
-  check("zero_lock_peer_open", sqlite3_open(zPath, &peer)==SQLITE_OK);
+  if( !readOnlyFirst ){
+    check("zero_lock_peer_open", sqlite3_open(zPath, &peer)==SQLITE_OK);
+  }
   sqlite3_exec(peer, "SELECT count(*) FROM sqlite_master", 0, 0, 0);
 
   pid = fork();
@@ -372,6 +380,8 @@ static void test_zero_byte_open_keeps_peer_lock(void){
   sqlite3_finalize(stmt);
   sqlite3_close(owner);
   rm_db(zPath);
+#else
+  (void)readOnlyFirst;
 #endif
 }
 
@@ -431,7 +441,8 @@ static void test_zero_byte_peer_follows_sqlite_creator(void){
 
 int main(void){
   test_fork_child_does_not_keep_parent_lock();
-  test_zero_byte_open_keeps_peer_lock();
+  test_zero_byte_open_keeps_peer_lock(0);
+  test_zero_byte_open_keeps_peer_lock(1);
   test_zero_byte_peer_follows_sqlite_creator();
   test_graph_lock_promotion_has_one_winner();
   test_unlinked_graph_lock(0);

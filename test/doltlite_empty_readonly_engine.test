@@ -1,0 +1,113 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+set testprefix doltlite_empty_readonly_engine
+
+foreach writer {sqlite prolly} {
+  foreach mode {plain uri immutable shared} {
+    catch {reader close}
+    catch {writer close}
+    forcedelete empty-reader.db
+    set path [file normalize empty-reader.db]
+    close [open $path w]
+    set filename $path
+    switch $mode {
+      uri {set filename "file:$path?mode=ro"}
+      immutable {set filename "file:$path?immutable=1"}
+      shared {set filename "file:$path?mode=ro&cache=shared"}
+    }
+    sqlite3 reader $filename -readonly 1 -uri 1
+    set stmt [sqlite3_prepare_v2 reader {SELECT count(*) FROM sqlite_schema} -1 tail]
+    do_test $writer.$mode.empty {
+      list [sqlite3_step $stmt] [sqlite3_column_int $stmt 0]
+    } {SQLITE_ROW 0}
+    sqlite3_reset $stmt
+    if {$writer eq "sqlite"} {
+      sqlite3 writer "file:$path?doltlite_engine=sqlite&cache=shared" -uri 1
+    } else {
+      sqlite3 writer $path
+    }
+    writer eval {CREATE TABLE s(x); INSERT INTO s VALUES(42)}
+    do_test $writer.$mode.cached {
+      list [sqlite3_step $stmt] [sqlite3_column_int $stmt 0]
+    } {SQLITE_ROW 1}
+    sqlite3_finalize $stmt
+    do_test $writer.$mode.rows {reader eval {SELECT * FROM s}} 42
+    do_test $writer.$mode.engine {reader one {SELECT doltlite_engine()}} [expr {
+      $writer eq "sqlite" ? "orig" : "prolly"
+    }]
+    do_test $writer.$mode.readonly {
+      catch {reader eval {INSERT INTO s VALUES(43)}}
+    } 1
+    reader close
+    writer close
+  }
+}
+
+foreach journal {delete wal} {
+  foreach encoding {UTF-8 UTF-16le UTF-16be} {
+    forcedelete empty-reader.db
+    set path [file normalize empty-reader.db]
+    close [open $path w]
+    sqlite3 reader "file:$path?mode=ro" -uri 1
+    reader eval {SELECT count(*) FROM sqlite_schema}
+    reader eval {BEGIN; SELECT count(*) FROM sqlite_schema}
+    sqlite3 writer "file:$path?doltlite_engine=sqlite" -uri 1
+    writer eval "PRAGMA encoding='$encoding'; PRAGMA journal_mode=$journal"
+    writer eval {CREATE TABLE s(x); INSERT INTO s VALUES(char(233))}
+    do_test snapshot.$journal.$encoding.pinned {
+      reader one {SELECT count(*) FROM sqlite_schema}
+    } 0
+    reader eval {COMMIT}
+    do_test snapshot.$journal.$encoding.follow {
+      reader eval {SELECT unicode(x) FROM s; PRAGMA integrity_check}
+    } {233 ok}
+    writer eval {INSERT INTO s VALUES('later')}
+    do_test snapshot.$journal.$encoding.refresh {
+      reader one {SELECT count(*) FROM s}
+    } 2
+    reader close
+    writer close
+  }
+}
+
+foreach main {prolly sqlite} {
+  forcedelete empty-reader.db
+  set path [file normalize empty-reader.db]
+  close [open $path w]
+  if {$main eq "sqlite"} {
+    sqlite3 reader file::memory:?doltlite_engine=sqlite -uri 1
+  } else {
+    sqlite3 reader :memory: -uri 1
+  }
+  set filename "file:$path?mode=ro"
+  reader eval {ATTACH DATABASE $filename AS aux; SELECT count(*) FROM aux.sqlite_schema}
+  sqlite3 writer "file:$path?doltlite_engine=sqlite" -uri 1
+  writer eval {CREATE TABLE s(x); INSERT INTO s VALUES(42)}
+  do_test attached.$main {
+    reader eval {SELECT * FROM aux.s; SELECT count(*) FROM main.sqlite_schema}
+  } {42 0}
+  reader close
+  writer close
+}
+do_faultsim_test handoff -faults oom-* -prep {
+  catch {reader close}
+  forcedelete empty-reader.db
+  set path [file normalize empty-reader.db]
+  close [open $path w]
+  sqlite3 reader "file:$path?mode=ro" -uri 1
+  reader eval {SELECT count(*) FROM sqlite_schema}
+  sqlite3 writer "file:$path?doltlite_engine=sqlite" -uri 1
+  writer eval {CREATE TABLE s(x); INSERT INTO s VALUES(42)}
+  writer close
+} -body {
+  reader one {SELECT x FROM s}
+} -test {
+  faultsim_test_result {0 42} {1 {out of memory}}
+  if {[reader one {SELECT x FROM s}]!=42} {error "handoff retry lost the row"}
+  if {![catch {reader eval {INSERT INTO s VALUES(43)}}]} {
+    error "handoff retry lost read-only access"
+  }
+}
+reader close
+finish_test
