@@ -1397,6 +1397,9 @@ void sqlite3Pragma(
     Index *pIdx;
     Table *pTab;
     pIdx = sqlite3FindIndex(db, zRight, zDb);
+#ifdef DOLTLITE_PROLLY
+    if( pIdx==0 && zDb==0 ) pIdx = doltliteNonlocalFindIndex(db, zRight);
+#endif
     if( pIdx==0 ){
       /* If there is no index named zRight, check to see if there is a
       ** WITHOUT ROWID table named zRight, and if there is, show the
@@ -1446,7 +1449,11 @@ void sqlite3Pragma(
     Index *pIdx;
     Table *pTab;
     int i;
+#ifdef DOLTLITE_PROLLY
+    pTab = sqlite3LocateTable(pParse, LOCATE_NOERR, zRight, zDb);
+#else
     pTab = sqlite3FindTable(db, zRight, zDb);
+#endif
     if( pTab ){
       int iTabDb = sqlite3SchemaToIndex(db, pTab->pSchema);
       pParse->nMem = 5;
@@ -1540,7 +1547,11 @@ void sqlite3Pragma(
   case PragTyp_FOREIGN_KEY_LIST: if( zRight ){
     FKey *pFK;
     Table *pTab;
+#ifdef DOLTLITE_PROLLY
+    pTab = sqlite3LocateTable(pParse, LOCATE_NOERR, zRight, zDb);
+#else
     pTab = sqlite3FindTable(db, zRight, zDb);
+#endif
     if( pTab && IsOrdinaryTable(pTab) ){
       pFK = pTab->u.tab.pFKey;
       if( pFK ){

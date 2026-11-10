@@ -188,6 +188,38 @@ do_execsql_test nonlocal-fk-verify {
   SELECT "table", num_violations FROM dolt_constraint_violations;
 } {1 uses_cfg 1}
 
+nl_reset
+do_test nonlocal-pragma.setup {
+  db eval {
+    SELECT dolt_checkout('main');
+    CREATE TABLE emp(id INTEGER PRIMARY KEY, nm TEXT, uid INT REFERENCES users(id));
+    CREATE INDEX emp_nm ON emp(nm);
+    SELECT dolt_commit('-Am','emp');
+    SELECT dolt_checkout('other');
+    CREATE TABLE emp(a TEXT UNIQUE);
+    INSERT INTO dolt_nonlocal_tables VALUES('emp','main','','immediate');
+    INSERT INTO dolt_nonlocal_tables VALUES('staff','main','emp','immediate');
+  }
+  db eval {SELECT group_concat(name, '.') FROM pragma_table_info('emp')}
+} {id.nm.uid}
+foreach name {emp staff} {
+  do_execsql_test nonlocal-pragma.index-list-$name "
+    SELECT name FROM pragma_index_list('$name');
+  " {emp_nm}
+  do_execsql_test nonlocal-pragma.fk-list-$name "
+    SELECT \"table\", \"from\", \"to\" FROM pragma_foreign_key_list('$name');
+  " {users uid id}
+}
+do_execsql_test nonlocal-pragma.index-info {
+  SELECT name FROM pragma_index_info('emp_nm');
+  SELECT name FROM pragma_index_xinfo('emp_nm');
+} {nm nm {}}
+do_execsql_test nonlocal-pragma.local {
+  SELECT count(*) FROM pragma_index_list('users');
+  SELECT count(*) FROM pragma_index_list('nosuch');
+  SELECT count(*) FROM pragma_foreign_key_list('nosuch');
+} {0 0 0}
+
 # PRAGMA table_list lists the names rules resolve, as Dolt's SHOW TABLES:
 # a plain name whose target exists, and target tables a wildcard claims.
 nl_reset
