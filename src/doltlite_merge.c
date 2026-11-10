@@ -20,7 +20,7 @@ static int serializeMergedCatalog(
   int rc;
 
   rc = doltliteSerializeCatalogEntriesWithFallbackSchema(
-      db, aMerged, nMerged, aFallbackSchema, nFallbackSchema, &buf, &nBuf);
+      db, aMerged, nMerged, aFallbackSchema, nFallbackSchema, 0, &buf, &nBuf);
   if( rc!=SQLITE_OK ) return rc;
 
   rc = chunkStorePut(cs, buf, nBuf, pOutHash);

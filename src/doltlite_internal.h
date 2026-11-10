@@ -1331,6 +1331,7 @@ int doltliteSerializeCatalogEntriesFromCatalog(sqlite3*, struct TableEntry*, int
 int doltliteSerializeCatalogEntriesWithFallbackSchema(
     sqlite3 *db, struct TableEntry *aTables, int nTables,
     SchemaEntry *aFallbackSchema, int nFallbackSchema,
+    const ProllyHash *pMetaCatalog,
     u8 **ppOut, int *pnOut);
 int doltliteSerializeCatalogEntriesForeignDomain(
     sqlite3 *db, struct TableEntry *aTables, int nTables,

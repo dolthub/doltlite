@@ -61,6 +61,7 @@ int doltliteSerializeCatalogEntriesWithFallbackSchema(
   int nTables,
   SchemaEntry *aFallbackSchema,
   int nFallbackSchema,
+  const ProllyHash *pMetaCatalog,
   u8 **ppOut,
   int *pnOut
 );
