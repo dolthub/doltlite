@@ -1861,6 +1861,18 @@ int doltliteCommitWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatH
   return doltlitePersistWorkingSetWithHash(db, pWorkingCatHash);
 }
 
+void doltliteMarkTxnCheckout(sqlite3 *db){
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    db->aDb[0].pBt->bTxnCheckout = 1;
+  }
+}
+
+int doltliteTxnCheckoutOwnsGraphLock(sqlite3 *db){
+  Btree *p = db && db->nDb>0 ? db->aDb[0].pBt : 0;
+  return p && p->bTxnCheckout && p->inTrans==TRANS_WRITE
+      && p->pBt->bOwnsGraphLock;
+}
+
 void doltliteAdoptRollbackBaseline(
   sqlite3 *db,
   const ProllyHash *pCatalogHash

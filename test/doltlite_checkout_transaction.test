@@ -1,0 +1,199 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix checkout-txn
+
+proc checkout_txn_reset {{storage file}} {
+  reset_db
+  if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+  db eval {
+    CREATE TABLE t(id INT PRIMARY KEY,v TEXT);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('f');
+  }
+}
+
+foreach storage {file memory} {
+  foreach begin {BEGIN {BEGIN IMMEDIATE}} {
+    foreach roundtrip {0 1} {
+      checkout_txn_reset $storage
+      set prefix $storage-$begin-$roundtrip
+      set commits 0
+      db commit_hook {incr ::commits; expr 0}
+      db eval "$begin; INSERT INTO t VALUES(1,'main');"
+      db eval {SELECT dolt_checkout('f'); INSERT INTO t VALUES(2,'f');}
+      if {$roundtrip} {db eval {SELECT dolt_checkout('main')}}
+      do_test $prefix.kept {
+        list [sqlite3_get_autocommit db] $commits [db eval {SELECT id FROM t}]
+      } [list 0 0 [expr {$roundtrip ? 1 : 2}]]
+      if {$storage eq "file"} {
+        foreach branch {main f} {
+          sqlite3 peer test.db/$branch -readonly 1
+          do_test $prefix.$branch.private {peer one {SELECT count(*) FROM t}} 0
+          peer close
+        }
+      }
+      do_execsql_test $prefix.rollback {
+        ROLLBACK;
+        SELECT count(*) FROM t;
+        PRAGMA integrity_check;
+      } {0 ok}
+      db commit_hook {}
+      do_execsql_test $prefix.branches {
+        SELECT dolt_checkout('main'); SELECT count(*) FROM t;
+        SELECT dolt_checkout('f'); SELECT count(*) FROM t;
+      } {0 0 0 0}
+      if {$storage eq "file"} {
+        db close
+        sqlite3 db test.db
+        do_execsql_test $prefix.reopen {SELECT count(*) FROM t} 0
+      }
+    }
+  }
+}
+
+checkout_txn_reset
+do_execsql_test savepoint.before {
+  BEGIN;
+  INSERT INTO t VALUES(1,'before');
+  SAVEPOINT s;
+  INSERT INTO t VALUES(2,'after');
+  SELECT dolt_checkout('f');
+  INSERT INTO t VALUES(3,'target');
+  ROLLBACK TO s;
+  SELECT active_branch();
+  SELECT id FROM t ORDER BY id;
+  SELECT dolt_checkout('main');
+  SELECT id FROM t ORDER BY id;
+  ROLLBACK;
+  SELECT count(*) FROM t;
+  SELECT dolt_checkout('f');
+  SELECT count(*) FROM t;
+} {0 f 1 0 1 2 0 0 0}
+
+checkout_txn_reset
+do_execsql_test savepoint.after {
+  BEGIN;
+  INSERT INTO t VALUES(1,'source');
+  SELECT dolt_checkout('f');
+  INSERT INTO t VALUES(2,'target');
+  SAVEPOINT s;
+  INSERT INTO t VALUES(3,'after');
+  ROLLBACK TO s;
+  SELECT id FROM t;
+  RELEASE s;
+  ROLLBACK;
+  SELECT count(*) FROM t;
+  SELECT dolt_checkout('main');
+  SELECT count(*) FROM t;
+} {0 2 0 0 0}
+
+checkout_txn_reset
+do_execsql_test dirty.setup {
+  INSERT INTO t VALUES(10,'staged');
+  SELECT dolt_add('t');
+  INSERT INTO t VALUES(11,'working');
+  SELECT dolt_checkout('f');
+  INSERT INTO t VALUES(20,'staged');
+  SELECT dolt_add('t');
+  INSERT INTO t VALUES(21,'working');
+  SELECT dolt_checkout('main');
+} {0 0 0 0}
+do_execsql_test dirty.rollback {
+  BEGIN;
+  INSERT INTO t VALUES(12,'transaction');
+  SELECT dolt_checkout('f');
+  INSERT INTO t VALUES(22,'transaction');
+  SELECT dolt_checkout('main');
+  INSERT INTO t VALUES(13,'transaction');
+  ROLLBACK;
+  SELECT id FROM t ORDER BY id;
+  SELECT to_id FROM dolt_diff_t('HEAD','STAGED');
+  SELECT dolt_checkout('f');
+  SELECT id FROM t ORDER BY id;
+  SELECT to_id FROM dolt_diff_t('HEAD','STAGED');
+} {0 0 10 11 10 0 20 21 20}
+
+checkout_txn_reset
+do_execsql_test schema.rollback {
+  BEGIN;
+  CREATE TABLE transient(id INT PRIMARY KEY);
+  CREATE INDEX t_v ON t(v);
+  INSERT INTO t VALUES(1,'source');
+  SELECT dolt_checkout('f');
+  INSERT INTO t VALUES(2,'target');
+  SELECT dolt_checkout('main');
+  ROLLBACK;
+  SELECT count(*) FROM t;
+  SELECT count(*) FROM sqlite_schema WHERE name IN ('transient','t_v');
+  INSERT INTO t VALUES(3,'after');
+  PRAGMA integrity_check;
+} {0 0 0 0 ok}
+do_test schema.reopen {
+  db close
+  sqlite3 db test.db
+  db eval {
+    SELECT id,v FROM t;
+    SELECT count(*) FROM sqlite_schema WHERE name IN ('transient','t_v');
+    PRAGMA integrity_check;
+  }
+} {3 after 0 ok}
+
+checkout_txn_reset
+do_execsql_test commit.source {
+  BEGIN;
+  INSERT INTO t VALUES(1,'source');
+  SELECT dolt_checkout('f');
+  COMMIT;
+  SELECT count(*) FROM t;
+  SELECT dolt_checkout('main');
+  SELECT id FROM t;
+} {0 0 0 1}
+do_execsql_test commit.next-rollback {
+  BEGIN; INSERT INTO t VALUES(2,'next'); ROLLBACK;
+  SELECT id FROM t;
+} 1
+
+checkout_txn_reset
+do_execsql_test failure.setup {
+  BEGIN; INSERT INTO t VALUES(1,'source');
+  SELECT dolt_checkout('f');
+  INSERT INTO t VALUES(2,'target');
+} 0
+do_catchsql_test failure.missing {SELECT dolt_checkout('missing')} \
+  {1 {no such branch or table: missing}}
+do_execsql_test failure.rollback {
+  ROLLBACK;
+  SELECT active_branch(),count(*) FROM t;
+  SELECT dolt_checkout('main');
+  SELECT count(*) FROM t;
+} {f 0 0 0}
+
+checkout_txn_reset
+do_execsql_test create.seals {
+  BEGIN;
+  INSERT INTO t VALUES(1,'source');
+  SELECT dolt_checkout('-b','new');
+  INSERT INTO t VALUES(2,'target');
+  ROLLBACK;
+  SELECT active_branch(),count(*) FROM t;
+  SELECT dolt_checkout('main');
+  SELECT id FROM t;
+} {0 new 0 0 1}
+
+checkout_txn_reset
+sqlite3 peer test.db/f
+do_execsql_test lock.setup {
+  BEGIN;
+  INSERT INTO t VALUES(1,'source');
+  SELECT dolt_checkout('f');
+} 0
+do_test lock.held {
+  list [catch {peer eval {INSERT INTO t VALUES(2,'peer')}} msg] $msg
+} {1 {database is locked}}
+do_execsql_test lock.rollback {ROLLBACK; SELECT count(*) FROM t} 0
+do_test lock.released {
+  peer eval {INSERT INTO t VALUES(2,'peer'); SELECT id FROM t}
+} 2
+peer close
+
+finish_test

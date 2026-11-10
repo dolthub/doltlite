@@ -1479,6 +1479,7 @@ static void commitPhaseTwoEndWriteTxn(Btree *p){
   btreeDiscardAllSavepoints(p);
   p->bSchemaChangedTxn = 0;
   p->bMasterRootChangedTxn = 0;
+  p->bTxnCheckout = 0;
 }
 
 static int commitPhaseTwoFailRestore(
@@ -2206,6 +2207,17 @@ int sqlite3BtreeCommit(Btree *p){
 
 static int restoreFromCommitted(Btree *p){
   assert( p!=0 && p->pBt!=0 );
+  if( p->bTxnCheckout ){
+    ProllyHash catalog;
+    int rc;
+    /* A revisited branch may have this transaction's edits in its refs. */
+    chunkStoreRollback(p->pBt->pStore);
+    p->bForceCatalogReload = 1;
+    rc = btreeReloadBranchWorkingStateInto(p, 1, &catalog);
+    if( rc==SQLITE_OK ) btreeStoreCommittedFromCurrent(p, &catalog);
+    p->bTxnCheckout = 0;
+    return rc;
+  }
   if( prollyHashIsEmpty(&p->committedCatalogHash) ){
     if( p->bCatalogDropped ){
       /* OOM drop: do not install an empty catalog over real tables. Reload. */
@@ -2387,7 +2399,7 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
   BtShared *pBt = p->pBt;
   int rc = SQLITE_OK;
   int cursorRc = SQLITE_OK;
-  int bSchemaChangedRollback = rollbackNeedsSchemaReset(p);
+  int bSchemaChangedRollback = p->bTxnCheckout || rollbackNeedsSchemaReset(p);
   int bAutocommitOomRollback = writeOnly
       && p->db
       && p->db->autoCommit
@@ -2596,7 +2608,7 @@ int doltliteBtreeCaptureStatement(void *pArg){
 
 static int rollbackCommittedState(Btree *p, BtShared *pBt, int bKeepReaders){
   BtCursor *pC;
-  int bSchemaChangedRollback = rollbackNeedsSchemaReset(p);
+  int bSchemaChangedRollback = p->bTxnCheckout || rollbackNeedsSchemaReset(p);
   int rc;
   if( !bKeepReaders || bSchemaChangedRollback
    || (p->db && p->db->mallocFailed)
