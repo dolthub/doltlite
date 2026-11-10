@@ -630,6 +630,11 @@ static int csOpen(
         rc = sqlite3OsAccess(pVfs, zDir, SQLITE_ACCESS_READWRITE, &canWrite);
         if( rc==SQLITE_OK && !canWrite ){
           rc = sqlite3OsAccess(pVfs, zDir, SQLITE_ACCESS_EXISTS, &exists);
+#if SQLITE_OS_UNIX && !defined(__EMSCRIPTEN__)
+          /* A new file cannot be created here. An existing empty file
+          ** still opens, as it does in stock. */
+          if( !emptyFile ) exists = 0;
+#endif
         }
         sqlite3_free(zDir);
         if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
