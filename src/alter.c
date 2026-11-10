@@ -1465,6 +1465,12 @@ static int renameResolveTrigger(Parse *pParse){
   pParse->pTriggerTab = sqlite3FindTable(db, pNew->table,
       db->aDb[sqlite3SchemaToIndex(db, pNew->pTabSchema)].zDbSName
   );
+#ifdef DOLTLITE_PROLLY
+  if( pParse->pTriggerTab==0 ){
+    pParse->pTriggerTab = doltliteFkParentTable(db, pNew->table,
+        db->aDb[sqlite3SchemaToIndex(db, pNew->pTabSchema)].zDbSName);
+  }
+#endif
   pParse->eTriggerOp = pNew->op;
   /* ALWAYS() because if the table of the trigger does not exist, the
   ** error would have been hit before this point */

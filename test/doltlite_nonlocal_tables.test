@@ -378,10 +378,17 @@ do_execsql_test nonlocal-alias-same-branch-index {
 foreach {name sql err} {
   rename {ALTER TABLE nl RENAME TO renamed} {no such table: nl}
   drop {DROP TABLE nl} {no such table: nl}
-  trigger {CREATE TRIGGER nl_tr AFTER INSERT ON nl BEGIN SELECT 1; END} {no such table: main.nl}
 } {
   do_catchsql_test nonlocal-ddl-$name $sql [list 1 $err]
 }
+do_execsql_test nonlocal-ddl-trigger {
+  CREATE TRIGGER nl_tr AFTER INSERT ON nl BEGIN
+    INSERT INTO notes VALUES(new.id, 'saw '||new.name);
+  END;
+  INSERT INTO nl(id, name) VALUES(40, 'alias');
+  SELECT tbl_name FROM sqlite_master WHERE name='nl_tr';
+  SELECT body FROM notes WHERE id=40;
+} {nl {saw alias}}
 
 # A TEMP table answers an unqualified name before any rule, as SQLite
 # resolves temp first; dropping it uncovers the rule again.
@@ -812,5 +819,84 @@ do_execsql_test nonlocal-fk-action.target-child-does-not-block {
 do_test nonlocal-fk-action.unblocked-delete-on-target {
   nl_disk main {SELECT id FROM parent}
 } {2}
+
+proc nl_orphan_reset {} {
+  catch {db close}
+  forcedelete test.db
+  sqlite3 db test.db
+  db eval {
+    CREATE TABLE log(msg TEXT);
+    SELECT dolt_commit('-Am','init');
+    SELECT dolt_branch('exp');
+    CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT);
+    SELECT dolt_commit('-Am','users');
+    SELECT dolt_checkout('exp');
+    INSERT INTO dolt_nonlocal_tables VALUES('users','main',NULL,'immediate');
+  }
+}
+
+nl_orphan_reset
+do_execsql_test nonlocal-trigger-create.no-local-table {
+  CREATE TRIGGER tr AFTER INSERT ON users BEGIN
+    INSERT INTO log VALUES('exp-trig '||new.name);
+  END;
+  SELECT type, name, tbl_name FROM sqlite_master WHERE type='trigger';
+} {trigger tr users}
+do_execsql_test nonlocal-trigger-create.fires {
+  INSERT INTO users VALUES(1,'a');
+  SELECT msg FROM log;
+} {{exp-trig a}}
+do_test nonlocal-trigger-create.row-on-target {
+  nl_disk main {SELECT id, name FROM users}
+} {1 a}
+do_test nonlocal-trigger-create.target-has-no-trigger {
+  nl_disk main {
+    SELECT (SELECT count(*) FROM sqlite_master WHERE type='trigger'),
+           (SELECT count(*) FROM log)
+  }
+} {0 0}
+do_test nonlocal-trigger-create.survives-reopen {
+  db eval {SELECT dolt_commit('-Am','trigger')}
+  db close
+  sqlite3 db [file normalize test.db]/exp
+  db eval {
+    INSERT INTO users VALUES(2,'b');
+    SELECT msg FROM log ORDER BY rowid;
+  }
+} {{exp-trig a} {exp-trig b}}
+do_execsql_test nonlocal-trigger-create.rename-other-table {
+  ALTER TABLE log RENAME TO log2;
+  INSERT INTO users VALUES(3,'c');
+  SELECT msg FROM log2 ORDER BY rowid;
+} {{exp-trig a} {exp-trig b} {exp-trig c}}
+do_execsql_test nonlocal-trigger-create.integrity {
+  PRAGMA integrity_check;
+} {ok}
+do_execsql_test nonlocal-trigger-create.drop {
+  DROP TRIGGER tr;
+  INSERT INTO users VALUES(4,'d');
+  SELECT count(*) FROM log2;
+} {3}
+do_catchsql_test nonlocal-trigger-create.bad-column {
+  CREATE TRIGGER bad AFTER INSERT ON users BEGIN
+    INSERT INTO log2 VALUES(new.nope);
+  END;
+  INSERT INTO users VALUES(5,'e');
+} {1 {no such column: new.nope}}
+
+nl_orphan_reset
+do_test nonlocal-trigger-create.merge-binds-local-table {
+  db eval {
+    CREATE TRIGGER tr AFTER INSERT ON users BEGIN
+      INSERT INTO log VALUES('trig '||new.name);
+    END;
+    DELETE FROM dolt_nonlocal_tables;
+    SELECT dolt_commit('-Am','trigger');
+    SELECT dolt_checkout('main');
+    SELECT dolt_merge('exp');
+    INSERT INTO users VALUES(7,'m');
+  }
+  db eval {SELECT msg FROM log}
+} {{trig m}}
 
 finish_test
