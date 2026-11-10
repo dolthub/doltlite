@@ -819,6 +819,17 @@ static void fkScanChildren(
 FKey *sqlite3FkReferences(Table *pTab){
   return (FKey *)sqlite3HashFind(&pTab->pSchema->fkeyHash, pTab->zName);
 }
+#ifdef DOLTLITE_PROLLY
+/* A parent on another branch reached through a session name is referenced
+** by the session's foreign keys on that name, not by the target's. */
+FKey *doltliteFkReferences(Parse *pParse, Table *pTab){
+  const char *zLocal = doltliteNonlocalLocalName(pParse, pTab);
+  if( zLocal==0 ) return sqlite3FkReferences(pTab);
+  sqlite3CodeVerifySchema(pParse, 0);
+  return (FKey*)sqlite3HashFind(&pParse->db->aDb[0].pSchema->fkeyHash, zLocal);
+}
+#define sqlite3FkReferences(T) doltliteFkReferences(pParse, T)
+#endif
 
 /*
 ** The second argument is a Trigger structure allocated by the 
@@ -1377,6 +1388,14 @@ static Trigger *fkActionTrigger(
     return 0;
   }
   pTrigger = pFKey->apTrigger[iAction];
+#ifdef DOLTLITE_PROLLY
+  /* The cached program names its parent's columns. It was coded for
+  ** another parent when a nonlocal rule on that name came or went. */
+  if( pTrigger && pTrigger->pTabSchema!=pTab->pSchema ){
+    fkTriggerDelete(db, pTrigger);
+    pFKey->apTrigger[iAction] = pTrigger = 0;
+  }
+#endif
 
   if( action!=OE_None && !pTrigger ){
     char const *zFrom;            /* Name of child table */
@@ -1495,6 +1514,9 @@ static Trigger *fkActionTrigger(
         pItem->zName = sqlite3DbStrDup(db, zFrom);
         pItem->fg.fixedSchema = 1;
         pItem->u4.pSchema = pTab->pSchema;
+#ifdef DOLTLITE_PROLLY
+        pItem->u4.pSchema = pFKey->pFrom->pSchema;
+#endif
       }
       pSelect = sqlite3SelectNew(pParse, 
           sqlite3ExprListAppend(pParse, 0, pRaise),
@@ -1519,6 +1541,9 @@ static Trigger *fkActionTrigger(
         SrcItem *pItem = &pStep->pSrc->a[0];
         pItem->zName = sqlite3DbStrNDup(db, zFrom, nFrom);
         pItem->u4.pSchema = pTab->pSchema;
+#ifdef DOLTLITE_PROLLY
+        pItem->u4.pSchema = pFKey->pFrom->pSchema;
+#endif
         pItem->fg.fixedSchema = 1;
       }
       pStep->pWhere = sqlite3ExprDup(db, pWhere, EXPRDUP_REDUCE);
@@ -1641,3 +1666,6 @@ void sqlite3FkDelete(sqlite3 *db, Table *pTab){
   }
 }
 #endif /* ifndef SQLITE_OMIT_FOREIGN_KEY */
+#ifdef DOLTLITE_PROLLY
+#undef sqlite3FkReferences
+#endif

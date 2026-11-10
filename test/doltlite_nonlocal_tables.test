@@ -750,4 +750,67 @@ do_test nonlocal-trigger-peer.created-later-fires {
   db eval {SELECT msg FROM log}
 } {peer-trig}
 
+proc nl_fk_reset {action} {
+  catch {db close}
+  forcedelete test.db
+  sqlite3 db test.db
+  db eval "
+    PRAGMA foreign_keys=ON;
+    CREATE TABLE parent(id INTEGER PRIMARY KEY, tag TEXT);
+    CREATE TABLE child(cid INTEGER PRIMARY KEY,
+                       pid INTEGER REFERENCES parent $action);
+    INSERT INTO parent VALUES(1,'a'),(2,'b');
+    INSERT INTO child VALUES(10,1),(20,2);
+    SELECT dolt_commit('-Am','init');
+    SELECT dolt_checkout('-b','exp');
+    INSERT INTO dolt_nonlocal_tables VALUES('parent','main',NULL,'immediate');
+  "
+}
+
+nl_fk_reset {ON DELETE CASCADE}
+do_execsql_test nonlocal-fk-action.cascade-session-child {
+  DELETE FROM parent WHERE id=1;
+  SELECT cid, pid FROM child ORDER BY cid;
+} {20 2}
+do_test nonlocal-fk-action.cascade-target-child-kept {
+  nl_disk main {SELECT cid, pid FROM child ORDER BY cid}
+} {10 1 20 2}
+do_test nonlocal-fk-action.cascade-target-parent-deleted {
+  nl_disk main {SELECT id FROM parent}
+} {2}
+do_execsql_test nonlocal-fk-action.rule-removed-cascades-locally {
+  DELETE FROM dolt_nonlocal_tables;
+  DELETE FROM parent WHERE id=2;
+  SELECT count(*) FROM child;
+} {0}
+do_test nonlocal-fk-action.rule-removed-target-untouched {
+  nl_disk main {SELECT id FROM parent}
+} {2}
+
+nl_fk_reset {ON DELETE SET NULL ON UPDATE CASCADE}
+do_execsql_test nonlocal-fk-action.update-cascade {
+  UPDATE parent SET id=5 WHERE id=1;
+  SELECT cid, pid FROM child ORDER BY cid;
+} {10 5 20 2}
+do_execsql_test nonlocal-fk-action.set-null {
+  DELETE FROM parent WHERE id=2;
+  SELECT cid, pid FROM child ORDER BY cid;
+} {10 5 20 {}}
+do_test nonlocal-fk-action.actions-target-child-kept {
+  nl_disk main {SELECT cid, pid FROM child ORDER BY cid}
+} {10 1 20 2}
+
+nl_fk_reset {}
+do_test nonlocal-fk-action.session-child-blocks {
+  catchsql {DELETE FROM parent WHERE id=1}
+} {1 {FOREIGN KEY constraint failed}}
+do_execsql_test nonlocal-fk-action.target-child-does-not-block {
+  DELETE FROM child WHERE cid=10;
+  DELETE FROM parent WHERE id=1;
+  SELECT id FROM parent;
+} {2}
+do_test nonlocal-fk-action.unblocked-delete-on-target {
+  nl_disk main {SELECT id FROM parent}
+} {2}
+
 finish_test
