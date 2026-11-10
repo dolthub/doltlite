@@ -95,6 +95,13 @@ int mergeReaderRecordSlot(const DoltliteColInfo *ci, int i){
   return ci->aColToRec ? ci->aColToRec[i] : i;
 }
 
+typedef struct MergeReaddedColumn MergeReaddedColumn;
+struct MergeReaddedColumn {
+  int iNameSlot;
+  int seenSlot;
+  int seenName;
+};
+
 int mergeMapUnmatchedColumns(
   sqlite3 *db,
   const ProllyHash *pAncRoot,
@@ -109,6 +116,7 @@ int mergeMapUnmatchedColumns(
   DoltliteRecordInfo ancInfo, sideInfo;
   ProllyCursor ancCur, sideCur;
   u8 *aCandidate = 0;
+  MergeReaddedColumn *aReadded = 0;
   int i, k, j, res, rc, bPending = 0, curInit = 0;
   const char *zAmbiguous = 0;
 
@@ -122,12 +130,30 @@ int mergeMapUnmatchedColumns(
   if( rc==SQLITE_OK ) rc = parseColumns(zSideSql, &aSide, &nParsed);
   if( rc!=SQLITE_OK || nParsed!=nSide || nAnc==0 ) goto done;
   aCandidate = sqlite3_malloc64((u64)nSide * nAnc);
-  if( !aCandidate ){ rc = SQLITE_NOMEM; goto done; }
+  aReadded = sqlite3_malloc64((u64)nSide * sizeof(*aReadded));
+  if( !aCandidate || !aReadded ){ rc = SQLITE_NOMEM; goto done; }
   memset(aCandidate, 0, (size_t)nSide * nAnc);
+  memset(aReadded, 0, (size_t)nSide * sizeof(*aReadded));
+  for(i=0; i<nSide; i++) aReadded[i].iNameSlot = -1;
   bPending = 0;
+  if( nSide>nAnc ){
+    for(i=0; i<nAnc; i++){
+      if( !parsedColumnDefinitionsMatch(&aSide[i], &aAnc[i]) ) break;
+    }
+    if( i==nAnc ){
+      for(i=0; i<nAnc; i++){
+        if( aSideAnc[i]>=0 ) continue;
+        k = parsedColumnIndexByName(aSide, nSide, aAnc[i].zName);
+        if( k<nAnc || aSideAnc[k]!=i ) continue;
+        aReadded[i].iNameSlot = k;
+        bPending = 1;
+      }
+    }
+  }
   for(i=0; i<nSide; i++){
     int nHit = 0, hit = -1, first = 0, end = nAnc;
     if( aSideAnc[i]>=0 ) continue;
+    if( aReadded[i].iNameSlot>=0 ) continue;
     for(j=i-1; j>=0; j--){
       if( aSideAnc[j]>=0 ){ first = aSideAnc[j]+1; break; }
     }
@@ -185,6 +211,18 @@ int mergeMapUnmatchedColumns(
         }
         if( rc!=SQLITE_OK ) break;
         for(i=0; i<nSide; i++){
+          if( aReadded[i].iNameSlot>=0 ){
+            int bySlot = mergeStoredFieldsEqual(
+                pSideVal, nSideVal, &sideInfo, mergeReaderRecordSlot(&sideCi, i),
+                pAncVal, nAncVal, &ancInfo, mergeReaderRecordSlot(&ancCi, i));
+            int byName = mergeStoredFieldsEqual(
+                pSideVal, nSideVal, &sideInfo,
+                mergeReaderRecordSlot(&sideCi, aReadded[i].iNameSlot),
+                pAncVal, nAncVal, &ancInfo, mergeReaderRecordSlot(&ancCi, i));
+            if( bySlot && !byName ) aReadded[i].seenSlot = 1;
+            if( byName && !bySlot ) aReadded[i].seenName = 1;
+            continue;
+          }
           for(k=0; k<nAnc; k++){
             if( aCandidate[i*nAnc+k]==1
              && !mergeStoredFieldsEqual(
@@ -201,6 +239,18 @@ int mergeMapUnmatchedColumns(
   if( rc!=SQLITE_OK ) goto done;
   for(i=0; i<nSide; i++){
     int nHit = 0, hit = -1, bPossible = 0;
+    if( aReadded[i].iNameSlot>=0 ){
+      if( aReadded[i].seenSlot==aReadded[i].seenName ){
+        zAmbiguous = aSide[i].zName;
+        rc = SQLITE_ERROR;
+        goto done;
+      }
+      if( aReadded[i].seenSlot ){
+        aSideAnc[aReadded[i].iNameSlot] = -1;
+        aSideAnc[i] = i;
+      }
+      continue;
+    }
     for(k=0; k<nAnc; k++){
       if( aCandidate[i*nAnc+k] ) bPossible = 1;
       if( aCandidate[i*nAnc+k]==1 ){ nHit++; hit = k; }
@@ -239,6 +289,7 @@ done:
   freeColumns(aAnc, nAnc);
   freeColumns(aSide, nParsed);
   sqlite3_free(aCandidate);
+  sqlite3_free(aReadded);
   return rc;
 }
 
