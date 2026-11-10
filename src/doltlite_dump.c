@@ -195,8 +195,22 @@ static int textIsUtf8(const unsigned char *z, int n){
 /* Text is a SQL literal so replay converts it into the destination
 ** encoding. Control bytes and NUL cannot sit in that literal. */
 static int dumpText(DlDump *p, const unsigned char *z, int n){
-  int i = 0, rc = SQLITE_OK, any = 0;
+  int i, controls = 0, rc = SQLITE_OK, any = 0;
   if( n<=0 ) return dumpWrite(p,"''");
+  for(i=0; i<n; i++){
+    if( (z[i]<32 || z[i]==127) && ++controls>64 ) break;
+  }
+  if( controls>64 ){
+    int mid = n/2;
+    while( (z[mid]&0xc0)==0x80 ) mid++;
+    rc = dumpWrite(p,"(");
+    if( rc==SQLITE_OK ) rc = dumpText(p,z,mid);
+    if( rc==SQLITE_OK ) rc = dumpWrite(p,"||");
+    if( rc==SQLITE_OK ) rc = dumpText(p,z+mid,n-mid);
+    if( rc==SQLITE_OK ) rc = dumpWrite(p,")");
+    return rc;
+  }
+  i = 0;
   while( i<n && rc==SQLITE_OK ){
     if( z[i]<32 || z[i]==127 ){
       int first = 1;
