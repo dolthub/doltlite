@@ -405,6 +405,47 @@ do_test nonlocal-temp-target-untouched {
   nl_disk main {SELECT group_concat(id) FROM users}
 } {1}
 
+nl_reset
+do_execsql_test nonlocal-index-drop.setup {
+  INSERT INTO dolt_nonlocal_tables VALUES('nl','main','users','immediate');
+  CREATE INDEX nl_i ON nl(name);
+  SELECT dolt_checkout('main');
+  CREATE INDEX cfg_i ON cfg(v);
+  SELECT dolt_checkout('other');
+  SELECT count(*) FROM sqlite_master WHERE name IN ('nl_i','cfg_i');
+} {0 0 0}
+do_execsql_test nonlocal-index-drop.reindex {
+  REINDEX nl_i;
+} {}
+do_catchsql_test nonlocal-index-drop.unreached-reindex {
+  REINDEX cfg_i;
+} {1 {unable to identify the object to be reindexed}}
+do_catchsql_test nonlocal-index-drop.unreached-drop {
+  DROP INDEX cfg_i;
+} {1 {no such index: cfg_i}}
+do_execsql_test nonlocal-index-drop.drop {
+  DROP INDEX nl_i;
+} {}
+do_test nonlocal-index-drop.target {
+  nl_disk main {
+    SELECT name FROM sqlite_master WHERE name IN ('nl_i','cfg_i')
+  }
+} {cfg_i}
+do_catchsql_test nonlocal-index-drop.gone {
+  DROP INDEX nl_i;
+} {1 {no such index: nl_i}}
+do_execsql_test nonlocal-index-drop.if-exists {
+  DROP INDEX IF EXISTS nl_i;
+} {}
+do_execsql_test nonlocal-index-drop.wildcard {
+  DELETE FROM dolt_nonlocal_tables;
+  INSERT INTO dolt_nonlocal_tables VALUES('cf*','main',NULL,'immediate');
+  DROP INDEX cfg_i;
+} {}
+do_test nonlocal-index-drop.wildcard-target {
+  nl_disk main {SELECT count(*) FROM sqlite_master WHERE name='cfg_i'}
+} {0}
+
 # HEAD names this session's commit, not the default branch: read-only, and
 # it follows the session's HEAD as it moves.
 nl_reset
