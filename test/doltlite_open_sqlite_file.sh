@@ -319,12 +319,18 @@ else
 fi
 
 # A hot rollback journal beside a main file torn to under four bytes.
+case "$(uname -s)" in
+MINGW*|MSYS*|CYGWIN*)
+  skip "J13_hot_journal_torn_main" "needs a fifo and kill -9 of the engine"
+  ;;
+*)
 HJ=$TMP/hotjournal; mkdir "$HJ"
 seed_stock "$HJ/f.db" "CREATE TABLE t(a,b);
   WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<200)
   INSERT INTO t SELECT x, randomblob(100) FROM c;"
 mkfifo "$HJ/pipe"
-$DOLTLITE "$HJ/f.db" < "$HJ/pipe" >/dev/null 2>&1 &
+# Run the engine itself: killing the guard would leave the engine to roll back.
+"${DLTEST_REAL_DOLTLITE:-$DOLTLITE}" "$HJ/f.db" < "$HJ/pipe" >/dev/null 2>&1 &
 hj_pid=$!
 exec 9>"$HJ/pipe"
 echo "PRAGMA cache_size=2; BEGIN; UPDATE t SET b=randomblob(300);
@@ -349,6 +355,8 @@ cp "$HJ/journal.snap" "$HJ/f.db-journal"
 head -c 1 /dev/zero > "$HJ/f.db"
 dl_last "SELECT count(*) FROM sqlite_schema;" "$HJ/f.db" >/dev/null
 want_eq "J16_one_byte_main_is_not_rewritten" "$(wc -c < "$HJ/f.db" | tr -d ' ')" "1"
+  ;;
+esac
 
 echo ""
 echo "--- VC features on non-doltlite file ---"
