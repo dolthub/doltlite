@@ -576,6 +576,20 @@ else
     "$($SQLITE3 :memory: "ATTACH '$DI' AS a2;" ".dbinfo a2" 2>&1 | grep -v '^data version')"
 fi
 
+RT=$TMP/realtab.db
+RT_SEED="CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT NOT NULL, PRIMARY KEY(pattern)); INSERT INTO dolt_ignore VALUES('tmp%',1); CREATE TABLE t(x PRIMARY KEY); INSERT INTO t VALUES(1);"
+RT_ALTER="ALTER TABLE t RENAME TO t2; ALTER TABLE t2 RENAME COLUMN x TO y; ALTER TABLE t2 ADD COLUMN z; ALTER TABLE t2 DROP COLUMN z; SELECT y FROM t2; SELECT * FROM dolt_ignore;"
+seed_stock "$RT" "$RT_SEED"
+seed_stock "$TMP/realtab_ref.db" "$RT_SEED"
+want_eq "R1_recover_keeps_a_real_dolt_ignore_table" \
+  "$($DOLTLITE "$RT" .recover 2>&1 | grep -c -e '^CREATE TABLE dolt_ignore' -e "^INSERT OR IGNORE INTO 'dolt_ignore'.*'tmp%', 1);$")" \
+  "2"
+want_eq "R2_alter_beside_a_real_dolt_ignore_table_matches_sqlite" \
+  "$(dl_all "$RT_ALTER" "$RT")" \
+  "$(printf '%s\n' "$RT_ALTER" | $SQLITE3 "$TMP/realtab_ref.db" 2>&1)"
+want_eq "R3_altered_file_passes_stock_integrity_check" \
+  "$($SQLITE3 "$RT" "PRAGMA integrity_check;" 2>&1)" "ok"
+
 echo ""
 echo "============================="
 echo "Results: $PASS passed, $FAIL failed, $SKIP skipped"
