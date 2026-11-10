@@ -3185,7 +3185,8 @@ int doltliteBtreeDeserialize(
   sqlite3_int64 szDb,
   sqlite3_int64 szBuf,
   unsigned mFlags,
-  Btree **ppBt
+  Btree **ppBt,
+  int *pbNoRoom
 ){
   sqlite3_vfs *pVfs;
   ChunkStore *pStore;
@@ -3193,6 +3194,7 @@ int doltliteBtreeDeserialize(
   int rc;
 
   *ppBt = 0;
+  *pbNoRoom = 0;
   pVfs = sqlite3MemdbCreatePrivateVfs(pData, szDb, szBuf, mFlags);
   if( pVfs==0 ){
     if( mFlags & SQLITE_DESERIALIZE_FREEONCLOSE ) sqlite3_free(pData);
@@ -3211,6 +3213,15 @@ int doltliteBtreeDeserialize(
     rc = SQLITE_NOTADB;
   }
   if( rc!=SQLITE_OK ){
+    if( szDb==0 && (rc==SQLITE_FULL || rc==SQLITE_CANTOPEN) ){
+      unsigned char *aNow = 0;
+      sqlite3_int64 nNow = 0;
+      sqlite3MemdbPrivateVfsData(pVfs, &aNow, &nNow, 0);
+      if( aNow==pData ){
+        sqlite3MemdbPrivateVfsData(pVfs, &aNow, &nNow, 1);
+        *pbNoRoom = 1;
+      }
+    }
     sqlite3MemdbDestroyPrivateVfs(pVfs);
     return rc;
   }

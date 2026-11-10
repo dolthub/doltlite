@@ -988,6 +988,7 @@ int sqlite3_deserialize(
    && (szDb==0 || doltliteImageIsDoltlite(pData, szDb)) ){
     Btree *pNewBt = 0;
     Schema *pNewSchema;
+    int bNoRoom = 0;
     if( szDb<0 || szBuf<szDb || (szDb>0 && pData==0) ){
       rc = SQLITE_MISUSE;
       goto end_deserialize;
@@ -998,7 +999,10 @@ int sqlite3_deserialize(
       goto end_deserialize;
     }
     rc = doltliteBtreeDeserialize(
-        db, pData, szDb, szBuf, mFlags, &pNewBt);
+        db, pData, szDb, szBuf, mFlags, &pNewBt, &bNoRoom);
+    /* An empty image whose buffer cannot hold a DoltLite store is an empty
+    ** stock database, as in stock. */
+    if( bNoRoom ) goto deserialize_stock;
     pData = 0;
     if( rc!=SQLITE_OK ) goto end_deserialize;
     pNewSchema = sqlite3SchemaGet(db, pNewBt);
@@ -1017,6 +1021,7 @@ int sqlite3_deserialize(
     rc = SQLITE_OK;
     goto end_deserialize;
   }
+deserialize_stock:
 #endif
   zSql = sqlite3_mprintf("ATTACH x AS %Q", zSchema);
   if( zSql==0 ){
