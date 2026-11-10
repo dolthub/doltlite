@@ -1246,4 +1246,18 @@ ROLLBACK;
 "SELECT concat((SELECT group_concat(id ORDER BY id SEPARATOR ',') FROM t), '|', (SELECT count(*) FROM dolt_log))"
 done
 
+identity_setup="CREATE TABLE t(id INT PRIMARY KEY,v INT);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('other');
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-Am','add row');
+SELECT dolt_checkout('other');
+SELECT dolt_cherry_pick('main');
+UPDATE t SET v=20;
+SELECT dolt_commit('-am','edit picked row');
+SELECT dolt_checkout('main');"
+oracle_poststate "cherry_pick_preserves_distinct_ancestry" "$identity_setup" \
+  "SELECT (dolt_hashof('main')<>dolt_hashof('other~1')) || '|' || (dolt_merge_base('main','other')=dolt_hashof('main~1'))" \
+  "SELECT concat(dolt_hashof('main')<>dolt_hashof('other~1'),'|',dolt_merge_base('main','other')=dolt_hashof('main~1'))"
+
 vc_oracle_finish

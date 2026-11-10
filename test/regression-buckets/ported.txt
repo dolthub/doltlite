@@ -228,6 +228,7 @@ doltlite_rowid_full
 doltlite_creds
 doltlite_http_timeout
 doltlite_cherry_pick_allow_empty
+doltlite_commit_identity
 doltlite_skip_verification
 doltlite_replay_lifecycle
 doltlite_empty_table_update
