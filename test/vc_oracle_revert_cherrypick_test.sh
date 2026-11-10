@@ -1256,13 +1256,8 @@ SELECT dolt_cherry_pick('main');
 UPDATE t SET v=20;
 SELECT dolt_commit('-am','edit picked row');
 SELECT dolt_checkout('main');"
-oracle_poststate "cherry_pick_preserves_distinct_ancestry" "$identity_setup" "
-SELECT (dolt_hashof('main')<>dolt_hashof('other~1')) || '|' ||
-       (dolt_merge_base('main','other')=dolt_hashof('main~1'))" "
-SELECT concat(dolt_hashof('main')<>dolt_hashof('other~1'),'|',
-       dolt_merge_base('main','other')=dolt_hashof('main~1'))"
-vc_oracle_error "cherry_pick_then_edit_dual_add_conflicts" "$identity_setup
-BEGIN;
-SELECT dolt_merge('other');"
+oracle_poststate "cherry_pick_preserves_distinct_ancestry" "$identity_setup" \
+  "SELECT (dolt_hashof('main')<>dolt_hashof('other~1')) || '|' || (dolt_merge_base('main','other')=dolt_hashof('main~1'))" \
+  "SELECT concat(dolt_hashof('main')<>dolt_hashof('other~1'),'|',dolt_merge_base('main','other')=dolt_hashof('main~1'))"
 
 vc_oracle_finish

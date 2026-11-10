@@ -2515,4 +2515,20 @@ SELECT dolt_merge('feature');
  id || ':' || a || ':' || b || ':' || c FROM t INDEXED BY ia WHERE a>0;" \
 "SELECT CONCAT('Q',char(9),(SELECT COUNT(*) FROM dolt_schema_conflicts),char(9),id,':',a,':',b,':',c) FROM t WHERE a>0;"
 
+VC_ORACLE_EXPECTATION=allow-error oracle_same_session "cherry_pick_then_edit_dual_add_conflicts" "
+CREATE TABLE t(id INT PRIMARY KEY,v INT);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('other');
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-Am','add row');
+SELECT dolt_checkout('other');
+SELECT dolt_cherry_pick('main');
+UPDATE t SET v=20;
+SELECT dolt_commit('-am','edit picked row');
+SELECT dolt_checkout('main');
+BEGIN;
+SELECT dolt_merge('other');" \
+  "SELECT 'Q' || char(9) || (SELECT count(*) FROM dolt_conflicts) || char(9) || v FROM t;" \
+  "SELECT concat('Q',char(9),(SELECT count(*) FROM dolt_conflicts),char(9),v) FROM t;"
+
 vc_oracle_finish
