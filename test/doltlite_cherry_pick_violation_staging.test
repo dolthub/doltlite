@@ -1,0 +1,135 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach storage {file memory} {
+  foreach key {INTEGER INT} {
+    foreach clean {0 1} {
+      foreach conflict {0 1} {
+        set finishes {rollback commit}
+        if {$conflict} {set finishes rollback}
+        foreach finish $finishes {
+          reset_db
+          if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+          execsql "CREATE TABLE t(a $key PRIMARY KEY,cb INT)"
+          execsql {
+            CREATE TABLE u(id INT PRIMARY KEY,v INT);
+            INSERT INTO u VALUES(1,0);
+            CREATE TABLE c(id INT PRIMARY KEY,v INT);
+            INSERT INTO c VALUES(1,0);
+            SELECT dolt_commit('-Am','base');
+            SELECT dolt_branch('source');
+            INSERT INTO t VALUES(1,5);
+          }
+          if {$conflict} {execsql {UPDATE c SET v=20}}
+          execsql {
+            SELECT dolt_commit('-am','main');
+            SELECT dolt_checkout('source');
+            CREATE UNIQUE INDEX ixa ON t(cb);
+            INSERT INTO t VALUES(2,5);
+          }
+          if {$clean} {execsql {UPDATE u SET v=10}}
+          if {$conflict} {execsql {UPDATE c SET v=10}}
+          execsql {
+            SELECT dolt_commit('-Am','source');
+            SELECT dolt_checkout('main');
+            BEGIN;
+          }
+          set head [db one {SELECT dolt_hashof('HEAD')}]
+          set prefix cp-violation-stage-$storage-$key-$clean-$conflict-$finish
+          do_test $prefix-pending {
+            lindex [catchsql {SELECT dolt_cherry_pick('source')}] 0
+          } 1
+          do_execsql_test $prefix-pending-head {
+            SELECT dolt_hashof('HEAD');
+          } $head
+          do_execsql_test $prefix-before-clear {
+            SELECT staged,status FROM dolt_status WHERE table_name='t';
+            SELECT count(*)>0 FROM dolt_constraint_violations_t;
+          } {0 {constraint violation} 1}
+          do_execsql_test $prefix-staged-table {
+            SELECT a,cb FROM dolt_at_t('STAGED') ORDER BY a;
+            SELECT count(*) FROM dolt_schema_diff('HEAD','STAGED')
+              WHERE from_table_name='t' OR to_table_name='t';
+          } {1 5 0}
+          do_execsql_test $prefix-clear {
+            DELETE FROM dolt_constraint_violations_t;
+            SELECT staged,status FROM dolt_status WHERE table_name='t';
+            SELECT count(*) FROM dolt_constraint_violations;
+          } {0 modified 0}
+          do_execsql_test $prefix-clean-table {
+            SELECT v FROM dolt_at_u('STAGED');
+            SELECT count(*) FROM dolt_status WHERE table_name='u' AND staged=1;
+          } [list [expr {$clean ? 10 : 0}] $clean]
+          if {$conflict} {
+            do_execsql_test $prefix-conflicted-table {
+              SELECT staged,status FROM dolt_status WHERE table_name='c';
+              SELECT v FROM dolt_at_c('STAGED');
+            } {0 conflict 20}
+          }
+          if {$finish eq "rollback"} {
+            do_execsql_test $prefix-rollback {
+              ROLLBACK;
+              SELECT count(*) FROM dolt_status;
+              SELECT a,cb FROM t;
+              SELECT v FROM u;
+            } {0 1 5 0}
+          } else {
+            execsql COMMIT
+            if {$storage eq "file"} {db close; sqlite3 db test.db}
+            do_execsql_test $prefix-persisted {
+              SELECT staged,status FROM dolt_status WHERE table_name='t';
+              SELECT a,cb FROM dolt_at_t('STAGED') ORDER BY a;
+            } {0 modified 1 5}
+            do_execsql_test $prefix-stage-and-commit {
+              DELETE FROM t WHERE a=2;
+              SELECT dolt_add('t');
+              SELECT staged,status FROM dolt_status WHERE table_name='t';
+              SELECT length(dolt_commit('-m','resolved'));
+              SELECT count(*) FROM dolt_status;
+              PRAGMA integrity_check;
+            } {0 1 modified 40 0 ok}
+          }
+          do_execsql_test $prefix-head {
+            SELECT count(*) FROM dolt_log WHERE commit_hash=dolt_hashof('source');
+          } 0
+        }
+      }
+    }
+  }
+}
+
+foreach storage {file memory} {
+  reset_db
+  if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+  execsql {
+    PRAGMA foreign_keys=ON;
+    CREATE TABLE p(id INT PRIMARY KEY);
+    INSERT INTO p VALUES(1);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('source');
+    DELETE FROM p;
+    SELECT dolt_commit('-am','delete parent');
+    SELECT dolt_checkout('source');
+    CREATE TABLE t(id INT PRIMARY KEY,pid INT,FOREIGN KEY(pid) REFERENCES p(id));
+    CREATE INDEX t_pid ON t(pid);
+    INSERT INTO t VALUES(1,1);
+    SELECT dolt_commit('-Am','child');
+    SELECT dolt_checkout('main');
+    BEGIN;
+  }
+  do_test cp-new-violation-$storage-pending {
+    lindex [catchsql {SELECT dolt_cherry_pick('source')}] 0
+  } 1
+  do_execsql_test cp-new-violation-$storage-clear {
+    DELETE FROM dolt_constraint_violations_t;
+    SELECT table_name,staged,status FROM dolt_status;
+    SELECT count(*) FROM dolt_schema_diff('HEAD','STAGED');
+  } {t 0 {new table} 0}
+  do_execsql_test cp-new-violation-$storage-rollback {
+    ROLLBACK;
+    SELECT count(*) FROM sqlite_master WHERE name='t';
+    SELECT count(*) FROM dolt_status;
+  } {0 0}
+}
+
+finish_test
