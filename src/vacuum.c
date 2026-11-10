@@ -371,11 +371,9 @@ SQLITE_NOINLINE int sqlite3RunVacuum(
   /* pMain is orig-format here (the prolly branch returned above), so the vacuum
   ** target must be opened by the same engine to receive its pages. */
   db->mDbFlags |= DBFLAG_VacuumOrig;
-  /* Stock reports a non-empty target as "output file already exists" from the
-  ** size check below, which it reaches because its ATTACH of the target is
-  ** deferred. Opening a database is eager here, so a target holding anything
-  ** that is not a database fails the ATTACH first and reports that instead.
-  ** Take the size decision before the open so the message matches. */
+  /* Stock attaches a non-empty SQLite target and then refuses it from the
+  ** size check below. Take that decision before the open; any other target
+  ** is left for the ATTACH to reject. */
   if( pOut ){
     int exists = 0;
     if( sqlite3OsAccess(db->pVfs, zOut, SQLITE_ACCESS_EXISTS, &exists)==SQLITE_OK
@@ -383,13 +381,14 @@ SQLITE_NOINLINE int sqlite3RunVacuum(
     ){
       sqlite3_file *pProbe = 0;
       int probeFlags = 0;
-      i64 probeSz = 0;
+      char aMagic[16];
       if( sqlite3OsOpenMalloc(db->pVfs, zOut, &pProbe,
                               SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB,
                               &probeFlags)==SQLITE_OK ){
-        int probeRc = sqlite3OsFileSize(pProbe, &probeSz);
+        int probeRc = sqlite3OsRead(pProbe, aMagic, sizeof(aMagic), 0);
         sqlite3OsCloseFree(pProbe);
-        if( probeRc!=SQLITE_OK || probeSz>0 ){
+        if( probeRc==SQLITE_OK
+         && memcmp(aMagic, "SQLite format 3", sizeof(aMagic))==0 ){
           db->mDbFlags &= ~(u32)DBFLAG_VacuumOrig;
           sqlite3SetString(pzErrMsg, db, "output file already exists");
           rc = SQLITE_ERROR;

@@ -457,6 +457,22 @@ want_eq "M2b_vacuum_into_is_stock_format" "$(head -c 15 "$OUT" 2>/dev/null)" "SQ
 want_eq "M2c_vacuum_into_rows_copied" "$(sq_last "SELECT count(*) FROM t;" "$OUT")" "40"
 want_eq "M2d_vacuum_into_source_untouched" "$(sq_last "SELECT count(*) FROM t;" "$DB")" "40"
 
+VT=$TMP/v2targets; mkdir "$VT"
+echo 'my notes' > "$VT/notes.db"
+printf 'CREATE TABLE z(a);\n' | $DOLTLITE "$VT/dl.db" >/dev/null 2>&1
+mkdir "$VT/dir.db"
+dl_before=$(cksum < "$VT/dl.db")
+want_eq "M2e_vacuum_into_text_file_is_notadb" \
+  "$(dl_all "VACUUM INTO '$VT/notes.db';" "$DB" | grep -c 'file is not a database')" "1"
+want_eq "M2f_vacuum_into_doltlite_store_is_notadb" \
+  "$(dl_all "VACUUM INTO '$VT/dl.db';" "$DB" | grep -c 'file is not a database')" "1"
+want_eq "M2g_vacuum_into_directory_cannot_open" \
+  "$(dl_all "VACUUM INTO '$VT/dir.db';" "$DB" | grep -c 'unable to open database')" "1"
+want_eq "M2h_vacuum_into_sqlite_db_already_exists" \
+  "$(dl_all "VACUUM INTO '$OUT';" "$DB" | grep -c 'output file already exists')" "1"
+want_eq "M2i_vacuum_into_text_file_untouched" "$(cat "$VT/notes.db")" "my notes"
+want_eq "M2j_vacuum_into_doltlite_store_untouched" "$(cksum < "$VT/dl.db")" "$dl_before"
+
 echo ""
 echo "--- maintenance: backup ---"
 
