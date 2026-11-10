@@ -842,6 +842,62 @@ SELECT dolt_merge('feature');
 SELECT dolt_checkout(dolt_hashof('HEAD^2'), 'a', 'missing');
 " "SELECT concat((SELECT v FROM a WHERE id=1), char(9), (SELECT v FROM a WHERE id=2), char(9), (SELECT v FROM a WHERE id=3), char(9), (SELECT v FROM b WHERE id=1), char(9), (SELECT v FROM b WHERE id=2), char(9), (SELECT v FROM b WHERE id=3));"
 
+oracle "txn_checkout_discards_source_and_target_writes" "
+$SEED
+SELECT dolt_branch('side');
+BEGIN;
+INSERT INTO t VALUES(2,'source');
+SELECT dolt_checkout('side');
+INSERT INTO t VALUES(3,'target');
+ROLLBACK;
+SELECT dolt_checkout('main');
+"
+
+oracle "txn_checkout_roundtrip_rollback" "
+$SEED
+SELECT dolt_branch('side');
+BEGIN;
+INSERT INTO t VALUES(2,'source');
+SELECT dolt_checkout('side');
+INSERT INTO t VALUES(3,'target');
+SELECT dolt_checkout('main');
+ROLLBACK;
+SELECT dolt_checkout('side');
+"
+
+oracle "txn_checkout_commits_source_on_sql_commit" "
+$SEED
+SELECT dolt_branch('side');
+BEGIN;
+INSERT INTO t VALUES(2,'source');
+SELECT dolt_checkout('side');
+COMMIT;
+SELECT dolt_checkout('main');
+"
+
+oracle "txn_checkout_before_first_write" "
+$SEED
+SELECT dolt_branch('side');
+BEGIN;
+SELECT dolt_checkout('side');
+INSERT INTO t VALUES(2,'target');
+ROLLBACK;
+"
+
+oracle "txn_checkout_keeps_caller_savepoint" "
+$SEED
+SELECT dolt_branch('side');
+BEGIN;
+INSERT INTO t VALUES(2,'before');
+SAVEPOINT caller;
+INSERT INTO t VALUES(3,'after');
+SELECT dolt_checkout('side');
+INSERT INTO t VALUES(4,'target');
+ROLLBACK TO caller;
+SELECT dolt_checkout('main');
+ROLLBACK;
+"
+
 echo "--- savepoint parity ---"
 
 oracle_savepoint_poststate "savepoint_checkout_existing_branch_reopens_on_original_branch" "

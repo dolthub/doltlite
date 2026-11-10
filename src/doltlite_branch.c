@@ -13,6 +13,16 @@
 #include <string.h>
 #include <time.h>
 
+int doltliteRefreshBranchScopedTables(sqlite3 *db){
+  int rc;
+  doltliteHistoricalModulesReset(db);
+  rc = doltliteRegisterWorkspaceTables(db);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteRegisterBlameTables(db);
+  if( rc!=SQLITE_OK ) return rc;
+  return doltliteRefreshConstraintViolationTables(db);
+}
+
 static void activeBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   (void)argc; (void)argv;

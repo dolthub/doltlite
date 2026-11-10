@@ -15,6 +15,7 @@ struct BranchMutationCtx {
 };
 
 int branchNameEmpty(const char *zName);
+int doltliteRefreshBranchScopedTables(sqlite3 *db);
 int mutateBranchRef(sqlite3 *db, ChunkStore *cs, void *pArg);
 
 extern sqlite3_module doltliteBranchesModule;

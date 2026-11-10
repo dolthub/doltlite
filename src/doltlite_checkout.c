@@ -168,17 +168,6 @@ static int checkoutLoadAndApply(
   return rc;
 }
 
-static int refreshBranchScopedTables(sqlite3 *db){
-  int rc;
-
-  doltliteHistoricalModulesReset(db);
-  rc = doltliteRegisterWorkspaceTables(db);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteRegisterBlameTables(db);
-  if( rc!=SQLITE_OK ) return rc;
-  return doltliteRefreshConstraintViolationTables(db);
-}
-
 typedef struct CheckoutMutationCtx CheckoutMutationCtx;
 struct CheckoutMutationCtx {
   BranchMutationCtx *pCreate;
@@ -411,8 +400,10 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
     p->oldBranchExists =
         chunkStoreFindBranch(cs, p->zCurrentBranch, 0)==SQLITE_OK;
   }
-  rc = doltliteBranchWorkingSetUnmoved(cs, p->zCurrentBranch,
-      p->oldBranchExists ? &p->oldWorkingSet : 0);
+  /* A prior checkout in this write transaction left only our own refs. */
+  rc = doltliteTxnCheckoutOwnsGraphLock(db) ? SQLITE_OK
+     : doltliteBranchWorkingSetUnmoved(cs, p->zCurrentBranch,
+         p->oldBranchExists ? &p->oldWorkingSet : 0);
   if( rc!=SQLITE_OK ){
     if( rc!=SQLITE_BUSY ) return rc;
     p->oldWorkingSetMoved = 1;
@@ -455,7 +446,7 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
     }
   }
 
-  rc = refreshBranchScopedTables(db);
+  rc = doltliteRefreshBranchScopedTables(db);
   if( rc!=SQLITE_OK ) return rc;
 
   if( !bSavepoint || p->bPersistUnderSavepoint ){
@@ -626,7 +617,7 @@ void doltConnectBranchFunc(
     sqlite3_result_error_code(ctx, rc);
     return;
   }
-  rc = refreshBranchScopedTables(db);
+  rc = doltliteRefreshBranchScopedTables(db);
   if( rc!=SQLITE_OK ){
     int restoreRc = checkoutRestoreSession(db, &m);
     if( restoreRc!=SQLITE_OK ) rc = restoreRc;
@@ -1630,6 +1621,14 @@ static void doltCheckoutParsedFunc(
     sqlite3_free(zErr);
     return;
   }
+  if( hadExplicitTxn && !isCreateAndSwitch
+   && !doltliteSavepointIsTopLevelTxn(db) ){
+    rc = doltliteEnsureWriteTxnAndSavepoints(db);
+    if( rc!=SQLITE_OK ){
+      doltliteVcResultErrorCode(ctx, db, "checkout failed", rc);
+      return;
+    }
+  }
   doltliteGetSessionHead(db, &m.oldCommitHash);
   zCurrentBranch = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
   if( !zCurrentBranch ){
@@ -1665,6 +1664,7 @@ static void doltCheckoutParsedFunc(
   if( rc==SQLITE_NOTFOUND ){
     rc = checkoutCreateFromRemoteTracking(db, zBranch);
     if( rc==SQLITE_OK ){
+      isCreateAndSwitch = 1;
       memset(&m, 0, sizeof(m));
       doltliteGetSessionHead(db, &m.oldCommitHash);
       zCurrentBranch = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
@@ -1736,13 +1736,16 @@ checkout_done:
     doltliteVcResultErrorCode(ctx, db, "checkout failed", rc);
     return;
   }
-  if( hadExplicitTxn ){
+  if( hadExplicitTxn
+   && (isCreateAndSwitch || doltliteSavepointIsTopLevelTxn(db)) ){
     rc = doltliteVcSealBranchStyleTxn(db);
     if( rc!=SQLITE_OK ){
       doltliteVcResultSealError(ctx, db, rc);
       return;
     }
     doltliteAdoptRollbackBaseline(db, &m.targetCatHash);
+  }else if( hadExplicitTxn ){
+    doltliteMarkTxnCheckout(db);
   }
   sqlite3_result_int(ctx, 0);
 }
