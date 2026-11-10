@@ -1621,11 +1621,6 @@ static void doltCheckoutParsedFunc(
     sqlite3_free(zErr);
     return;
   }
-  if( hadExplicitTxn && !isCreateAndSwitch
-   && !doltliteSavepointIsTopLevelTxn(db) ){
-    rc = doltliteEnsureWriteTxnAndSavepoints(db);
-    if( rc!=SQLITE_OK ) goto checkout_done;
-  }
   doltliteGetSessionHead(db, &m.oldCommitHash);
   zCurrentBranch = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
   if( !zCurrentBranch ){
@@ -1640,6 +1635,14 @@ static void doltCheckoutParsedFunc(
     doltliteVcResultErrorCode(ctx, db,
         "failed to snapshot current branch state", rc);
     return;
+  }
+  if( hadExplicitTxn && !isCreateAndSwitch && !m.oldBranchMissing
+   && !doltliteSavepointIsTopLevelTxn(db) ){
+    rc = doltliteEnsureWriteTxnAndSavepoints(db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zCurrentBranch);
+      goto checkout_done;
+    }
   }
   m.haveOldState = 1;
   checkoutSaveSession(db, &m);
@@ -1734,7 +1737,8 @@ checkout_done:
     return;
   }
   if( hadExplicitTxn
-   && (isCreateAndSwitch || doltliteSavepointIsTopLevelTxn(db)) ){
+   && (isCreateAndSwitch || m.oldBranchMissing
+       || doltliteSavepointIsTopLevelTxn(db)) ){
     rc = doltliteVcSealBranchStyleTxn(db);
     if( rc!=SQLITE_OK ){
       doltliteVcResultSealError(ctx, db, rc);
