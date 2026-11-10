@@ -386,4 +386,50 @@ SELECT dolt_merge('side');" \
 SELECT CONCAT('R|AGG|',num_violations) FROM dolt_constraint_violations;"
 done
 
+for conflicted in 0 1; do
+  setup="CREATE TABLE t(a INT PRIMARY KEY,cb INT);
+CREATE TABLE u(id INT PRIMARY KEY,v INT);
+INSERT INTO u VALUES(1,0);
+CREATE TABLE c(id INT PRIMARY KEY,v INT);
+INSERT INTO c VALUES(1,0);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('source');
+INSERT INTO t VALUES(1,5);"
+  if [ "$conflicted" -eq 1 ]; then setup+="UPDATE c SET v=20;"; fi
+  setup+="SELECT dolt_commit('-am','main');
+SELECT dolt_checkout('source');
+CREATE UNIQUE INDEX ixa ON t(cb);
+INSERT INTO t VALUES(2,5);
+UPDATE u SET v=10;"
+  if [ "$conflicted" -eq 1 ]; then setup+="UPDATE c SET v=10;"; fi
+  setup+="SELECT dolt_commit('-Am','source');
+SELECT dolt_checkout('main');
+BEGIN;
+SELECT dolt_cherry_pick('source');"
+  oracle "cherry_pick_violation_staging_$conflicted" "$setup" "
+SELECT CONCAT('R|BEFORE|',table_name,'|',staged,'|',status) FROM dolt_status;
+DELETE FROM dolt_constraint_violations_t;
+SELECT CONCAT('R|AFTER|',table_name,'|',staged,'|',status) FROM dolt_status;
+SELECT CONCAT('R|CV|',count(*)) FROM dolt_constraint_violations;"
+done
+
+oracle "cherry_pick_new_violating_table_unstaged" "
+CREATE TABLE p(id INT PRIMARY KEY);
+INSERT INTO p VALUES(1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('source');
+DELETE FROM p;
+SELECT dolt_commit('-am','delete parent');
+SELECT dolt_checkout('source');
+CREATE TABLE t(id INT PRIMARY KEY,pid INT,FOREIGN KEY(pid) REFERENCES p(id));
+CREATE INDEX t_pid ON t(pid);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_commit('-Am','child');
+SELECT dolt_checkout('main');
+BEGIN;
+SELECT dolt_cherry_pick('source');" "
+SELECT CONCAT('R|BEFORE|',table_name,'|',staged,'|',status) FROM dolt_status;
+DELETE FROM dolt_constraint_violations_t;
+SELECT CONCAT('R|AFTER|',table_name,'|',staged,'|',status) FROM dolt_status;"
+
 vc_oracle_finish
