@@ -108,10 +108,17 @@ stock_magic() {
   want_eq "$1" "$(head -c 15 "$2" 2>/dev/null | tr -d '\0')" "SQLite format 3"
 }
 
-# File bytes without the header's library version number, which differs when
-# the reference is another SQLite release.
-layout_sum() {
-  { head -c 96 "$1"; tail -c +101 "$1"; } | cksum
+# Stock's record encoding changes between releases, so byte identity is only
+# expected against the release DoltLite is built from.
+want_same_bytes() {
+  local s d
+  s=$(printf 'SELECT sqlite_version();\n' | $SQLITE3 :memory: 2>&1 | tr -d '\r')
+  d=$(printf 'SELECT sqlite_version();\n' | $DOLTLITE :memory: 2>&1 | tr -d '\r')
+  if [ "$s" != "$d" ]; then
+    skip "$1" "reference is SQLite $s, doltlite is built from $d"
+    return
+  fi
+  want_eq "$1" "$(cksum < "$TMP/ora-d.db")" "$(cksum < "$TMP/ora-s.db")"
 }
 
 echo "=== doltlite vs stock sqlite3 on a sqlite3-created file ==="
@@ -145,8 +152,7 @@ DB=$TMP/realaff.db
 seed_stock "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, a, b REAL); CREATE INDEX ta ON t(a); CREATE INDEX tb ON t(b);"
 oracle_copy "O_layout_integral_real" \
   "INSERT INTO t VALUES(1,0,1),(2,1,2.0); UPDATE t SET b=3 WHERE id=2; SELECT id, a, b, typeof(b) FROM t ORDER BY id; PRAGMA integrity_check;" "$DB"
-want_eq "O_layout_integral_real_bytes" \
-  "$(layout_sum "$TMP/ora-d.db")" "$(layout_sum "$TMP/ora-s.db")"
+want_same_bytes "O_layout_integral_real_bytes"
 
 echo ""
 echo "--- INTEGER PK / page sizes ---"
