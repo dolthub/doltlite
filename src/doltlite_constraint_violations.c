@@ -685,6 +685,45 @@ static const char *violationTypeName(u8 t){
   }
 }
 
+static int cvrResultUserCol(
+  CvRowVtab *v,
+  sqlite3_context *ctx,
+  ConstraintViolationRow *r,
+  int iCol
+){
+  DoltliteRecordInfo info = {0};
+  int iField = v->cols.aColToRec ? v->cols.aColToRec[iCol] : iCol;
+  int bMissing;
+  int rc = doltliteParseRecordStrict(r->pVal, r->nVal, &info);
+
+  bMissing = rc==SQLITE_OK && iField>=info.nField && iCol!=v->cols.iPkCol;
+  doltliteRecordInfoClear(&info);
+  if( bMissing ){
+    Table *pTab = sqlite3FindTable(v->db, v->zTableName, "main");
+    int i;
+    for(i=0; pTab && i<pTab->nCol; i++){
+      Column *pCol = &pTab->aCol[i];
+      if( sqlite3_stricmp(pCol->zCnName, v->cols.azName[iCol])==0 ){
+        sqlite3_value *pValue = 0;
+        rc = sqlite3ValueFromExpr(v->db, sqlite3ColumnExpr(pTab, pCol),
+                                 SQLITE_UTF8, pCol->affinity, &pValue);
+        if( rc==SQLITE_OK && pValue ){
+          if( pCol->affinity==SQLITE_AFF_REAL
+           && sqlite3_value_type(pValue)==SQLITE_INTEGER ){
+            sqlite3_result_double(ctx, sqlite3_value_double(pValue));
+          }else{
+            sqlite3_result_value(ctx, pValue);
+          }
+        }
+        sqlite3ValueFree(pValue);
+        return rc;
+      }
+    }
+  }
+  doltliteResultUserCol(ctx, &v->cols, r->pVal, r->nVal, r->intKey, 1, iCol);
+  return SQLITE_OK;
+}
+
 static int cvrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   CvRowCur *c = (CvRowCur*)cur;
   CvRowVtab *v = (CvRowVtab*)cur->pVtab;
@@ -710,7 +749,7 @@ static int cvrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
         r->nVal = nRec;
       }
     }
-    doltliteResultUserCol(ctx, &v->cols, r->pVal, r->nVal, r->intKey, 1, col - 1);
+    return cvrResultUserCol(v, ctx, r, col - 1);
   }else if( col == nUserCols + 1 ){
     sqlite3_result_text(ctx, r->zInfo ? r->zInfo : "", -1, SQLITE_TRANSIENT);
   }else{
