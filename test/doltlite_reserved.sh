@@ -178,4 +178,52 @@ run_test "fts5_virtual_table_still_works" \
 hello" "$DB"
 
 rm -f "$DB"
+DB=/tmp/test_reserved_alter_$$.db
+rm -f "$DB"
+
+run_test "alter_beside_dolt_rebase_plan" \
+  "CREATE TABLE t(x PRIMARY KEY, y); CREATE TABLE u(a PRIMARY KEY);
+   SELECT dolt_commit('-Am','i') IS NOT NULL;
+   SELECT dolt_checkout('-b','feat');
+   INSERT INTO t VALUES(1,1);
+   SELECT dolt_commit('-am','c1') IS NOT NULL;
+   SELECT dolt_rebase('-i','main') LIKE 'interactive rebase started%';
+   ALTER TABLE u RENAME TO u2;
+   ALTER TABLE u2 RENAME COLUMN a TO aa;
+   ALTER TABLE t DROP COLUMN y;
+   SELECT sql FROM sqlite_schema WHERE name IN ('t','u2') ORDER BY name;" \
+  "1
+0
+1
+1
+CREATE TABLE t(x PRIMARY KEY)
+CREATE TABLE u2(aa PRIMARY KEY)" "$DB"
+
+run_test_error_match "rename_to_dolt_prefix_still_reserved" \
+  "ALTER TABLE u RENAME TO dolt_u;" \
+  "table names beginning with dolt_ are reserved for internal use" "$DB"
+
+rm -f "$DB"
+DB=/tmp/test_reserved_stock_$$.db
+rm -f "$DB"
+
+printf '%s\n' ".dbconfig defensive off" "PRAGMA writable_schema=ON;" \
+  "CREATE TABLE dolt_pre(a PRIMARY KEY, b);" \
+  | "$DOLTLITE" "file:$DB?doltlite_engine=sqlite" >/dev/null 2>&1
+
+run_test "alter_beside_user_dolt_table_in_sqlite_file" \
+  "SELECT name FROM sqlite_schema WHERE type='table';
+   CREATE TABLE t(x, y, z);
+   ALTER TABLE t RENAME TO t2;
+   ALTER TABLE t2 RENAME COLUMN x TO xx;
+   ALTER TABLE t2 DROP COLUMN z;
+   SELECT sql FROM sqlite_schema WHERE name='t2';" \
+  "dolt_pre
+CREATE TABLE \"t2\"(xx, y)" "$DB"
+
+run_test_error_match "create_dolt_prefix_in_sqlite_file_still_reserved" \
+  "CREATE TABLE dolt_new(a);" \
+  "table names beginning with dolt_ are reserved for internal use" "$DB"
+
+rm -f "$DB"
 dltest_finish
