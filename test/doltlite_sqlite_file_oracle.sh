@@ -108,6 +108,12 @@ stock_magic() {
   want_eq "$1" "$(head -c 15 "$2" 2>/dev/null | tr -d '\0')" "SQLite format 3"
 }
 
+# File bytes without the header's library version number, which differs when
+# the reference is another SQLite release.
+layout_sum() {
+  { head -c 96 "$1"; tail -c +101 "$1"; } | cksum
+}
+
 echo "=== doltlite vs stock sqlite3 on a sqlite3-created file ==="
 
 if [ ! -x "$SQLITE3" ]; then
@@ -140,7 +146,7 @@ seed_stock "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, a, b REAL); CREATE INDE
 oracle_copy "O_layout_integral_real" \
   "INSERT INTO t VALUES(1,0,1),(2,1,2.0); UPDATE t SET b=3 WHERE id=2; SELECT id, a, b, typeof(b) FROM t ORDER BY id; PRAGMA integrity_check;" "$DB"
 want_eq "O_layout_integral_real_bytes" \
-  "$(cmp -s "$TMP/ora-d.db" "$TMP/ora-s.db" && echo same)" "same"
+  "$(layout_sum "$TMP/ora-d.db")" "$(layout_sum "$TMP/ora-s.db")"
 
 echo ""
 echo "--- INTEGER PK / page sizes ---"
