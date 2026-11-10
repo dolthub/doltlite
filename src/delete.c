@@ -525,7 +525,10 @@ void sqlite3DeleteFrom(
     /* A one-pass multi-index OR DELETE can update prolly pending maps for
     ** indexes that later OR arms are still scanning. Use the two-pass rowset
     ** path so row discovery completes before table and index mutation. */
-    if( doltliteExprContainsOr(pWhere) ) bComplex = 1;
+    if( !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt)
+     && doltliteExprContainsOr(pWhere) ){
+      bComplex = 1;
+    }
 #endif
     wcf |= (bComplex ? 0 : WHERE_ONEPASS_MULTIROW);
     if( HasRowid(pTab) ){
