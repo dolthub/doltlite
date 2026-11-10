@@ -103,4 +103,95 @@ foreach {layout key suffix} {
   }
 }
 
+foreach populated {0 1} {
+  foreach key {INTEGER INT} {
+    foreach direction {forward reverse} {
+      foreach {kind declaration expected explicit} {
+        integer {INT NOT NULL DEFAULT 7} 7 9
+        negative {INT DEFAULT (-7)} -7 NULL
+        text {TEXT DEFAULT 'seven'} 'seven' NULL
+        affinity {TEXT DEFAULT 7} '7' NULL
+        real {REAL DEFAULT 7.25} 7.25 NULL
+        blob {BLOB DEFAULT X'0708'} X'0708' NULL
+        nullable {INT DEFAULT NULL} NULL NULL
+      } {
+        reset_db
+        execsql "CREATE TABLE t(a $key PRIMARY KEY,cb INT,cd INT)"
+        execsql {
+          SELECT dolt_commit('-Am','base');
+          SELECT dolt_branch('side');
+          INSERT INTO t VALUES(8,1,6);
+          SELECT dolt_commit('-Am','main row');
+          SELECT dolt_checkout('side');
+          CREATE UNIQUE INDEX ix1 ON t(cb);
+        }
+        execsql "ALTER TABLE t ADD COLUMN n3 $declaration"
+        if {$populated} {execsql "INSERT INTO t VALUES(2,2,5,$explicit)"}
+        execsql {
+          SELECT dolt_commit('-Am','add default and unique index');
+          SELECT dolt_checkout('main');
+          ALTER TABLE t RENAME COLUMN cd TO r2;
+          INSERT INTO t VALUES(0,1,4);
+        }
+        if {$populated} {execsql {INSERT INTO t VALUES(3,2,9)}}
+        execsql {
+          SELECT dolt_commit('-Am','rename column and insert');
+        }
+        set target side
+        set branch main
+        if {$direction eq "reverse"} {
+          execsql {SELECT dolt_checkout('side')}
+          set target main
+          set branch side
+        }
+        execsql {BEGIN}
+        set name violations-default-$populated-$key-$direction-$kind
+        set rows {0 1 4 8 1 6 2}
+        set defaults [list $expected $expected]
+        if {$populated} {
+          set rows {0 1 4 2 2 5 3 2 9 8 1 6 4}
+          lappend defaults $expected
+        }
+        do_catchsql_test $name-merge "SELECT dolt_merge('$target')" \
+          {1 {Merge resulted in constraint violations. Resolve the rows in dolt_constraint_violations and then commit with dolt_commit.}}
+        foreach state {transaction committed reopened} {
+          if {$state eq "committed"} {execsql {COMMIT}}
+          if {$state eq "reopened"} {
+            db close
+            sqlite3 db test.db/$branch
+          }
+          do_execsql_test $name-$state-rows {
+            SELECT a,cb,r2 FROM t ORDER BY a;
+            SELECT count(*) FROM dolt_constraint_violations_t
+              WHERE violation_type='unique index';
+          } $rows
+          do_execsql_test $name-$state-default {
+            SELECT quote(n3) FROM dolt_constraint_violations_t
+              WHERE a IN (0,3,8) ORDER BY a;
+          } $defaults
+          if {$populated} {
+            do_execsql_test $name-$state-explicit {
+              SELECT quote(n3) FROM dolt_constraint_violations_t WHERE a=2;
+            } [list $explicit]
+          }
+          do_execsql_test $name-$state-matches {
+            SELECT count(*) FROM (
+              SELECT a,cb,r2,n3 FROM t
+              EXCEPT SELECT a,cb,r2,n3 FROM dolt_constraint_violations_t
+            );
+            SELECT count(*) FROM (
+              SELECT a,cb,r2,n3 FROM dolt_constraint_violations_t
+              EXCEPT SELECT a,cb,r2,n3 FROM t
+            );
+          } {0 0}
+        }
+        do_execsql_test $name-snapshot {
+          UPDATE t SET n3=8 WHERE a=0;
+          SELECT quote(n3) FROM dolt_constraint_violations_t WHERE a=0;
+        } [list $expected]
+      }
+    }
+  }
+}
+
 finish_test

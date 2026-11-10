@@ -110,6 +110,37 @@ SELECT dolt_merge('feat');
 "SELECT CONCAT('R|', CASE violation_type WHEN 'foreign key' THEN 'FK' WHEN 'unique index' THEN 'UQ' WHEN 'check constraint' THEN 'CK' ELSE '?' END, '|', pk, '|', a, '|', b, '|cols=', JSON_EXTRACT(violation_info,'\$.Columns')) FROM dolt_constraint_violations_t ORDER BY pk;
 SELECT CONCAT('R|AGG|', \`table\`, '|', num_violations) FROM dolt_constraint_violations ORDER BY \`table\`;"
 
+echo "--- unique violations: added defaults after a column rename ---"
+for key in INTEGER INT; do
+  for populated in 0 1; do
+    side_row=""
+    main_row=""
+    if [ "$populated" = 1 ]; then
+      side_row="INSERT INTO t VALUES(2,2,5,9);"
+      main_row="INSERT INTO t VALUES(3,2,9);"
+    fi
+    oracle "unique_renamed_default_${key}_${populated}" \
+"CREATE TABLE t(a $key PRIMARY KEY, cb INT, cd INT);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('side');
+INSERT INTO t VALUES(8,1,6);
+SELECT dolt_commit('-Am','main row');
+SELECT dolt_checkout('side');
+CREATE UNIQUE INDEX ix1 ON t(cb);
+ALTER TABLE t ADD COLUMN n3 INT NOT NULL DEFAULT 7;
+$side_row
+SELECT dolt_commit('-Am','add default and unique index');
+SELECT dolt_checkout('main');
+ALTER TABLE t RENAME COLUMN cd TO r2;
+INSERT INTO t VALUES(0,1,4);
+$main_row
+SELECT dolt_commit('-Am','rename column and insert');
+SELECT dolt_merge('side');" \
+"SELECT CONCAT('R|ROW|', a, '|', cb, '|', r2, '|', COALESCE(n3,'NULL')) FROM t ORDER BY a;
+SELECT CONCAT('R|CV|', a, '|', cb, '|', r2, '|', COALESCE(n3,'NULL')) FROM dolt_constraint_violations_t ORDER BY a;"
+  done
+done
+
 echo "--- foreign key: single orphan after parent delete ---"
 oracle "fk_orphan_single" \
 "CREATE TABLE p(pk INTEGER PRIMARY KEY, v INT UNIQUE);
