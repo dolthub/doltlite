@@ -676,6 +676,33 @@ Table *doltliteFkParentTable(sqlite3 *db, const char *zTo, const char *zDb){
   return sqlite3FindTable(db, zTo, zDb);
 }
 
+/* An index on another branch whose table a rule of the session branch
+** resolves to. */
+Index *doltliteNonlocalFindIndex(sqlite3 *db, const char *zName){
+  DoltliteNonlocal *p = nonlocalState(db, 0);
+  int i, j;
+  if( !p || !p->bLoaded ) return 0;
+  for(j=2; j<db->nDb; j++){
+    Index *pIdx;
+    const char *zTab;
+    if( !doltliteNonlocalIsSchema(db->aDb[j].zDbSName) ) continue;
+    pIdx = sqlite3HashFind(&db->aDb[j].pSchema->idxHash, zName);
+    if( !pIdx ) continue;
+    zTab = pIdx->pTable->zName;
+    for(i=0; i<p->nRule; i++){
+      const NonlocalRule *r = &p->aRule[i];
+      const char *zTo = strpbrk(r->zPattern, "*%?") ? zTab : r->zPattern;
+      const char *zSchema = 0;
+      if( nonlocalResolveName(db, &zTo, &zSchema)>0
+       && sqlite3StrICmp(zSchema, db->aDb[j].zDbSName)==0
+       && sqlite3StrICmp(zTo, zTab)==0 ){
+        return pIdx;
+      }
+    }
+  }
+  return 0;
+}
+
 int doltliteNonlocalFkParent(
   sqlite3 *db,
   const char *zTo,

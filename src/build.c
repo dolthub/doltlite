@@ -5333,6 +5333,11 @@ void sqlite3DropIndex(Parse *pParse, SrcList *pName, int ifExists){
     goto exit_drop_index;
   }
   pIndex = sqlite3FindIndex(db, pName->a[0].zName, pName->a[0].u4.zDatabase);
+#ifdef DOLTLITE_PROLLY
+  if( pIndex==0 && pName->a[0].u4.zDatabase==0 ){
+    pIndex = doltliteNonlocalFindIndex(db, pName->a[0].zName);
+  }
+#endif
   if( pIndex==0 ){
     if( !ifExists ){
       sqlite3ErrorMsg(pParse, "no such index: %S", pName->a);
@@ -6334,6 +6339,12 @@ void sqlite3Reindex(Parse *pParse, Token *pName1, Token *pName2){
     if( zColl==0 && (pReIndex = sqlite3FindIndex(db, z, zDb))!=0 ){
       bMatch = 1;
     }
+#ifdef DOLTLITE_PROLLY
+    if( zColl==0 && pReIndex==0 && pReTab==0 && zDb==0
+     && (pReIndex = doltliteNonlocalFindIndex(db, z))!=0 ){
+      bMatch = 1;
+    }
+#endif
   }
   if( bMatch ){
     int iDb;
