@@ -2718,7 +2718,11 @@ void sqlite3GenerateConstraintChecks(
      && ( 0==(db->flags&SQLITE_RecTriggers) ||      /* Condition 4 */
           0==sqlite3TriggersExist(pParse, pTab, TK_DELETE, 0, 0))
      && ( 0==(db->flags&SQLITE_ForeignKeys) ||      /* Condition 5 */
+#ifdef DOLTLITE_PROLLY
+         (0==pTab->u.tab.pFKey && 0==doltliteFkReferences(pParse, pTab)))
+#else
          (0==pTab->u.tab.pFKey && 0==sqlite3FkReferences(pTab)))
+#endif
     ){
       sqlite3VdbeResolveLabel(v, addrUniqueOk);
       continue;

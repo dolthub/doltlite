@@ -632,6 +632,15 @@ int doltliteNonlocalLocalTable(Parse *pParse, Table *pTab, Table **ppLocal){
   return 0;
 }
 
+/* The session name this statement reached pTab through, or 0. */
+const char *doltliteNonlocalLocalName(Parse *pParse, Table *pTab){
+  DoltliteNonlocalUse *p = sqlite3ParseToplevel(pParse)->pNonlocalUse;
+  for(; p; p=p->pNext){
+    if( p->pTab==pTab ) return p->zName;
+  }
+  return 0;
+}
+
 static int nonlocalResolveName(
   sqlite3 *db,
   const char **pzName,

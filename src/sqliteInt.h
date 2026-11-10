@@ -5599,6 +5599,8 @@ int doltliteNonlocalActive(sqlite3*);
 int doltliteNonlocalResolve(Parse*, const char**, const char**);
 void doltliteNonlocalNoteUse(Parse*, Table*, const char*);
 int doltliteNonlocalLocalTable(Parse*, Table*, Table**);
+const char *doltliteNonlocalLocalName(Parse*, Table*);
+FKey *doltliteFkReferences(Parse*, Table*);
 int doltliteNonlocalBlocksCreate(sqlite3*, const char*);
 int doltliteNonlocalIsSchema(const char*);
 void doltliteNonlocalTableList(Parse*, const char*);
