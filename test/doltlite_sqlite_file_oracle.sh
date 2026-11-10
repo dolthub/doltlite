@@ -158,6 +158,11 @@ seed_stock "$DB" "CREATE TABLE w(k PRIMARY KEY, v, s) WITHOUT ROWID; INSERT INTO
 oracle_copy "O_layout_drop_column" \
   "ALTER TABLE w DROP COLUMN s; ALTER TABLE r DROP COLUMN s; SELECT * FROM w; SELECT * FROM r; PRAGMA integrity_check;" "$DB"
 want_same_bytes "O_layout_drop_column_bytes"
+DB=$TMP/ordelete.db
+seed_stock "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, a, b); CREATE INDEX ta ON t(a); CREATE INDEX tb ON t(b); WITH RECURSIVE r(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM r WHERE i<200) INSERT INTO t SELECT i, i%10, i%7 FROM r;"
+oracle_copy "O_layout_or_delete" \
+  "DELETE FROM t WHERE a=1 OR b=2; SELECT count(*), sum(id) FROM t; PRAGMA integrity_check;" "$DB"
+want_same_bytes "O_layout_or_delete_bytes"
 
 echo ""
 echo "--- INTEGER PK / page sizes ---"
