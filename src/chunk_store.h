@@ -577,6 +577,7 @@ int chunkStoreDupFilenameDoubleNul(const char *z, char **pzOut);
 int chunkStoreCanonicalFilename(sqlite3_vfs *pVfs, const char *zFilename,
                                 char **pzOut, int flags);
 int chunkStoreHostFileIsZero(const char *zPath);
+int chunkStoreHostFileIsShort(const char *zPath, i64 nMin);
 int chunkStorePathIsDirectory(sqlite3_vfs *pVfs, const char *zPath, int *pIsDir);
 int chunkStoreGetLockFile(ChunkStore *cs, sqlite3_file **ppFile);
 

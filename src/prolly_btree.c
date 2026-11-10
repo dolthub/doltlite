@@ -971,9 +971,12 @@ static int doltliteTornSqliteFile(
     if( !pVfs ) return SQLITE_OK;
   }
   rc = chunkStoreReadFileHeader(pVfs, zFilename, aHdr, sizeof(aHdr), &nRead);
-  if( rc!=SQLITE_OK || nRead==0 ) return rc;
-  if( nRead==(int)sizeof(aHdr)
-   && CS_READ_U32(aHdr+CS_MANIFEST_MAGIC_OFF)==CHUNK_STORE_MAGIC ){
+  if( rc!=SQLITE_OK ) return rc;
+  if( nRead==0 ){
+    if( !zFilename || !chunkStoreHostFileIsShort(zFilename, sizeof(aHdr)) ){
+      return SQLITE_OK;
+    }
+  }else if( CS_READ_U32(aHdr+CS_MANIFEST_MAGIC_OFF)==CHUNK_STORE_MAGIC ){
     return SQLITE_OK;
   }
   return doltliteSqliteSidecar(pVfs, zFilename, pbSqlite);

@@ -98,6 +98,12 @@ int chunkStoreHostFileIsZero(const char *zPath){
   return (st.st_mode & S_IFMT)==S_IFREG && st.st_size==0;
 }
 
+int chunkStoreHostFileIsShort(const char *zPath, i64 nMin){
+  struct stat st;
+  if( stat(zPath, &st)!=0 ) return 0;
+  return (st.st_mode & S_IFMT)==S_IFREG && st.st_size>0 && st.st_size<nMin;
+}
+
 int chunkStoreDupFilenameDoubleNul(const char *z, char **pzOut){
   int n = (int)strlen(z);
   char *p = (char*)sqlite3_malloc(n + 2);
