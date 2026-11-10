@@ -664,7 +664,7 @@ static int dumpValidatePrepare(DlDump *p, Table *table, const char *sql){
   return rc;
 }
 
-static int dumpValidate(DlDump *p){
+static int dumpValidateSchema(DlDump *p){
   int i, rc = SQLITE_OK;
   for(i=0; i<p->nSchema && rc==SQLITE_OK; i++){
     SchemaEntry *e = &p->aSchema[i];
@@ -702,6 +702,15 @@ static int dumpValidate(DlDump *p){
     }
     if( rc!=SQLITE_OK ) dumpError(p,rc,e->zName,sqlite3_errmsg(p->out));
   }
+  return rc;
+}
+
+static int dumpValidate(DlDump *p){
+  int wasDump = (p->out->mDbFlags & DBFLAG_DoltliteDump)!=0;
+  int rc;
+  p->out->mDbFlags |= DBFLAG_DoltliteDump;
+  rc = dumpValidateSchema(p);
+  if( !wasDump ) p->out->mDbFlags &= ~DBFLAG_DoltliteDump;
   return rc;
 }
 
