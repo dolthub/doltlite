@@ -106,4 +106,91 @@ do_execsql_test fk-metadata-multiple.rows {
     FROM dolt_constraint_violations_c ORDER BY id;
 } {1 {["a"]} p {["pid"]} 2 {["b"]} q {["qid"]} 3 {["u"]} p {["u"]} 4 {["a"]} p {["pid"]}}
 
+foreach key {INTEGER INT} {
+  foreach refs {implicit explicit} {
+    foreach change {rename rename_nonempty insert update} {
+      foreach direction {forward reverse} {
+        reset_db
+        set target ""
+        if {$refs eq "explicit"} {set target "(a)"}
+        execsql "CREATE TABLE p(a $key PRIMARY KEY)"
+        execsql "CREATE TABLE t(a $key PRIMARY KEY,cb INT,cf INT,
+                   FOREIGN KEY(cf) REFERENCES p$target)"
+        execsql {
+          CREATE TABLE q(a INTEGER PRIMARY KEY);
+          CREATE TABLE u(a INTEGER PRIMARY KEY,cf INT REFERENCES q(a));
+          INSERT INTO p VALUES(1);
+          INSERT INTO q VALUES(1),(2);
+        }
+        if {$change in {rename_nonempty update}} {
+          execsql {INSERT INTO t VALUES(1,10,1)}
+        }
+        execsql {
+          SELECT dolt_commit('-Am','base');
+          SELECT dolt_branch('dropper');
+        }
+        if {$change in {rename rename_nonempty}} {
+          execsql {ALTER TABLE t RENAME COLUMN cb TO r3}
+          set kind {schema modification}
+        } elseif {$change eq "insert"} {
+          execsql {INSERT INTO t VALUES(1,10,NULL)}
+          set kind {data modification}
+        } else {
+          execsql {UPDATE t SET cb=20}
+          set kind {data modification}
+        }
+        execsql {
+          INSERT INTO u VALUES(2,2);
+          SELECT dolt_commit('-Am','edit child');
+          SELECT dolt_checkout('dropper');
+          DROP TABLE t;
+          DROP TABLE p;
+          DELETE FROM q WHERE a=2;
+          SELECT dolt_commit('-Am','drop child and parent');
+        }
+        set branch main
+        set merge dropper
+        if {$direction eq "reverse"} {set branch dropper; set merge main}
+        execsql "SELECT dolt_checkout('$branch')"
+        set before [execsql {
+          SELECT name,sql FROM sqlite_schema WHERE type='table' ORDER BY name;
+          SELECT * FROM u;
+          SELECT * FROM q ORDER BY a;
+          SELECT dolt_hashof('HEAD');
+        }]
+        execsql BEGIN
+        set name fk-deleted-parent-$key-$refs-$change-$direction
+        do_catchsql_test $name-merge "SELECT dolt_merge('$merge')" \
+          {1 {Merge has 1 conflict(s) and constraint violations. Resolve dolt_conflicts and dolt_constraint_violations, then commit with dolt_commit.}}
+        do_execsql_test $name-schema {
+          SELECT table_name,description FROM dolt_schema_conflicts;
+          SELECT count(*) FROM sqlite_schema WHERE name='p';
+        } [list t "cannot merge a table deletion with $kind" 0]
+        do_execsql_test $name-other-fk {
+          SELECT violation_type,a,cf FROM dolt_constraint_violations_u;
+          SELECT `table`,num_violations FROM dolt_constraint_violations;
+        } {{foreign key} 2 2 u 1}
+        do_test $name-commit-refused {lindex [catchsql COMMIT] 0} 1
+        catchsql ROLLBACK
+        do_test $name-rollback {
+          execsql {
+            SELECT name,sql FROM sqlite_schema WHERE type='table' ORDER BY name;
+            SELECT * FROM u;
+            SELECT * FROM q ORDER BY a;
+            SELECT dolt_hashof('HEAD');
+          }
+        } $before
+        db close
+        sqlite3 db test.db/$branch
+        do_execsql_test $name-reopen {
+          SELECT count(*) FROM dolt_schema_conflicts;
+          SELECT count(*) FROM dolt_constraint_violations;
+          SELECT is_merging FROM dolt_merge_status;
+          PRAGMA integrity_check;
+        } {0 0 0 ok}
+      }
+    }
+  }
+}
+
 finish_test

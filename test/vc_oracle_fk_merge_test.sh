@@ -644,4 +644,47 @@ fk_preexisting_case "fk_preexisting_orphan_parent_insert" \
   "INSERT INTO p VALUES(5)" "UPDATE c SET pid=77 WHERE id=13"
 fk_preexisting_case "fk_preexisting_orphan_unreferenced_delete" \
   "INSERT INTO p VALUES(4)" "DELETE FROM p WHERE id=2; INSERT INTO c VALUES(12,1)"
+echo "--- deleted FK family against an edited child ---"
+for key in INTEGER INT; do
+  for change in rename rename_nonempty insert update; do
+    for direction in forward reverse; do
+      seed=""
+      case "$change" in
+        rename) edit='ALTER TABLE t RENAME COLUMN cb TO r3;' ;;
+        rename_nonempty)
+          seed='INSERT INTO t VALUES(1,10,1);'
+          edit='ALTER TABLE t RENAME COLUMN cb TO r3;' ;;
+        insert) edit='INSERT INTO t VALUES(1,10,NULL);' ;;
+        update)
+          seed='INSERT INTO t VALUES(1,10,1);'
+          edit='UPDATE t SET cb=20;' ;;
+      esac
+      branch=main
+      target=dropper
+      if [ "$direction" = reverse ]; then branch=dropper; target=main; fi
+      setup="CREATE TABLE p(a $key PRIMARY KEY);
+CREATE TABLE t(a $key PRIMARY KEY,cb INT,cf INT,FOREIGN KEY(cf) REFERENCES p(a));
+INSERT INTO p VALUES(1);
+$seed
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('dropper');
+$edit
+SELECT dolt_commit('-Am','edit child');
+SELECT dolt_checkout('dropper');
+DROP TABLE t;
+DROP TABLE p;
+SELECT dolt_commit('-Am','drop child and parent');
+SELECT dolt_checkout('$branch');"
+      query="SELECT CONCAT((SELECT count(*) FROM dolt_schema_conflicts),'|',(SELECT count(*) FROM dolt_status WHERE table_name='p' AND status='deleted'),'|',COALESCE((SELECT table_name FROM dolt_schema_conflicts),''),'|',COALESCE((SELECT description FROM dolt_schema_conflicts),''),'|',(SELECT count(*) FROM dolt_constraint_violations));"
+      run_tx_oracle_case "deleted_fk_${key}_${change}_${direction}" \
+        "$setup" \
+        "BEGIN;
+SELECT dolt_merge('$target');
+$query
+ROLLBACK;" \
+        "SET @@autocommit=0; SET @@dolt_allow_commit_conflicts=1; CALL dolt_merge('$target'); $query ROLLBACK;" \
+        "$(vc_oracle_translate_for_dolt "$setup")"
+    done
+  done
+done
 vc_oracle_finish

@@ -574,6 +574,18 @@ static int detectFkViolationsForSpec(
   return rc;
 }
 
+typedef struct FkSchemaConflict FkSchemaConflict;
+struct FkSchemaConflict {
+  const char *zTable;
+  int found;
+};
+
+static int fkFindSchemaConflict(void *pCtx, const char *zTable, int nConflicts){
+  FkSchemaConflict *p = (FkSchemaConflict*)pCtx;
+  if( nConflicts==0 && sqlite3_stricmp(p->zTable, zTable)==0 ) p->found = 1;
+  return SQLITE_OK;
+}
+
 /* A merge can only orphan a child row it changed, or one whose parent key it
 ** removed. With no key removed, the changed child rows are the candidates. */
 static int fkCheckSpec(
@@ -593,7 +605,14 @@ static int fkCheckSpec(
   int parentChanged = catalogTableChanged(aAnc, nAnc, aCur, nCur, zParent);
   int keysKept = 1;
   int rc;
+  const char *zSchema, *zTarget;
   if( !childChanged && !parentChanged ) return SQLITE_OK;
+  if( !doltliteFindTableByName(aCur, nCur, zParent)
+   && !doltliteNonlocalFkParent(db, zParent, &zSchema, &zTarget) ){
+    FkSchemaConflict conflict = {zTable, 0};
+    rc = doltliteForEachConflict(db, fkFindSchemaConflict, &conflict);
+    if( rc!=SQLITE_OK || conflict.found ) return rc;
+  }
   rc = backfillParentPk(db, zParent, azTo, nCol);
   if( rc!=SQLITE_OK ) return rc;
   if( parentChanged ){
