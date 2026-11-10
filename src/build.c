@@ -504,6 +504,7 @@ Table *sqlite3LocateTable(
 #ifdef DOLTLITE_PROLLY
       if( pMod && sqlite3StrNICmp(zName, "dolt_", 5)==0
        && db->nDb>0 && db->aDb[0].pBt && sqlite3BtreeUsesOrig(db->aDb[0].pBt)
+       && (db->mDbFlags & DBFLAG_DoltliteDump)==0
        && sqlite3StrICmp(zName, "dolt_engine_stats")!=0
        && sqlite3StrICmp(zName, "dolt_creds_ls")!=0
       ){
