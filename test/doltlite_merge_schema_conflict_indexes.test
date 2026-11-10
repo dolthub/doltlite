@@ -152,4 +152,139 @@ foreach {layout key} {rowid {INTEGER PRIMARY KEY} clustered {INT PRIMARY KEY}} {
     PRAGMA integrity_check;
   } {1 11 101 ours ok}
 }
+foreach {layout key} {rowid {INTEGER PRIMARY KEY} clustered {INT PRIMARY KEY}} {
+  foreach direction {forward reverse} {
+    foreach unique {{} UNIQUE} {
+      foreach {pair ours theirs conflict} {
+        suffix {b,a} {a} 0
+        prefix {a,b} {a} 0
+        shared {b,a} {id,b} 0
+        shared_pk {b,id} {a,id} 0
+        reversed {b,a} {a,b} 0
+        disjoint {a} {b} 0
+        quoted {"B",[a]} {`a`} 0
+        partial {b,a) WHERE c>0} {a) WHERE c>0} 0
+        expression {a+b,c} {c} 0
+        identical {b,a} {b,a} 1
+        identical_single {a} {a} 1
+        identical_quoted {"B",[a]} {b,a} 1
+        identical_sorted {b DESC,a ASC} {b,a} 1
+        identical_partial {a) WHERE b>0} {a) WHERE c>0} 1
+      } {
+        reset_db
+        execsql "CREATE TABLE t(id $key,a INT,b INT,c INT)"
+        execsql {
+          INSERT INTO t VALUES(1,11,101,1001);
+          SELECT dolt_commit('-Am','base');
+          SELECT dolt_branch('side');
+        }
+        foreach side {main side} terms [list $ours $theirs] index {ixa ixb} id {2 3} {
+          execsql "SELECT dolt_checkout('$side')"
+          set sql "CREATE $unique INDEX $index ON t($terms"
+          if {![string match {* WHERE *} $terms]} {append sql ")"}
+          execsql $sql
+          execsql "INSERT INTO t VALUES($id,$id*11,$id*101,$id*1001)"
+          execsql "SELECT dolt_commit('-Am','$side')"
+        }
+        set branch main
+        set target side
+        if {$direction eq "reverse"} {set branch side; set target main}
+        execsql "SELECT dolt_checkout('$branch')"
+        set name dual-index-$layout-$direction-$unique-$pair
+        if {$conflict} {
+          set before [execsql {SELECT id,a,b,c FROM t ORDER BY id}]
+          execsql BEGIN
+          do_test $name-conflict {
+            set result [catchsql "SELECT dolt_merge('$target')"]
+            list [lindex $result 0] [string match {*conflict*} [lindex $result 1]]
+          } {1 1}
+          do_execsql_test $name-recorded {
+            SELECT table_name FROM dolt_schema_conflicts;
+            PRAGMA integrity_check;
+          } {t ok}
+          execsql ROLLBACK
+          do_test $name-rollback {execsql {SELECT id,a,b,c FROM t ORDER BY id}} $before
+          continue
+        }
+        do_test $name-merge {string length [execsql "SELECT dolt_merge('$target')"]} 40
+        set indexes {ixa ixb}
+        if {$layout eq "clustered"} {lappend indexes sqlite_autoindex_t_1}
+        do_execsql_test $name-schema {
+          SELECT name FROM sqlite_schema WHERE type='index' ORDER BY name;
+          SELECT count(*) FROM dolt_schema_conflicts;
+          SELECT count(*) FROM dolt_status;
+        } [concat $indexes {0 0}]
+        foreach state {merged reopened written} {
+          if {$state eq "reopened"} {
+            db close
+            sqlite3 db test.db/$branch
+          }
+          set expected {1 2 3}
+          if {$state eq "written"} {
+            execsql {
+              INSERT INTO t VALUES(4,44,404,4004);
+              DELETE FROM t WHERE id=2;
+              UPDATE t SET a=55,b=505,c=5005 WHERE id=3;
+              SELECT dolt_commit('-am','edit merged indexes');
+            }
+            set expected {1 3 4}
+          }
+          foreach index {ixa ixb} {
+            do_execsql_test $name-$state-$index "
+              SELECT id FROM t INDEXED BY $index WHERE c>0 AND b>0 ORDER BY id;
+            " $expected
+          }
+          do_execsql_test $name-$state-integrity {PRAGMA integrity_check} {ok}
+        }
+      }
+    }
+  }
+}
+
+foreach {layout key} {rowid {INTEGER PRIMARY KEY} clustered {INT PRIMARY KEY}} {
+  foreach direction {forward reverse} {
+    reset_db
+    execsql "CREATE TABLE t(id $key,a INT,b INT)"
+    execsql {
+      SELECT dolt_commit('-Am','base');
+      SELECT dolt_branch('side');
+      CREATE UNIQUE INDEX ixa ON t(b,a);
+      INSERT INTO t VALUES(1,7,10);
+      SELECT dolt_commit('-Am','main unique index');
+      SELECT dolt_checkout('side');
+      CREATE UNIQUE INDEX ixb ON t(a);
+      INSERT INTO t VALUES(2,7,20);
+      SELECT dolt_commit('-Am','side unique index');
+    }
+    set branch main
+    set target side
+    if {$direction eq "reverse"} {set branch side; set target main}
+    execsql "SELECT dolt_checkout('$branch'); BEGIN"
+    set name dual-index-violation-$layout-$direction
+    do_catchsql_test $name-merge "SELECT dolt_merge('$target')" \
+      {1 {Merge resulted in constraint violations. Resolve the rows in dolt_constraint_violations and then commit with dolt_commit.}}
+    do_execsql_test $name-recorded {
+      SELECT count(*) FROM dolt_schema_conflicts;
+      SELECT violation_type,id,a,b FROM dolt_constraint_violations_t ORDER BY id;
+      SELECT id FROM t INDEXED BY ixa WHERE a=7 ORDER BY id;
+      SELECT id FROM t INDEXED BY ixb WHERE a=7 ORDER BY id;
+    } {0 {unique index} 1 7 10 {unique index} 2 7 20 1 2 1 2}
+    do_test $name-resolve {
+      execsql {
+        DELETE FROM t WHERE id=2;
+        DELETE FROM dolt_constraint_violations_t;
+      }
+      string length [execsql {SELECT dolt_commit('-Am','resolve unique violation')}]
+    } 40
+    db close
+    sqlite3 db test.db/$branch
+    do_execsql_test $name-reopen {
+      SELECT id,a,b FROM t INDEXED BY ixa;
+      SELECT id,a,b FROM t INDEXED BY ixb;
+      SELECT count(*) FROM dolt_constraint_violations;
+      PRAGMA integrity_check;
+    } {1 7 10 1 7 10 0 ok}
+  }
+}
+
 finish_test

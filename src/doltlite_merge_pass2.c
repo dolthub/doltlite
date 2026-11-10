@@ -78,6 +78,7 @@ static char *mergeIndexDupIdent(const char *z, int n){
 
 static int mergeIndexEachColumn(
   const char *zIndexSql,
+  int bIncludeWhere,
   int (*xEach)(void*, const char*),
   void *pCtx
 ){
@@ -101,7 +102,7 @@ static int mergeIndexEachColumn(
   if( depth!=0 ) return SQLITE_OK;
 
   z = zOpen + 1;
-  zEnd = zIndexSql + strlen(zIndexSql);
+  if( bIncludeWhere ) zEnd = zIndexSql + strlen(zIndexSql);
   while( z<zEnd && rc==SQLITE_OK ){
     if( *z=='\'' ){ z = mergeIndexSkipQuoted(z, '\''); continue; }
     if( *z=='"' || *z=='`' || *z=='[' ){
@@ -149,7 +150,7 @@ int mergeIndexNamesColumn(const char *zSql, const char *zName, int *pbFound){
   int rc;
   ctx.zName = zName;
   ctx.bFound = 0;
-  rc = mergeIndexEachColumn(zSql, mergeIndexMatchColumnName, &ctx);
+  rc = mergeIndexEachColumn(zSql, 1, mergeIndexMatchColumnName, &ctx);
   *pbFound = ctx.bFound;
   return rc;
 }
@@ -214,7 +215,7 @@ static int mergeIndexColumnScan(
     freeColumns(ctx.aAnc, ctx.nAnc);
     return 0;
   }
-  rc = mergeIndexEachColumn(zIndexSql, xEach, &ctx);
+  rc = mergeIndexEachColumn(zIndexSql, 1, xEach, &ctx);
   freeColumns(ctx.aAnc, ctx.nAnc);
   freeColumns(ctx.aSide, ctx.nSide);
   if( rc!=SQLITE_OK || !ctx.zMissing ){
@@ -249,29 +250,34 @@ static void mergeIndexNameListFree(MergeIndexNameList *p){
   sqlite3_free(p->az);
 }
 
-static int mergeIndexColumnsOverlap(const char *zSqlA, const char *zSqlB){
+static int mergeIndexColumnsMatch(
+  const char *zSqlA,
+  const char *zSqlB,
+  int *pbMatch
+){
   MergeIndexNameList a;
   MergeIndexNameList b;
-  int i, j, bOverlap = 0;
+  int i, rc;
 
-  if( !zSqlA || !zSqlB ) return 0;
+  *pbMatch = 0;
+  if( !zSqlA || !zSqlB ) return SQLITE_OK;
   memset(&a, 0, sizeof(a));
   memset(&b, 0, sizeof(b));
-  if( mergeIndexEachColumn(zSqlA, mergeIndexCollectName, &a)==SQLITE_OK
-   && mergeIndexEachColumn(zSqlB, mergeIndexCollectName, &b)==SQLITE_OK ){
-    for(i=0; i<a.n && !bOverlap; i++){
-      for(j=0; j<b.n && !bOverlap; j++){
-        if( sqlite3_stricmp(a.az[i], b.az[j])==0 ) bOverlap = 1;
-      }
+  rc = mergeIndexEachColumn(zSqlA, 0, mergeIndexCollectName, &a);
+  if( rc==SQLITE_OK ){
+    rc = mergeIndexEachColumn(zSqlB, 0, mergeIndexCollectName, &b);
+  }
+  if( rc==SQLITE_OK && a.n>0 && a.n==b.n ){
+    *pbMatch = 1;
+    for(i=0; i<a.n && *pbMatch; i++){
+      if( sqlite3_stricmp(a.az[i], b.az[i])!=0 ) *pbMatch = 0;
     }
   }
   mergeIndexNameListFree(&a);
   mergeIndexNameListFree(&b);
-  return bOverlap;
+  return rc;
 }
 
-/* Dual added indexes over a shared column: Dolt reports a conflict;
-** keeping both would impose one side's uniqueness on the other. */
 int mergePreDetectDualIndexOverlap(
   SchemaEntry *aAnc, int nAnc,
   SchemaEntry *aOurs, int nOurs,
@@ -291,13 +297,16 @@ int mergePreDetectDualIndexOverlap(
     if( findSchemaEntry(aTheirs, nTheirs, aOurs[i].zName) ) continue;
     for(j=0; j<nTheirs; j++){
       int added = 0;
+      int bMatch;
       if( !aTheirs[j].zType || strcmp(aTheirs[j].zType, "index")!=0 ) continue;
       if( !aTheirs[j].zName || !aTheirs[j].zSql || !aTheirs[j].zTblName ) continue;
       if( findSchemaEntry(aAnc, nAnc, aTheirs[j].zName) ) continue;
       if( sqlite3_stricmp(aOurs[i].zName, aTheirs[j].zName)==0 ) continue;
       if( findSchemaEntry(aOurs, nOurs, aTheirs[j].zName) ) continue;
       if( sqlite3_stricmp(aOurs[i].zTblName, aTheirs[j].zTblName)!=0 ) continue;
-      if( !mergeIndexColumnsOverlap(aOurs[i].zSql, aTheirs[j].zSql) ) continue;
+      rc = mergeIndexColumnsMatch(aOurs[i].zSql, aTheirs[j].zSql, &bMatch);
+      if( rc!=SQLITE_OK ) return rc;
+      if( !bMatch ) continue;
       rc = appendSchemaConflict(ppConflictTables, pnConflictTables,
                                 aOurs[i].zTblName, aOurs[i].zName, &added);
       if( rc!=SQLITE_OK ) return rc;

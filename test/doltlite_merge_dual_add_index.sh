@@ -55,9 +55,6 @@ if dltest_require "dual_add_noidx_setup" "$DB2" "$SETUP2"; then
     "CREATE TABLE t(id INTEGER PRIMARY KEY, payload TEXT, xcol_b TEXT, xcol_a TEXT DEFAULT 'da')" "$DB2"
 fi
 
-# One side adds an index, the other adds a different index and renames an
-# unrelated column. Schema init used to reject the assembled catalog as
-# malformed. The merge now stops as a schema conflict and leaves main intact.
 DB3=/tmp/test_merge_rename_plus_idx_$$.db
 rm -f "$DB3"
 SETUP3="
@@ -79,14 +76,23 @@ CREATE UNIQUE INDEX flex_pu_main ON t_flex(trail) WHERE trail IS NOT NULL;
 SELECT dolt_commit('-Am', 'main');
 "
 if dltest_require "rename_plus_idx_setup" "$DB3" "$SETUP3"; then
-  run_test_error_match "rename_plus_idx_conflict" \
+  run_test_match "rename_plus_idx_merge" \
     "SELECT dolt_merge('--squash','side');" \
-    "cannot merge: conflicts detected" "$DB3"
+    "^[0-9a-f]{40}$" "$DB3"
   run_test "rename_plus_idx_integrity" \
     "PRAGMA integrity_check;" "ok" "$DB3"
-  run_test "rename_plus_idx_unmerged" \
+  run_test "rename_plus_idx_retargeted" \
     "SELECT sql FROM sqlite_schema WHERE name='t_flex_r';" \
-    "CREATE INDEX t_flex_r ON t_flex(r)" "$DB3"
+    "CREATE INDEX t_flex_r ON t_flex(flex_100)" "$DB3"
+  run_test "rename_plus_idx_keeps_both" \
+    "SELECT group_concat(name) FROM (SELECT name FROM sqlite_schema
+       WHERE type='index' ORDER BY name);" \
+    "flex_pu_main,flex_pu_side,t_flex_expr,t_flex_partial,t_flex_r,t_flex_trail" "$DB3"
+  run_test "rename_plus_idx_lookup" \
+    "SELECT id FROM t_flex INDEXED BY t_flex_r WHERE flex_100=1.5;
+     SELECT id FROM t_flex INDEXED BY flex_pu_main WHERE trail='base';
+     SELECT id FROM t_flex INDEXED BY flex_pu_side WHERE a=1;" \
+    $'0\n0\n0' "$DB3"
 fi
 
 # Branches created from the empty init commit both build sqlite_master.
