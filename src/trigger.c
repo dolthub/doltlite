@@ -57,7 +57,22 @@ static Trigger *doltliteTableTriggers(Parse *pParse, Table *pTab, Table **ppOn){
   if( !doltliteNonlocalLocalTable(pParse, pTab, &pLocal) ) return pTab->pTrigger;
   sqlite3CodeVerifySchema(pParse, 0);
   *ppOn = pLocal;
-  return pLocal ? pLocal->pTrigger : 0;
+  if( pLocal==0 ){
+    Schema *pMain = pParse->db->aDb[0].pSchema;
+    const char *zLocal = doltliteNonlocalLocalName(pParse, pTab);
+    Trigger *pList = 0;
+    HashElem *k;
+    for(k=sqliteHashFirst(&pMain->trigHash); k; k=sqliteHashNext(k)){
+      Trigger *pTrig = (Trigger*)sqliteHashData(k);
+      if( pTrig->pTabSchema==pMain && pTrig->table
+       && sqlite3StrICmp(pTrig->table, zLocal)==0 ){
+        pTrig->pNext = pList;
+        pList = pTrig;
+      }
+    }
+    return pList;
+  }
+  return pLocal->pTrigger;
 }
 #endif
 Trigger *sqlite3TriggerList(Parse *pParse, Table *pTab){
@@ -190,8 +205,48 @@ void sqlite3BeginTrigger(
   ** exist, the error is caught by the block below.
   */
 #ifdef DOLTLITE_PROLLY
-  /* CREATE TRIGGER binds the local table. A nonlocal rule does not apply. */
+  /* CREATE TRIGGER binds the session's table. With none, a nonlocal rule
+  ** names the table whose rows fire it, and the trigger is still stored
+  ** on the session branch under the session name. */
   pParse->bLocalNames = 1;
+  if( db->init.busy ){
+    const char *zTab = pTableName->a[0].zName;
+    if( iDb!=1 && !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt)
+     && sqlite3FindTable(db, zTab, db->aDb[iDb].zDbSName)==0
+    ){
+      /* The schema loads before the rules do. */
+      zName = sqlite3NameFromToken(db, pName);
+      if( zName==0 ) goto trigger_cleanup;
+      if( sqlite3HashFind(&(db->aDb[iDb].pSchema->trigHash), zName) ){
+        sqlite3ErrorMsg(pParse, "");
+        goto trigger_cleanup;
+      }
+      pTrigger = (Trigger*)sqlite3DbMallocZero(db, sizeof(Trigger));
+      if( pTrigger==0 ) goto trigger_cleanup;
+      pTrigger->zName = zName;
+      zName = 0;
+      pTrigger->table = sqlite3DbStrDup(db, zTab);
+      pTrigger->pSchema = db->aDb[iDb].pSchema;
+      pTrigger->pTabSchema = db->aDb[iDb].pSchema;
+      pTrigger->op = (u8)op;
+      pTrigger->tr_tm = tr_tm==TK_AFTER ? TRIGGER_AFTER : TRIGGER_BEFORE;
+      pTrigger->pWhen = sqlite3ExprDup(db, pWhen, EXPRDUP_REDUCE);
+      pTrigger->pColumns = pColumns;
+      pColumns = 0;
+      pParse->pNewTrigger = pTrigger;
+      goto trigger_cleanup;
+    }
+  }else if( iDb==0 && !isTemp && !sqlite3BtreeUsesOrig(db->aDb[0].pBt) ){
+    const char *zTab = pTableName->a[0].zName;
+    const char *zTabDb = pTableName->a[0].u4.zDatabase;
+    if( (zTabDb==0 || sqlite3StrICmp(zTabDb, "main")==0)
+     && sqlite3FindTable(db, zTab, "main")==0
+     && (zTabDb || sqlite3FindTable(db, zTab, "temp")==0)
+     && doltliteNonlocalMatches(db, zTab)
+    ){
+      pParse->bLocalNames = 0;
+    }
+  }
 #endif
   pTab = sqlite3SrcListLookup(pParse, pTableName);
   if( db->init.busy==0 && pName2->n==0 && pTab
@@ -304,6 +359,11 @@ void sqlite3BeginTrigger(
   pTrigger->table = sqlite3DbStrDup(db, pTableName->a[0].zName);
   pTrigger->pSchema = db->aDb[iDb].pSchema;
   pTrigger->pTabSchema = pTab->pSchema;
+#ifdef DOLTLITE_PROLLY
+  if( !pParse->bLocalNames && pTab->pSchema!=db->aDb[1].pSchema ){
+    pTrigger->pTabSchema = pTrigger->pSchema;
+  }
+#endif
   pTrigger->op = (u8)op;
   pTrigger->tr_tm = tr_tm==TK_BEFORE ? TRIGGER_BEFORE : TRIGGER_AFTER;
   if( IN_RENAME_OBJECT ){
@@ -449,6 +509,9 @@ void sqlite3FinishTrigger(
     }else if( pLink->pSchema==pLink->pTabSchema ){
       Table *pTab;
       pTab = sqlite3HashFind(&pLink->pTabSchema->tblHash, pLink->table);
+#ifdef DOLTLITE_PROLLY
+      if( pTab==0 ) goto triggerfinish_cleanup;
+#endif
       assert( pTab!=0 );
       pLink->pNext = pTab->pTrigger;
       pTab->pTrigger = pLink;
@@ -754,7 +817,9 @@ void sqlite3DropTriggerPtr(Parse *pParse, Trigger *pTrigger){
   iDb = sqlite3SchemaToIndex(pParse->db, pTrigger->pSchema);
   assert( iDb>=0 && iDb<db->nDb );
   pTable = tableOfTrigger(pTrigger);
+#ifndef DOLTLITE_PROLLY
   assert( (pTable && pTable->pSchema==pTrigger->pSchema) || iDb==1 );
+#endif
 #ifndef SQLITE_OMIT_AUTHORIZATION
   if( pTable ){
     int code = SQLITE_DROP_TRIGGER;
