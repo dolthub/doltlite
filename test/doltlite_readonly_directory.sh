@@ -43,5 +43,21 @@ else
   dltest_fail "ro_dir_insert_cli" "  got: $out"
 fi
 
+# A new database there cannot be created: stock refuses at open.
+if [ "$(id -u)" = "0" ]; then
+  echo "  SKIP: ro_dir_new_database (root ignores directory permissions)"
+else
+  NEW="$DIR/new.db"
+  run_test_error_match "ro_dir_new_database_read_cannot_open" \
+    "SELECT 1;" "unable to open database" "$NEW"
+  run_test_error_match "ro_dir_new_database_write_cannot_open" \
+    "CREATE TABLE x(a);" "unable to open database" "$NEW"
+  run_test "ro_dir_new_database_not_created" \
+    "SELECT '$(ls -A "$DIR" | tr '\n' ' ')';" "test.db "
+  : > "$ROOT/empty.db"
+  chmod u+w "$DIR"; mv "$ROOT/empty.db" "$DIR/empty.db"; chmod a-w "$DIR"
+  run_test "ro_dir_empty_file_still_opens" "SELECT 1;" "1" "$DIR/empty.db"
+fi
+
 chmod u+w "$DIR"
 dltest_finish
