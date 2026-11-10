@@ -470,7 +470,16 @@ Table *sqlite3LocateTable(
     const char *zNonlocalDb = zDbase;
     int eNonlocal = doltliteNonlocalResolve(pParse, &zNonlocal, &zNonlocalDb);
     if( eNonlocal<0 ) return 0;
-    if( eNonlocal>0 ) p = sqlite3FindTable(db, zNonlocal, zNonlocalDb);
+    if( eNonlocal>0 ){
+      p = sqlite3FindTable(db, zNonlocal, zNonlocalDb);
+      if( p==0 ){
+        /* The fallback to the local table holds only while the target
+        ** lacks the table. Verify the target's schema so a peer creating
+        ** it there reprepares this statement. */
+        int iNonlocal = sqlite3FindDbName(db, zNonlocalDb);
+        if( iNonlocal>=0 ) sqlite3CodeVerifySchema(pParse, iNonlocal);
+      }
+    }
   }
   if( p==0 ) p = sqlite3FindTable(db, zName, zDbase);
 #else
