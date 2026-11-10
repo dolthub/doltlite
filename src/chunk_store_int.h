@@ -41,6 +41,7 @@ int csFileLockPromote(sqlite3_file *pFile);
 int csFileLockOutput(sqlite3_file *pFile);
 void csFileUnlock(CsFileLock pFile, char **pzName);
 int csLockSidecarDelete(sqlite3_vfs *pVfs, const char *zPath);
+int csLockSidecarExists(sqlite3_vfs *pVfs, const char *zPath, int *pExists);
 int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs);
 int csRestoreOrMergeLocalRefs(ChunkStore *cs, SavedRefsState *pSaved,
                               const ProllyHash *pSavedRefsHash,

@@ -224,4 +224,27 @@ run_test "vacuum_replay_integrity" "PRAGMA integrity_check;" "ok" "$DB"
 run_test "vacuum_replay_no_scratch_db" "SELECT count(*) FROM pragma_database_list WHERE name LIKE 'vacuum_%';" "0" "$DB"
 db_rm "$DB"
 
+echo ""
+echo "--- A failed VACUUM INTO leaves no lock sidecar beside the target ---"
+VD=$(mktemp -d /tmp/test_vac_sidecar_XXXXXX)
+DB=$VD/src.db
+echo "CREATE TABLE t(a); INSERT INTO t VALUES(1);" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo notes > "$VD/notes.db"
+mkdir "$VD/dir"
+echo "CREATE TABLE e(a);" | $DOLTLITE "$VD/live.db" > /dev/null 2>&1
+run_test_error_match "vacuum_into_non_database_refused" \
+  "VACUUM INTO '$VD/notes.db';" "output file already exists" "$DB"
+run_test_error_match "vacuum_into_directory_refused" \
+  "VACUUM INTO '$VD/dir';" "unable to open database" "$DB"
+run_test_error_match "vacuum_into_missing_directory_refused" \
+  "VACUUM INTO '$VD/nodir/x.db';" "unable to open database" "$DB"
+run_test_error_match "vacuum_into_live_database_refused" \
+  "VACUUM INTO '$VD/live.db';" "output file already exists" "$DB"
+run_test "vacuum_into_failures_leave_only_prior_sidecars" \
+  "SELECT '$(ls -A "$VD" | grep -e '-lock$' | sort | tr '\n' ' ')';" \
+  ".live.db-lock .src.db-lock "
+run_test "vacuum_into_non_database_untouched" \
+  "SELECT '$(cat "$VD/notes.db")';" "notes"
+rm -rf "$VD"
+
 dltest_finish

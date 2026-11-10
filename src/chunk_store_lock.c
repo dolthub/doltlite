@@ -205,6 +205,18 @@ int csLockSidecarDelete(sqlite3_vfs *pVfs, const char *zPath){
   return rc==SQLITE_IOERR_DELETE_NOENT ? SQLITE_OK : rc;
 }
 
+/* SQLITE_ACCESS_EXISTS reports an empty file as absent, and a sidecar is
+** always empty. */
+int csLockSidecarExists(sqlite3_vfs *pVfs, const char *zPath, int *pExists){
+  char *zLock = csLockPath(zPath);
+  int rc;
+  *pExists = 0;
+  if( !zLock ) return SQLITE_NOMEM;
+  rc = sqlite3OsAccess(pVfs, zLock, SQLITE_ACCESS_READWRITE, pExists);
+  sqlite3_free(zLock);
+  return rc;
+}
+
 /* Missing parent is CANTOPEN, not READONLY_DIRECTORY (file:// clone). */
 static int csDirectoryAccess(
   sqlite3_vfs *pVfs,
