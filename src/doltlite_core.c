@@ -916,7 +916,14 @@ static int doltliteCreateAndStoreCommitOnStore(
   memset(&c, 0, sizeof(c));
   memcpy(&c.parentHash, pParent, sizeof(ProllyHash));
   memcpy(&c.catalogHash, pCatalog, sizeof(ProllyHash));
-  c.timestamp = hasExplicitTimestamp ? explicitTimestamp : (i64)time(0);
+  if( hasExplicitTimestamp ){
+    c.timestamp = explicitTimestamp;
+  }else{
+    i64 now;
+    rc = sqlite3OsCurrentTimeInt64(db->pVfs, &now);
+    if( rc!=SQLITE_OK ) goto create_commit_done;
+    c.timestamp = now/1000 - 210866760000LL;
+  }
   c.zName  = sqlite3_mprintf("%s", zAuthorName  ? zAuthorName  : doltliteGetAuthorName(db));
   if( c.zName==0 ){
     rc = SQLITE_NOMEM;
@@ -942,7 +949,21 @@ static int doltliteCreateAndStoreCommitOnStore(
                        ? nExtraParents : DOLTLITE_MAX_PARENTS-1);
   }
 
-  rc = doltliteCommitSerialize(&c, &commitData, &nCommitData);
+  for(;;){
+    int exists = 0;
+    rc = doltliteCommitSerialize(&c, &commitData, &nCommitData);
+    if( rc!=SQLITE_OK || hasExplicitTimestamp ) break;
+    prollyHashCompute(commitData, nCommitData, pCommitHash);
+    rc = chunkStoreHas(cs, pCommitHash, &exists);
+    if( rc!=SQLITE_OK || !exists ) break;
+    sqlite3_free(commitData);
+    commitData = 0;
+    if( c.timestamp==LARGEST_INT64 ){
+      rc = SQLITE_FULL;
+      break;
+    }
+    c.timestamp++;
+  }
   if( rc==SQLITE_OK ) rc = chunkStorePut(cs, commitData, nCommitData, pCommitHash);
 create_commit_done:
   sqlite3_free(commitData);

@@ -1,0 +1,125 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set sqlite_current_time 2000000000
+foreach storage {file memory} {
+  foreach key {INTEGER INT} {
+    foreach kind {ordinary empty} {
+      foreach boundary {auto begin} {
+        reset_db
+        if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+        execsql "CREATE TABLE t(id $key PRIMARY KEY,v INT)"
+        execsql {
+          SELECT dolt_commit('-Am','base');
+          SELECT dolt_branch('first');
+          SELECT dolt_branch('second');
+        }
+        set base [db one {SELECT dolt_hashof('HEAD')}]
+        if {$kind eq "ordinary"} {execsql {INSERT INTO t VALUES(1,10)}}
+        execsql {SELECT dolt_commit('--allow-empty','-Am','pick')}
+        set metadata [execsql {SELECT committer,email,message FROM dolt_log LIMIT 1}]
+        set prefix commit-identity-$storage-$key-$kind-$boundary
+        do_execsql_test $prefix-clock {
+          SELECT date FROM dolt_log LIMIT 1;
+        } {{2033-05-18 03:33:20}}
+        foreach {branch timestamp} {first 2000000001 second 2000000002} {
+          execsql "SELECT dolt_checkout('$branch')"
+          if {$boundary eq "begin"} {execsql BEGIN}
+          set args {'main'}
+          if {$kind eq "empty"} {set args {'--allow-empty','main'}}
+          do_execsql_test $prefix-$branch-pick "
+            SELECT length(dolt_cherry_pick($args));
+            SELECT dolt_hashof('HEAD')!=dolt_hashof('main');
+          " {40 1}
+          do_execsql_test $prefix-$branch-parent {
+            SELECT parent_hash FROM dolt_commit_ancestors
+              WHERE commit_hash=dolt_hashof('HEAD');
+          } $base
+          do_execsql_test $prefix-$branch-metadata {
+            SELECT committer,email,message FROM dolt_log LIMIT 1;
+          } $metadata
+          do_execsql_test $prefix-$branch-time {
+            SELECT CAST(strftime('%s',date) AS INTEGER) FROM dolt_log LIMIT 1;
+          } $timestamp
+          do_execsql_test $prefix-$branch-distinct {
+            SELECT count(DISTINCT hash) FROM dolt_branches;
+            SELECT dolt_hashof_db('HEAD')=dolt_hashof_db('main');
+            SELECT count(*) FROM dolt_status;
+          } {3 1 0}
+          if {![sqlite3_get_autocommit db]} {execsql COMMIT}
+        }
+        if {$storage eq "file"} {db close; sqlite3 db test.db}
+        do_execsql_test $prefix-reopen {
+          SELECT count(DISTINCT hash) FROM dolt_branches;
+          SELECT count(*) FROM dolt_status;
+        } {3 0}
+        if {$kind eq "ordinary"} {
+          execsql {
+            SELECT dolt_checkout('first');
+            UPDATE t SET v=20;
+            SELECT dolt_commit('-am','edit picked row');
+            SELECT dolt_checkout('main');
+          }
+          do_execsql_test $prefix-merge-base {
+            SELECT dolt_merge_base('main','first');
+          } $base
+          execsql BEGIN
+          do_test $prefix-merge-conflict {
+            lindex [catchsql {SELECT dolt_merge('first')}] 0
+          } 1
+          do_execsql_test $prefix-dual-add {
+            SELECT "table",num_conflicts FROM dolt_conflicts;
+          } {t 1}
+          execsql ROLLBACK
+          do_execsql_test $prefix-merge-rollback {
+            SELECT * FROM t;
+            SELECT count(*) FROM dolt_conflicts;
+          } {1 10 0}
+        }
+      }
+    }
+  }
+}
+
+reset_db
+execsql {
+  CREATE TABLE t(id INT PRIMARY KEY);
+  SELECT dolt_commit('-Am','base');
+  SELECT dolt_branch('other');
+  INSERT INTO t VALUES(1);
+  SELECT dolt_commit('-Am','insert');
+}
+set source [db one {SELECT dolt_hashof('HEAD')}]
+execsql {
+  SELECT dolt_branch('revert-other');
+  SELECT dolt_revert('HEAD');
+}
+set reverted [db one {SELECT dolt_hashof('HEAD')}]
+execsql {SELECT dolt_checkout('revert-other')}
+do_execsql_test commit-identity-revert "
+  SELECT length(dolt_revert('$source'));
+  SELECT dolt_hashof('HEAD')!='$reverted';
+  SELECT count(*) FROM t;
+" {40 1 0}
+execsql {SELECT dolt_checkout('other'); INSERT INTO t VALUES(1)}
+do_execsql_test commit-identity-ordinary "
+  SELECT length(dolt_commit('-Am','insert'));
+  SELECT dolt_hashof('HEAD')!='$source';
+" {40 1}
+
+reset_db
+execsql {CREATE TABLE t(id INT PRIMARY KEY); SELECT dolt_commit('-Am','base')}
+set base [db one {SELECT dolt_hashof('HEAD')}]
+execsql {
+  INSERT INTO t VALUES(1);
+  SELECT dolt_commit('-Am','dated','--date','2020-01-02T03:04:05Z');
+}
+set dated [db one {SELECT dolt_hashof('HEAD')}]
+execsql "SELECT dolt_reset('--hard','$base'); INSERT INTO t VALUES(1)"
+do_execsql_test commit-identity-explicit-date "
+  SELECT dolt_commit('-Am','dated','--date','2020-01-02T03:04:05Z')='$dated';
+  SELECT date FROM dolt_log LIMIT 1;
+" {1 {2020-01-02 03:04:05}}
+
+set sqlite_current_time 0
+finish_test
