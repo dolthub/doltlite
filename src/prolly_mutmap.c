@@ -1108,6 +1108,18 @@ int prollyMutMapFindRc(
   return SQLITE_OK;
 }
 
+int prollyMutMapFindScanRc(
+  ProllyMutMap *mm,
+  const u8 *pKey, int nKey, i64 intKey,
+  ProllyMutMapEntry **ppEntry
+){
+  int rc = prollyMutMapFindRc(mm, pKey, nKey, intKey, ppEntry);
+  if( rc==SQLITE_OK && *ppEntry && (*ppEntry)->op==PROLLY_EDIT_DELETE ){
+    mm->nScanSkip++;
+  }
+  return rc;
+}
+
 int prollyMutMapEntryAt(
   ProllyMutMap *mm,
   int idx,
@@ -1234,6 +1246,7 @@ void prollyMutMapClear(ProllyMutMap *mm){
   mm->nUndo = 0;
   mm->levelBase = 0;
   mm->nBytes = 0;
+  mm->nScanSkip = 0;
 }
 
 void prollyMutMapFree(ProllyMutMap *mm){

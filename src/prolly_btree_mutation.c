@@ -1409,6 +1409,23 @@ int flushIfNeeded(BtCursor *pCur){
   return SQLITE_OK;
 }
 
+int flushScanDeletes(BtCursor *pCur){
+  ProllyMutMap *pMap;
+  BtCursor *p;
+  int rc;
+  pMap = pCur->pMutMap;
+  /* Charge compaction to repeated tombstone scans, not point misses. */
+  if( !pMap || pMap->nScanSkip<64
+   || pMap->nScanSkip<(u64)pMap->nEntries*2 ) return SQLITE_OK;
+  for(p=pCur->pBt->pCursor; p; p=p->pNext){
+    if( p!=pCur && p->pBtree==pCur->pBtree
+     && p->pgnoRoot==pCur->pgnoRoot && p->isPinned ) return SQLITE_OK;
+  }
+  rc = syncBtreeSavepoints(pCur->pBtree);
+  if( rc!=SQLITE_OK ) return rc;
+  return flushIfNeeded(pCur);
+}
+
 int flushAllPending(Btree *pBtree, BtShared *pBt, Pgno iTable){
   BtCursor *p;
   int rc;
