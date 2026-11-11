@@ -12,7 +12,7 @@ else
   ../configure
 fi
 {
-  make -j2 doltlite doltlite-lib
+  make -j2 DOLTLITE_LTO=1 doltlite doltlite-lib
   cc -O2 -Werror -I. -I../src \
     -o bench_timer_doltlite ../test/sysbench_timer.c \
     libdoltlite.a -lpthread -lz -lm

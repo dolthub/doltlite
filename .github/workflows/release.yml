@@ -175,7 +175,7 @@ jobs:
       run: |
         mkdir -p build && cd build
         ../configure
-        make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu) doltlite doltlite-remotesrv doltlite-lib
+        make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu) DOLTLITE_LTO=1 doltlite doltlite-remotesrv doltlite-lib
 
     - name: Build (Windows / MSYS2)
       if: runner.os == 'Windows'

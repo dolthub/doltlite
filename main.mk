@@ -369,6 +369,32 @@ T.cc += $(CFLAGS.core) $(CFLAGS.env)
 T.cc += $(OPT_FEATURE_FLAGS) $(OPTS)
 
 #
+# DOLTLITE_LTO=1 builds the deliverables (doltlite, doltlite-remotesrv,
+# libdoltlite) with link-time optimization. DoltLite is some 330 objects, so
+# without it nothing inlines across files; the stock amalgamation is one
+# translation unit and gets that for free.
+#
+# Every deliverable links one object, libdoltlite.lto.o, which is the whole
+# library optimized together and already compiled to machine code. That runs
+# the optimizer once rather than once per link, and it keeps compiler IR out
+# of the static archive: an archive of LTO objects only links with the exact
+# compiler release that produced it.
+#
+DOLTLITE_LTO ?= 0
+ifeq ($(DOLTLITE_LTO),1)
+DOLTLITE_LTO.clang := $(shell $(CC) --version 2>/dev/null | grep -c clang)
+ifeq ($(DOLTLITE_LTO.clang),0)
+DOLTLITE_LTO.flag = -flto=auto
+else
+DOLTLITE_LTO.flag = -flto
+endif
+T.cc += $(DOLTLITE_LTO.flag)
+LIBOBJS0.link = libdoltlite.lto.o
+else
+LIBOBJS0.link = $(LIBOBJS0)
+endif
+
+#
 # $(LDFLAGS.configure) represents any LDFLAGS=... the client passes to
 # the configure process.  The historical build enabled passing-on of
 # user-provided LDFLAGS at configure-time but not make-time. That
@@ -2795,9 +2821,9 @@ sqlite3d$(T.exe):	shell.c $(LIBOBJS0)
 shell_renamed.c: shell.c
 	sed 's/^int SQLITE_CDECL main(/int SQLITE_CDECL sqlite3_shell_main(/' shell.c > $@
 
-doltlite$(T.exe):	shell_renamed.c $(TOP)/src/shell_wrapper.c $(LIBOBJS0)
+doltlite$(T.exe):	shell_renamed.c $(TOP)/src/shell_wrapper.c $(LIBOBJS0.link)
 	$(T.link) -o $@ \
-		shell_renamed.c $(TOP)/src/shell_wrapper.c $(LIBOBJS0) \
+		shell_renamed.c $(TOP)/src/shell_wrapper.c $(LIBOBJS0.link) \
 		$(CFLAGS.readline) $(SHELL_OPT) \
 		$(LDFLAGS.libsqlite3) $(LDFLAGS.readline)
 
@@ -3196,8 +3222,18 @@ c-tests: doltlite-c-tests-build
 # distribution channel) re-links anyway and an unversioned dylib is
 # what the formula expects.
 #
-libdoltlite$(T.lib):	$(LIBOBJS0)
-	$(AR) $(AR.flags) $@ $(LIBOBJS0)
+libdoltlite$(T.lib):	$(LIBOBJS0.link)
+	$(AR) $(AR.flags) $@ $(LIBOBJS0.link)
+
+# GCC optimizes and emits machine code in the one relinking step. Clang's
+# relink only merges the bitcode, so the merged module is compiled after it.
+libdoltlite.lto.o:	$(LIBOBJS0)
+ifeq ($(DOLTLITE_LTO.clang),0)
+	$(T.cc) -r -nostdlib -flinker-output=nolto-rel -o $@ $(LIBOBJS0)
+else
+	$(T.cc) -r -nostdlib -o libdoltlite.lto.bc $(LIBOBJS0)
+	$(T.cc) -fno-lto -c -x ir libdoltlite.lto.bc -o $@
+endif
 
 LDFLAGS.libdoltlite.os-specific = $(subst $(libsqlite3.DLL),libdoltlite$(T.dll),$(LDFLAGS.libsqlite3.os-specific))
 # On Linux (T.dll==.so), force a SONAME of libdoltlite.so.0 regardless
@@ -3244,8 +3280,8 @@ libdoltlite.def: $(LIBOBJS0)
 libdoltlite.deffile = $(if $(filter .dll,$(T.dll)),libdoltlite.def,)
 LDFLAGS.libdoltlite.runtime = $(if $(filter .dll,$(T.dll)),-static,)
 
-libdoltlite$(T.dll):	$(LIBOBJS0) $(libdoltlite.exports.file) $(libdoltlite.deffile)
-	$(T.link.shared) $(LDFLAGS.libdoltlite.runtime) -o $@ $(libdoltlite.deffile) $(LIBOBJS0) $(LDFLAGS.libsqlite3) \
+libdoltlite$(T.dll):	$(LIBOBJS0.link) $(libdoltlite.exports.file) $(libdoltlite.deffile)
+	$(T.link.shared) $(LDFLAGS.libdoltlite.runtime) -o $@ $(libdoltlite.deffile) $(LIBOBJS0.link) $(LDFLAGS.libsqlite3) \
 		$(LDFLAGS.libdoltlite.os-specific) $(LDFLAGS.libdoltlite.soname) \
 		$(LDFLAGS.libdoltlite.exports)
 	$(if $(filter .so,$(T.dll)),ln -sf libdoltlite$(T.dll) libdoltlite$(T.dll).0)
@@ -3257,8 +3293,8 @@ all: doltlite-lib
 # doltlite-remotesrv: standalone HTTP server for serving doltlite databases.
 #
 doltlite-remotesrv$(T.exe):	$(TOP)/src/remotesrv_main.c \
-		$(TOP)/src/doltlite_parse.h $(LIBOBJS0)
-	$(T.link) -o $@ $(TOP)/src/remotesrv_main.c $(LIBOBJS0) \
+		$(TOP)/src/doltlite_parse.h $(LIBOBJS0.link)
+	$(T.link) -o $@ $(TOP)/src/remotesrv_main.c $(LIBOBJS0.link) \
 		$(LDFLAGS.libsqlite3)
 all: doltlite-remotesrv$(T.exe)
 
