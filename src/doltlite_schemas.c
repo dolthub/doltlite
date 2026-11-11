@@ -245,8 +245,581 @@ static sqlite3_module doltliteSchemasModule = {
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
+/* dolt_schemas is a projection of the catalog, not a stored table, so the
+** per-table history, diff and blame modules never see it. These three
+** read the views and triggers of each commit's catalog instead. */
+#define SH_HISTORY 0
+#define SH_DIFF    1
+#define SH_BLAME   2
+
+#define SH_NTEXT 9
+#define SH_NULL  (-1)
+#define SH_DATE0 (-2)
+#define SH_DATE1 (-3)
+
+#define SH_IDX_FROM_REF 0x01
+#define SH_IDX_TO_REF   0x02
+#define SH_COL_FROM_REF 15
+#define SH_COL_TO_REF   16
+
+typedef struct ShRow ShRow;
+struct ShRow {
+  char *az[SH_NTEXT];
+  i64 aDate[2];
+  u8 aHasDate[2];
+};
+
+typedef struct ShVtab ShVtab;
+struct ShVtab {
+  sqlite3_vtab base;
+  sqlite3 *db;
+  int eKind;
+};
+
+typedef struct ShCursor ShCursor;
+struct ShCursor {
+  sqlite3_vtab_cursor base;
+  ShRow *aRow;
+  int nRow;
+  int nAlloc;
+  int iRow;
+};
+
+typedef struct ShEnd ShEnd;
+struct ShEnd {
+  ProllyHash cat;
+  char zLabel[PROLLY_HASH_SIZE*2+1];
+  i64 date;
+  u8 hasDate;
+};
+
+static const char *const azShSchema[] = {
+  "CREATE TABLE x(type TEXT, name TEXT, fragment TEXT, extra TEXT,"
+  " sql_mode TEXT, commit_hash TEXT, committer TEXT, commit_date TEXT)",
+  "CREATE TABLE x(to_type TEXT, to_name TEXT, to_fragment TEXT,"
+  " to_extra TEXT, to_sql_mode TEXT, to_commit TEXT, to_commit_date TEXT,"
+  " from_type TEXT, from_name TEXT, from_fragment TEXT, from_extra TEXT,"
+  " from_sql_mode TEXT, from_commit TEXT, from_commit_date TEXT,"
+  " diff_type TEXT, from_ref TEXT HIDDEN, to_ref TEXT HIDDEN)",
+  "CREATE TABLE x(type TEXT, name TEXT, \"commit\" TEXT, commit_date TEXT,"
+  " committer TEXT, email TEXT, message TEXT)"
+};
+static const char *const azShName[] = {
+  "dolt_history_dolt_schemas", "dolt_diff_dolt_schemas",
+  "dolt_blame_dolt_schemas"
+};
+static const signed char aShHistoryCol[] = {
+  0, 1, 2, SH_NULL, SH_NULL, 3, 4, SH_DATE0
+};
+static const signed char aShDiffCol[] = {
+  0, 1, 2, SH_NULL, SH_NULL, 3, SH_DATE0,
+  4, 5, 6, SH_NULL, SH_NULL, 7, SH_DATE1, 8, SH_NULL, SH_NULL
+};
+static const signed char aShBlameCol[] = { 0, 1, 2, SH_DATE0, 3, 4, 5 };
+
+static void shClearRows(ShCursor *pCur){
+  int i, j;
+  for(i=0; i<pCur->nRow; i++){
+    for(j=0; j<SH_NTEXT; j++) sqlite3_free(pCur->aRow[i].az[j]);
+  }
+  sqlite3_free(pCur->aRow);
+  pCur->aRow = 0;
+  pCur->nRow = 0;
+  pCur->nAlloc = 0;
+  pCur->iRow = 0;
+}
+
+/* Appends a row holding copies of the non-NULL strings of az[0..n-1]. */
+static int shAppend(ShCursor *pCur, const char **az, int n, ShRow **ppRow){
+  ShRow *p;
+  int i;
+  int rc = DOLTLITE_GROW_ARRAY(&pCur->aRow, &pCur->nAlloc, pCur->nRow+1, 16);
+  if( rc!=SQLITE_OK ) return rc;
+  p = &pCur->aRow[pCur->nRow++];
+  memset(p, 0, sizeof(*p));
+  for(i=0; i<n; i++){
+    if( !az[i] ) continue;
+    p->az[i] = sqlite3_mprintf("%s", az[i]);
+    if( !p->az[i] ) return SQLITE_NOMEM;
+  }
+  *ppRow = p;
+  return SQLITE_OK;
+}
+
+static int shEntryCmp(const void *a, const void *b){
+  const SchemaEntry *pA = (const SchemaEntry*)a;
+  const SchemaEntry *pB = (const SchemaEntry*)b;
+  int c = strcmp(pA->zType, pB->zType);
+  return c ? c : strcmp(pA->zName, pB->zName);
+}
+
+/* The views and triggers of a catalog, ordered by (type, name). */
+static int shLoad(
+  sqlite3 *db,
+  const ProllyHash *pCat,
+  SchemaEntry **paEntry,
+  int *pnAll,
+  int *pnEntry
+){
+  SchemaEntry *a = 0;
+  int n = 0;
+  int i, nKeep = 0;
+  int rc = SQLITE_OK;
+  *paEntry = 0;
+  *pnAll = 0;
+  *pnEntry = 0;
+  if( prollyHashIsEmpty(pCat) ) return SQLITE_OK;
+  rc = loadSchemaFromCatalog(db, doltliteGetChunkStore(db),
+                             doltliteGetCache(db), pCat, &a, &n);
+  if( rc!=SQLITE_OK ) return rc;
+  for(i=0; i<n; i++){
+    if( a[i].zType && a[i].zName
+     && (strcmp(a[i].zType,"view")==0 || strcmp(a[i].zType,"trigger")==0) ){
+      SchemaEntry t = a[nKeep];
+      a[nKeep++] = a[i];
+      a[i] = t;
+    }
+  }
+  if( nKeep>1 ) qsort(a, (size_t)nKeep, sizeof(SchemaEntry), shEntryCmp);
+  *paEntry = a;
+  *pnAll = n;
+  *pnEntry = nKeep;
+  return SQLITE_OK;
+}
+
+static int shSameSql(const SchemaEntry *pA, const SchemaEntry *pB){
+  return strcmp(pA->zSql ? pA->zSql : "", pB->zSql ? pB->zSql : "")==0;
+}
+
+static int shEndForCommit(sqlite3 *db, const ProllyHash *pCommit, ShEnd *pEnd){
+  DoltliteCommit commit;
+  int rc;
+  memset(&commit, 0, sizeof(commit));
+  memset(pEnd, 0, sizeof(*pEnd));
+  rc = doltliteLoadCommit(db, pCommit, &commit);
+  if( rc!=SQLITE_OK ) return rc;
+  pEnd->cat = commit.catalogHash;
+  pEnd->date = commit.timestamp;
+  pEnd->hasDate = 1;
+  doltliteHashToHex(pCommit, pEnd->zLabel);
+  doltliteCommitClear(&commit);
+  return SQLITE_OK;
+}
+
+static int shDiffRow(
+  ShCursor *pCur,
+  const SchemaEntry *pFrom,
+  const SchemaEntry *pTo,
+  const ShEnd *pFromEnd,
+  const ShEnd *pToEnd
+){
+  const char *az[SH_NTEXT];
+  ShRow *pRow;
+  int rc;
+  memset((void*)az, 0, sizeof(az));
+  if( pTo ){
+    az[0] = pTo->zType;
+    az[1] = pTo->zName;
+    az[2] = pTo->zSql ? pTo->zSql : "";
+  }
+  az[3] = pToEnd->zLabel;
+  if( pFrom ){
+    az[4] = pFrom->zType;
+    az[5] = pFrom->zName;
+    az[6] = pFrom->zSql ? pFrom->zSql : "";
+  }
+  az[7] = pFromEnd->zLabel;
+  az[8] = !pFrom ? "added" : !pTo ? "removed" : "modified";
+  rc = shAppend(pCur, az, SH_NTEXT, &pRow);
+  if( rc!=SQLITE_OK ) return rc;
+  pRow->aDate[0] = pToEnd->date;
+  pRow->aHasDate[0] = pToEnd->hasDate;
+  pRow->aDate[1] = pFromEnd->date;
+  pRow->aHasDate[1] = pFromEnd->hasDate;
+  return SQLITE_OK;
+}
+
+static int shDiffEnds(
+  ShCursor *pCur,
+  sqlite3 *db,
+  const ShEnd *pFromEnd,
+  const ShEnd *pToEnd
+){
+  SchemaEntry *aFrom = 0, *aTo = 0;
+  int nFromAll = 0, nToAll = 0, nFrom = 0, nTo = 0;
+  int i = 0, j = 0;
+  int rc = shLoad(db, &pFromEnd->cat, &aFrom, &nFromAll, &nFrom);
+  if( rc==SQLITE_OK ) rc = shLoad(db, &pToEnd->cat, &aTo, &nToAll, &nTo);
+  while( rc==SQLITE_OK && (i<nFrom || j<nTo) ){
+    int c = i>=nFrom ? 1 : j>=nTo ? -1 : shEntryCmp(&aFrom[i], &aTo[j]);
+    if( c<0 ){
+      rc = shDiffRow(pCur, &aFrom[i++], 0, pFromEnd, pToEnd);
+    }else if( c>0 ){
+      rc = shDiffRow(pCur, 0, &aTo[j++], pFromEnd, pToEnd);
+    }else{
+      if( !shSameSql(&aFrom[i], &aTo[j]) ){
+        rc = shDiffRow(pCur, &aFrom[i], &aTo[j], pFromEnd, pToEnd);
+      }
+      i++;
+      j++;
+    }
+  }
+  freeSchemaEntries(aFrom, nFromAll);
+  freeSchemaEntries(aTo, nToAll);
+  return rc;
+}
+
+static int shHistory(ShCursor *pCur, sqlite3 *db){
+  DoltliteCommitQueue queue;
+  ProllyHash head;
+  int rc;
+  doltliteGetSessionHead(db, &head);
+  if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
+  memset(&queue, 0, sizeof(queue));
+  rc = doltliteCommitQueueInit(&queue, &head);
+  while( rc==SQLITE_OK ){
+    ProllyHash cur;
+    DoltliteCommit commit;
+    SchemaEntry *a = 0;
+    char zHex[PROLLY_HASH_SIZE*2+1];
+    int nAll = 0, n = 0, i;
+    int hasHash = 0;
+    rc = doltliteCommitQueueNext(&queue, &cur, &hasHash);
+    if( rc!=SQLITE_OK || !hasHash ) break;
+    memset(&commit, 0, sizeof(commit));
+    rc = doltliteLoadCommit(db, &cur, &commit);
+    if( rc!=SQLITE_OK ) break;
+    rc = doltliteCommitQueueEnqueueParents(&queue, &commit);
+    if( rc==SQLITE_OK ) rc = shLoad(db, &commit.catalogHash, &a, &nAll, &n);
+    doltliteHashToHex(&cur, zHex);
+    for(i=0; rc==SQLITE_OK && i<n; i++){
+      const char *az[5];
+      ShRow *pRow;
+      az[0] = a[i].zType;
+      az[1] = a[i].zName;
+      az[2] = a[i].zSql ? a[i].zSql : "";
+      az[3] = zHex;
+      az[4] = commit.zName ? commit.zName : "";
+      rc = shAppend(pCur, az, 5, &pRow);
+      if( rc==SQLITE_OK ){
+        pRow->aDate[0] = commit.timestamp;
+        pRow->aHasDate[0] = 1;
+      }
+    }
+    freeSchemaEntries(a, nAll);
+    doltliteCommitClear(&commit);
+  }
+  doltliteCommitQueueClear(&queue);
+  return rc;
+}
+
+/* WORKING against HEAD, then every commit reachable from HEAD against
+** each of its parents, as the per-table diff modules walk history. */
+static int shDiffWalk(ShCursor *pCur, sqlite3 *db){
+  typedef struct ShEdge { ProllyHash parent; ShEnd child; } ShEdge;
+  ShEdge *aStack = 0;
+  int nStack = 0, nAlloc = 0;
+  ProllyHashSet seen;
+  ProllyHash head;
+  ShEnd from, to;
+  int rc;
+  doltliteGetSessionHead(db, &head);
+  if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
+  rc = prollyHashSetInit(&seen, 64);
+  if( rc!=SQLITE_OK ) return rc;
+  memset(&to, 0, sizeof(to));
+  memcpy(to.zLabel, "WORKING", 8);
+  rc = doltliteFlushCatalogToHash(db, &to.cat);
+  if( rc==SQLITE_OK ){
+    rc = DOLTLITE_GROW_ARRAY(&aStack, &nAlloc, 1, 16);
+  }
+  if( rc==SQLITE_OK ){
+    aStack[0].parent = head;
+    aStack[0].child = to;
+    nStack = 1;
+  }
+  while( rc==SQLITE_OK && nStack>0 ){
+    ShEdge edge = aStack[--nStack];
+    DoltliteCommit commit;
+    int i, nParent;
+    memset(&commit, 0, sizeof(commit));
+    rc = doltliteLoadCommit(db, &edge.parent, &commit);
+    if( rc!=SQLITE_OK ) break;
+    memset(&from, 0, sizeof(from));
+    from.cat = commit.catalogHash;
+    from.date = commit.timestamp;
+    from.hasDate = 1;
+    doltliteHashToHex(&edge.parent, from.zLabel);
+    rc = shDiffEnds(pCur, db, &from, &edge.child);
+    if( rc==SQLITE_OK && !prollyHashSetContains(&seen, &edge.parent) ){
+      rc = prollyHashSetAdd(&seen, &edge.parent);
+      nParent = doltliteCommitParentCount(&commit);
+      if( rc==SQLITE_OK ){
+        rc = DOLTLITE_GROW_ARRAY(&aStack, &nAlloc, nStack+nParent, 16);
+      }
+      for(i=0; rc==SQLITE_OK && i<nParent; i++){
+        const ProllyHash *pParent = doltliteCommitParentHash(&commit, i);
+        if( !pParent ) continue;
+        aStack[nStack].parent = *pParent;
+        aStack[nStack].child = from;
+        nStack++;
+      }
+    }
+    doltliteCommitClear(&commit);
+  }
+  sqlite3_free(aStack);
+  prollyHashSetFree(&seen);
+  return rc;
+}
+
+static int shSliceEnd(
+  sqlite3 *db,
+  sqlite3_vtab *pVtab,
+  sqlite3_value *pArg,
+  ShEnd *pEnd
+){
+  const char *zRef;
+  const char *zErr = 0;
+  int rc = SQLITE_OK;
+  memset(pEnd, 0, sizeof(*pEnd));
+  zRef = (const char*)sqlite3_value_text(pArg);
+  if( sqlite3_value_type(pArg)==SQLITE_NULL || !zRef ){
+    zErr = "invalid argument: NULL";
+    zRef = "";
+  }else if( doltliteValueHasNul(pArg) ){
+    zErr = "invalid argument: contains a NUL byte";
+    zRef = "";
+  }else if( doltliteRefIsWorking(zRef) || doltliteRefIsStaged(zRef) ){
+    i64 now = 0;
+    rc = doltliteResolveCatalogHashForRef(db, zRef, &pEnd->cat);
+    if( rc==SQLITE_OK ) rc = sqlite3OsCurrentTimeInt64(db->pVfs, &now);
+    pEnd->date = now/1000 - 10000*(i64)21086676;
+    pEnd->hasDate = 1;
+    memcpy(pEnd->zLabel, doltliteRefIsWorking(zRef) ? "WORKING" : "STAGED",
+           doltliteRefIsWorking(zRef) ? 8 : 7);
+  }else{
+    ProllyHash commit;
+    rc = doltliteResolveRef(db, zRef, &commit);
+    if( rc==SQLITE_OK ) rc = shEndForCommit(db, &commit, pEnd);
+  }
+  if( !zErr && (rc==SQLITE_NOTFOUND || rc==SQLITE_ERROR) ){
+    zErr = rc==SQLITE_NOTFOUND ? "ref not found: " : "invalid ref: ";
+  }
+  if( zErr ){
+    sqlite3_free(pVtab->zErrMsg);
+    pVtab->zErrMsg = sqlite3_mprintf("dolt_diff_dolt_schemas: %s%s",
+                                     zErr, zRef);
+    return pVtab->zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+  }
+  return rc;
+}
+
+/* Each view and trigger of HEAD with the newest commit on the first-parent
+** chain that changed it, as the per-table blame modules attribute rows. */
+static int shBlame(ShCursor *pCur, sqlite3 *db){
+  SchemaEntry *aHead = 0;
+  int nHeadAll = 0, nHead = 0;
+  u8 *aDone = 0;
+  int nLeft;
+  ProllyHash cur;
+  DoltliteCommit commit;
+  int rc;
+  doltliteGetSessionHead(db, &cur);
+  if( prollyHashIsEmpty(&cur) ) return SQLITE_OK;
+  memset(&commit, 0, sizeof(commit));
+  rc = doltliteLoadCommit(db, &cur, &commit);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = shLoad(db, &commit.catalogHash, &aHead, &nHeadAll, &nHead);
+  nLeft = nHead;
+  if( rc==SQLITE_OK && nHead>0 ){
+    aDone = sqlite3_malloc64((sqlite3_uint64)nHead);
+    if( !aDone ) rc = SQLITE_NOMEM;
+    else memset(aDone, 0, (size_t)nHead);
+  }
+  while( rc==SQLITE_OK && nLeft>0 ){
+    const ProllyHash *pParent = doltliteCommitParentHash(&commit, 0);
+    ProllyHash parentHash;
+    DoltliteCommit parent;
+    SchemaEntry *aPar = 0;
+    int nParAll = 0, nPar = 0;
+    char zHex[PROLLY_HASH_SIZE*2+1];
+    int i, j;
+    memset(&parent, 0, sizeof(parent));
+    if( pParent ){
+      parentHash = *pParent;
+      rc = doltliteLoadCommit(db, &parentHash, &parent);
+      if( rc==SQLITE_OK ){
+        rc = shLoad(db, &parent.catalogHash, &aPar, &nParAll, &nPar);
+      }
+    }
+    doltliteHashToHex(&cur, zHex);
+    for(i=0; rc==SQLITE_OK && i<nHead; i++){
+      const char *az[6];
+      ShRow *pRow;
+      if( aDone[i] ) continue;
+      for(j=0; j<nPar && shEntryCmp(&aHead[i], &aPar[j])!=0; j++){}
+      if( j<nPar && shSameSql(&aHead[i], &aPar[j]) ) continue;
+      az[0] = aHead[i].zType;
+      az[1] = aHead[i].zName;
+      az[2] = zHex;
+      az[3] = commit.zName ? commit.zName : "";
+      az[4] = commit.zEmail ? commit.zEmail : "";
+      az[5] = commit.zMessage ? commit.zMessage : "";
+      rc = shAppend(pCur, az, 6, &pRow);
+      if( rc==SQLITE_OK ){
+        pRow->aDate[0] = commit.timestamp;
+        pRow->aHasDate[0] = 1;
+      }
+      aDone[i] = 1;
+      nLeft--;
+    }
+    freeSchemaEntries(aPar, nParAll);
+    doltliteCommitClear(&commit);
+    commit = parent;
+    if( !pParent ) break;
+    cur = parentHash;
+  }
+  doltliteCommitClear(&commit);
+  freeSchemaEntries(aHead, nHeadAll);
+  sqlite3_free(aDone);
+  return rc;
+}
+
+static int shConnect(sqlite3 *db, void *pAux, int argc,
+    const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
+  int eKind = SQLITE_PTR_TO_INT(pAux);
+  ShVtab *pVtab;
+  int rc;
+  (void)argc; (void)argv; (void)pzErr;
+  rc = doltliteVtabConnectSimple(db, azShSchema[eKind], sizeof(*pVtab), ppVtab);
+  if( rc!=SQLITE_OK ) return rc;
+  pVtab = (ShVtab*)*ppVtab;
+  pVtab->db = db;
+  pVtab->eKind = eKind;
+  return SQLITE_OK;
+}
+
+static int shBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
+  int iFrom = -1, iTo = -1;
+  int i;
+  pInfo->estimatedCost = 1000.0;
+  pInfo->estimatedRows = 100;
+  if( ((ShVtab*)pVtab)->eKind!=SH_DIFF ) return SQLITE_OK;
+  for(i=0; i<pInfo->nConstraint; i++){
+    const struct sqlite3_index_constraint *pC = &pInfo->aConstraint[i];
+    if( pC->op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
+    if( pC->iColumn!=SH_COL_FROM_REF && pC->iColumn!=SH_COL_TO_REF ) continue;
+    if( !pC->usable ) return SQLITE_CONSTRAINT;
+    if( pC->iColumn==SH_COL_FROM_REF ) iFrom = i;
+    else iTo = i;
+  }
+  if( iFrom<0 && iTo<0 ) return SQLITE_OK;
+  if( iFrom<0 || iTo<0 ){
+    sqlite3_free(pVtab->zErrMsg);
+    pVtab->zErrMsg = sqlite3_mprintf(
+        "dolt_diff_dolt_schemas requires both a from and a to revision");
+    return SQLITE_ERROR;
+  }
+  pInfo->aConstraintUsage[iFrom].argvIndex = 1;
+  pInfo->aConstraintUsage[iFrom].omit = 1;
+  pInfo->aConstraintUsage[iTo].argvIndex = 2;
+  pInfo->aConstraintUsage[iTo].omit = 1;
+  pInfo->idxNum = SH_IDX_FROM_REF|SH_IDX_TO_REF;
+  pInfo->estimatedCost = 100.0;
+  return SQLITE_OK;
+}
+
+static int shOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
+  (void)pVtab;
+  return doltliteVtabOpenCursor(ppCursor, sizeof(ShCursor));
+}
+
+static int shClose(sqlite3_vtab_cursor *pCursor){
+  shClearRows((ShCursor*)pCursor);
+  sqlite3_free(pCursor);
+  return SQLITE_OK;
+}
+
+static int shFilter(sqlite3_vtab_cursor *pCursor,
+    int idxNum, const char *idxStr, int argc, sqlite3_value **argv){
+  ShCursor *pCur = (ShCursor*)pCursor;
+  ShVtab *pVtab = (ShVtab*)pCursor->pVtab;
+  int rc;
+  (void)idxStr;
+  shClearRows(pCur);
+  if( !doltliteGetChunkStore(pVtab->db) ) return SQLITE_OK;
+  if( pVtab->eKind==SH_HISTORY ){
+    rc = shHistory(pCur, pVtab->db);
+  }else if( pVtab->eKind==SH_BLAME ){
+    rc = shBlame(pCur, pVtab->db);
+  }else if( idxNum && argc>=2 ){
+    ShEnd from, to;
+    rc = shSliceEnd(pVtab->db, &pVtab->base, argv[0], &from);
+    if( rc==SQLITE_OK ) rc = shSliceEnd(pVtab->db, &pVtab->base, argv[1], &to);
+    if( rc==SQLITE_OK ) rc = shDiffEnds(pCur, pVtab->db, &from, &to);
+  }else{
+    rc = shDiffWalk(pCur, pVtab->db);
+  }
+  if( rc!=SQLITE_OK ) shClearRows(pCur);
+  return rc;
+}
+
+static int shNext(sqlite3_vtab_cursor *pCursor){
+  ((ShCursor*)pCursor)->iRow++;
+  return SQLITE_OK;
+}
+
+static int shEof(sqlite3_vtab_cursor *pCursor){
+  ShCursor *pCur = (ShCursor*)pCursor;
+  return pCur->iRow>=pCur->nRow;
+}
+
+static int shColumn(sqlite3_vtab_cursor *pCursor,
+    sqlite3_context *ctx, int iCol){
+  static const signed char *const apMap[] = {
+    aShHistoryCol, aShDiffCol, aShBlameCol
+  };
+  static const int anMap[] = {
+    ArraySize(aShHistoryCol), ArraySize(aShDiffCol), ArraySize(aShBlameCol)
+  };
+  ShCursor *pCur = (ShCursor*)pCursor;
+  int eKind = ((ShVtab*)pCursor->pVtab)->eKind;
+  const ShRow *pRow = &pCur->aRow[pCur->iRow];
+  int iSlot = iCol<anMap[eKind] ? apMap[eKind][iCol] : SH_NULL;
+  if( iSlot>=0 ){
+    if( pRow->az[iSlot] ){
+      sqlite3_result_text(ctx, pRow->az[iSlot], -1, SQLITE_TRANSIENT);
+    }
+  }else if( iSlot!=SH_NULL ){
+    int iDate = iSlot==SH_DATE0 ? 0 : 1;
+    if( pRow->aHasDate[iDate] ){
+      doltliteResultTimestamp(ctx, pRow->aDate[iDate]);
+    }
+  }
+  return SQLITE_OK;
+}
+
+static int shRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
+  *pRowid = ((ShCursor*)pCursor)->iRow + 1;
+  return SQLITE_OK;
+}
+
+static sqlite3_module doltliteSchemasHistoryModule = {
+  0, 0, shConnect, shBestIndex, doltliteVtabDisconnect, 0,
+  shOpen, shClose, shFilter, shNext, shEof,
+  shColumn, shRowid,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+};
+
 int doltliteSchemasRegister(sqlite3 *db){
-  return doltliteCreateShieldedModule(db, "dolt_schemas", &doltliteSchemasModule, 0);
+  int rc = doltliteCreateShieldedModule(db, "dolt_schemas",
+                                        &doltliteSchemasModule, 0);
+  int i;
+  for(i=0; rc==SQLITE_OK && i<ArraySize(azShName); i++){
+    rc = doltliteCreateShieldedModule(db, azShName[i],
+            &doltliteSchemasHistoryModule, SQLITE_INT_TO_PTR(i));
+  }
+  return rc;
 }
 
 int doltliteRevertViewsAndTriggers(

@@ -1169,9 +1169,13 @@ int doltliteHistoricalModuleStale(sqlite3 *db, Module *pMod){
     if( zName[15]==0 ) return 0;
     bLive = 1;
   }else if( sqlite3_strnicmp(zName, "dolt_history_", 13)==0 ){
-    if( zName[13]==0 ) return 0;
+    if( zName[13]==0 || sqlite3_stricmp(&zName[13], "dolt_schemas")==0 ){
+      return 0;
+    }
   }else if( sqlite3_strnicmp(zName, "dolt_diff_", 10)==0 ){
-    if( zName[10]==0 ) return 0;
+    if( zName[10]==0 || sqlite3_stricmp(&zName[10], "dolt_schemas")==0 ){
+      return 0;
+    }
     /* The count functions keep a fixed schema. A user table of the same
     ** suffix uses the per-table diff module, whose columns follow the table. */
     if( (sqlite3_stricmp(zName, "dolt_diff_stat")==0
