@@ -585,9 +585,11 @@ int prollyCursorSeekBlob(ProllyCursor *cur,
   pEntry = cursorCurrentLeaf(cur);
   pPrevLeaf = pEntry;
   /* Probing the current leaf costs a scattered seek up to four wasted
-  ** comparisons, so it is skipped while recent seeks keep changing leaf. */
+  ** comparisons, so it is skipped while recent seeks keep changing leaf.
+  ** A tree of a few leaves is exempt: there even a random key often falls
+  ** in the current one. */
   if( pEntry && pEntry->node.nItems>0
-   && cur->nFarSeek<PROLLY_CURSOR_FAR_SEEKS ){
+   && (cur->iLevel<2 || cur->nFarSeek<PROLLY_CURSOR_FAR_SEEKS) ){
     const u8 *pBound;
     int nBound;
     leafIdx = cur->aLevel[cur->iLevel].idx;
@@ -644,7 +646,7 @@ int prollyCursorSeekBlob(ProllyCursor *cur,
   }
   if( pEntry==pPrevLeaf ){
     cur->nFarSeek = 0;
-  }else if( cur->nFarSeek<PROLLY_CURSOR_FAR_SEEKS ){
+  }else if( pPrevLeaf && cur->nFarSeek<PROLLY_CURSOR_FAR_SEEKS ){
     cur->nFarSeek++;
   }
   leafIdx = prollyNodeSearchBlob(&pEntry->node, pKey, nKey, &leafRes,
