@@ -291,6 +291,22 @@ oracle "log_two_dot" "$SETUP_DIVERGENT" \
 oracle "log_three_dot" "$SETUP_DIVERGENT" \
   "SELECT CONCAT('R|', message) FROM dolt_log('main...feature');"
 
+SETUP_ABSENT="
+CREATE TABLE base(id INTEGER PRIMARY KEY);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c0');
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c1');
+DROP TABLE t;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c2');
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+"
+
+oracle_error "diff_absent_on_both_sides_same_ref" "$SETUP_ABSENT" \
+  "SELECT count(*) FROM dolt_diff_t('HEAD', 'HEAD');"
+
+oracle_error "diff_absent_on_both_sides" "$SETUP_ABSENT" \
+  "SELECT count(*) FROM dolt_diff_t('HEAD~2', 'HEAD');"
+
 oracle_error "diff_two_dot_missing_left" "$SETUP_DIVERGENT" \
   "SELECT count(*) FROM dolt_diff_t('..feature');"
 
