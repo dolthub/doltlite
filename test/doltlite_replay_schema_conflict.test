@@ -188,4 +188,45 @@ foreach key {INTEGER INT} {
   }
 }
 
+foreach {layout key} {rowid {INTEGER PRIMARY KEY} clustered {INT PRIMARY KEY} keyless INTEGER} {
+  foreach direction {forward reverse} {
+    foreach operation {merge cherry_pick} {
+      reset_db
+      execsql "CREATE TABLE t(a $key,b TEXT,c INT)"
+      execsql {
+        INSERT INTO t VALUES(1,'needle',2);
+        CREATE INDEX idx_b ON t(b);
+        SELECT dolt_commit('-Am','base');
+        SELECT dolt_checkout('-b','feature');
+        ALTER TABLE t RENAME COLUMN c TO renamed_c;
+        UPDATE t SET renamed_c=3;
+        SELECT dolt_commit('-Am','rename and update');
+        SELECT dolt_checkout('main');
+        INSERT INTO t VALUES(5,'other',1);
+        SELECT dolt_commit('-Am','insert');
+      }
+      set branch main
+      set target feature
+      if {$direction eq "reverse"} {set branch feature; set target main}
+      execsql "SELECT dolt_checkout('$branch')"
+      set name rename-edited-column-$layout-$direction-$operation
+      do_test $name-apply {
+        lindex [catchsql "SELECT dolt_${operation}('$target')"] 0
+      } 0
+      do_execsql_test $name-rows {
+        SELECT a,b,renamed_c FROM t NOT INDEXED ORDER BY a;
+      } {1 needle 3 5 other 1}
+      do_execsql_test $name-index {
+        SELECT a,renamed_c FROM t INDEXED BY idx_b WHERE b='needle';
+        PRAGMA integrity_check;
+      } {1 3 ok}
+      db close
+      sqlite3 db test.db/$branch
+      do_execsql_test $name-reopen {
+        SELECT a,b,renamed_c FROM t ORDER BY a;
+      } {1 needle 3 5 other 1}
+    }
+  }
+}
+
 finish_test
