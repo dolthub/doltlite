@@ -118,7 +118,8 @@ int mergePreNormalizeRenamedDependents(
   SchemaEntry *aOursSchema, int nOursSchema,
   SchemaEntry *aTheirsSchema, int nTheirsSchema,
   SchemaMergeAction **ppActions, int *pnActions,
-  int bTableRenames
+  int bTableRenames,
+  char **pzErrMsg
 );
 
 /* One side column: its stored field (-1 for VIRTUAL), the ancestor slot
@@ -535,6 +536,9 @@ struct MergeColDefaults {
   u8 **apOwned;
   int nCol;
 };
+void mergeColDefaultsFree(MergeColDefaults *p);
+int mergeColDefaultsLoad(const char *zSql, const char *zTable,
+                         MergeColDefaults *pOut);
 int doltliteColumnIsVirtual(const Table *pTab, int iCol);
 int doltlitePrepareIndexExpr(sqlite3 *db, Table *pTab, Expr *pExpr,
                               int iGenerated, sqlite3_stmt **ppStmt);

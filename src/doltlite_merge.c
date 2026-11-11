@@ -1118,7 +1118,7 @@ int doltliteMergeCatalogs(
                                             aOursSchema, nOursSchema,
                                             aTheirsSchema, nTheirsSchema,
                                             ppActions, pnActions,
-                                            bBranchMerge);
+                                            bBranchMerge, pzErrMsg);
     if( rc!=SQLITE_OK ) goto merge_cleanup;
   }
 

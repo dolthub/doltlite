@@ -717,7 +717,7 @@ int rebuildDisjointSchemaRows(
 /* Evaluate declared defaults once. A pre-ADD-COLUMN row omits the
 ** new field; reads materialize the default. Rewriting into a wider
 ** record covers that slot, so leaving NULL would replace the default. */
-static void mergeColDefaultsFree(MergeColDefaults *p){
+void mergeColDefaultsFree(MergeColDefaults *p){
   int i;
   if( p->apOwned ){
     for(i=0; i<p->nCol; i++) sqlite3_free(p->apOwned[i]);
@@ -727,7 +727,7 @@ static void mergeColDefaultsFree(MergeColDefaults *p){
   memset(p, 0, sizeof(*p));
 }
 
-static int mergeColDefaultsLoad(
+int mergeColDefaultsLoad(
   const char *zSql,
   const char *zTable,
   MergeColDefaults *pOut
