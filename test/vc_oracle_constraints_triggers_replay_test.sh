@@ -537,4 +537,40 @@ SQL
 )" "SELECT CONCAT('R|rows=', COUNT(*)) FROM t;
 SELECT CONCAT('R|violations=', COUNT(*)) FROM dolt_constraint_violations;"
 
+echo "--- independently added columns are not renames ---"
+for key in INTEGER INT; do
+  for stored in 0 1; do
+    for kind in zero five text; do
+      type=INT; default=0; first=9; second=7
+      if [ "$kind" = five ]; then default=5; fi
+      if [ "$kind" = text ]; then
+        type=TEXT; default="'none'"; first="'high'"; second="'medium'"
+      fi
+      main_default=""; target_default=""
+      if [ "$stored" = 1 ]; then
+        main_default="UPDATE t SET priority=$default;"
+        target_default="UPDATE t SET score=$default;"
+      fi
+      oracle_replay_fail "independent_columns_${key}_${stored}_${kind}" \
+"CREATE TABLE t(id $key PRIMARY KEY,name TEXT);
+INSERT INTO t VALUES(1,'a'),(2,'b');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+ALTER TABLE t ADD COLUMN priority $type NOT NULL DEFAULT $default;
+$main_default
+SELECT dolt_commit('-Am','add priority');
+UPDATE t SET priority=$first WHERE id=1;
+INSERT INTO t VALUES(3,'c',$second);
+SELECT dolt_commit('-Am','set priority');
+SELECT dolt_checkout('feature');
+ALTER TABLE t ADD COLUMN score $type NOT NULL DEFAULT $default;
+$target_default
+SELECT dolt_commit('-Am','add score');" \
+"SELECT dolt_cherry_pick('main');" \
+"SELECT CONCAT('R|',id,'|',name,'|',score) FROM t WHERE id<=2 ORDER BY id;
+SELECT CONCAT('R|bad=',count(*)) FROM t WHERE score<>$default;"
+    done
+  done
+done
+
 vc_oracle_finish

@@ -85,4 +85,107 @@ foreach {layout key} {rowid {INTEGER PRIMARY KEY} clustered {INT PRIMARY KEY}} {
   }
 }
 
+foreach key {INTEGER INT} {
+  foreach {kind type default first second value} {
+    zero INT 0 9 7 0
+    five INT 5 9 7 5
+    text TEXT 'none' 'high' 'medium' none
+  } {
+    foreach stored {0 1} {
+      reset_db
+      execsql "CREATE TABLE t(id $key PRIMARY KEY,name TEXT)"
+      execsql {
+        INSERT INTO t VALUES(1,'a'),(2,'b');
+        SELECT dolt_commit('-Am','base');
+        SELECT dolt_branch('feature');
+      }
+      execsql "ALTER TABLE t ADD COLUMN priority $type NOT NULL DEFAULT $default"
+      if {$stored} {execsql "UPDATE t SET priority=$default"}
+      execsql {
+        SELECT dolt_commit('-Am','add priority');
+      }
+      execsql "UPDATE t SET priority=$first WHERE id=1; INSERT INTO t VALUES(3,'c',$second)"
+      execsql {
+        SELECT dolt_commit('-Am','set priority');
+        SELECT dolt_checkout('feature');
+      }
+      execsql "ALTER TABLE t ADD COLUMN score $type NOT NULL DEFAULT $default"
+      if {$stored} {execsql "UPDATE t SET score=$default"}
+      execsql {SELECT dolt_commit('-Am','add score')}
+      set head [execsql {SELECT dolt_hashof('HEAD')}]
+      set name independent-columns-$key-$kind-$stored
+      do_test $name-refused {
+        set result [catchsql {SELECT dolt_cherry_pick('main')}]
+        list [lindex $result 0] [string match {*ambiguous ancestry*} [lindex $result 1]]
+      } {1 1}
+      do_execsql_test $name-rows {SELECT id,name,score FROM t ORDER BY id} [list 1 a $value 2 b $value]
+      do_execsql_test $name-schema {SELECT name FROM pragma_table_info('t')} {id name score}
+      do_execsql_test $name-head {SELECT dolt_hashof('HEAD')} $head
+      db close
+      sqlite3 db test.db/feature
+      do_execsql_test $name-reopen {
+        SELECT id,name,score FROM t ORDER BY id;
+        PRAGMA integrity_check;
+      } [list 1 a $value 2 b $value ok]
+    }
+  }
+}
+foreach key {INTEGER INT} {
+  foreach direction {forward reverse} {
+    reset_db
+    execsql "CREATE TABLE t(id $key PRIMARY KEY,cd INT)"
+    execsql {
+      SELECT dolt_commit('-Am','base');
+      SELECT dolt_branch('side');
+      ALTER TABLE t ADD COLUMN n1 INT;
+      ALTER TABLE t DROP COLUMN cd;
+      SELECT dolt_commit('-Am','replace column');
+      SELECT dolt_checkout('side');
+      INSERT INTO t VALUES(1,7);
+      SELECT dolt_commit('-Am','insert');
+    }
+    set target side
+    set branch main
+    if {$direction eq "reverse"} {set target main; set branch side}
+    execsql "SELECT dolt_checkout('$branch')"
+    set before [execsql {SELECT * FROM t; SELECT dolt_hashof('HEAD')}]
+    set name empty-column-replacement-$key-$direction
+    do_test $name-refused {
+      set result [catchsql "SELECT dolt_merge('$target')"]
+      list [lindex $result 0] [string match {*ambiguous ancestry*} [lindex $result 1]]
+    } {1 1}
+    do_test $name-unchanged {execsql {SELECT * FROM t; SELECT dolt_hashof('HEAD')}} $before
+    do_execsql_test $name-integrity {PRAGMA integrity_check} {ok}
+  }
+}
+
+foreach key {INTEGER INT} {
+  foreach empty {0 1} {
+    reset_db
+    execsql "CREATE TABLE t(id $key PRIMARY KEY,cd INT)"
+    if {!$empty} {execsql {INSERT INTO t VALUES(1,NULL)}}
+    execsql {
+      SELECT dolt_commit('-Am','base');
+      ALTER TABLE t ADD COLUMN n1 INT;
+      ALTER TABLE t DROP COLUMN cd;
+    }
+    set change [execsql {SELECT dolt_commit('-Am','replace column')}]
+    if {$empty} {
+      execsql {INSERT INTO t VALUES(1,7)}
+    } else {
+      execsql {UPDATE t SET n1=7}
+    }
+    execsql {SELECT dolt_commit('-Am','set new value')}
+    set head [execsql {SELECT dolt_hashof('HEAD')}]
+    set name revert-column-replacement-$key-$empty
+    do_test $name-refused {
+      set result [catchsql "SELECT dolt_revert('$change')"]
+      list [lindex $result 0] [string match {*ambiguous ancestry*} [lindex $result 1]]
+    } {1 1}
+    do_execsql_test $name-rows {SELECT id,n1 FROM t} {1 7}
+    do_execsql_test $name-head {SELECT dolt_hashof('HEAD')} $head
+    do_execsql_test $name-schema {SELECT name FROM pragma_table_info('t')} {id n1}
+  }
+}
+
 finish_test

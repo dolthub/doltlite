@@ -1276,6 +1276,108 @@ static int mergePairsReuseAncestorName(
   return bReuse;
 }
 
+static int mergeRenameHasEvidence(
+  sqlite3 *db,
+  struct TableEntry *pAnc,
+  struct TableEntry *pSide,
+  const char *zAncSql,
+  const char *zSideSql,
+  const char *zTable,
+  int *pbEvidence
+){
+  DoltliteColInfo ancCi = {0}, sideCi = {0};
+  MergeColDefaults defaults = {0};
+  DoltliteRecordInfo ancInfo = {0}, sideInfo = {0}, defaultInfo = {0};
+  ProllyCursor ancCur, sideCur;
+  u8 *aSeen = 0, *pDefault = 0;
+  int nDefault = 0, curInit = 0, res, i, rc;
+
+  *pbEvidence = 0;
+  if( !pAnc || !pSide ) return SQLITE_OK;
+  rc = mergeLoadReaderColumns(zAncSql, zTable, &ancCi);
+  if( rc==SQLITE_OK ) rc = mergeLoadReaderColumns(zSideSql, zTable, &sideCi);
+  if( rc!=SQLITE_OK || ancCi.nCol!=sideCi.nCol ) goto done;
+  aSeen = sqlite3_malloc64((u64)ancCi.nCol);
+  if( !aSeen ){ rc = SQLITE_NOMEM; goto done; }
+  for(i=0; i<ancCi.nCol; i++){
+    int a = mergeReaderRecordSlot(&ancCi, i);
+    int b = mergeReaderRecordSlot(&sideCi, i);
+    aSeen[i] = sqlite3_stricmp(ancCi.azName[i], sideCi.azName[i])==0
+        || (i==ancCi.iPkCol && i==sideCi.iPkCol && ancCi.bHasRowid
+            && sideCi.bHasRowid)
+        || (!ancCi.bHasRowid && !sideCi.bHasRowid && a>=0 && a==b
+            && a<ancCi.nPk && a<sideCi.nPk);
+  }
+  rc = mergeColDefaultsLoad(zAncSql, zTable, &defaults);
+  if( rc!=SQLITE_OK ) goto done;
+  pDefault = doltliteBuildRecord(defaults.aVal, defaults.nCol, &nDefault);
+  if( !pDefault ){ rc = SQLITE_NOMEM; goto done; }
+  rc = doltliteParseRecordStrict(pDefault, nDefault, &defaultInfo);
+  if( rc!=SQLITE_OK ) goto done;
+  if( !prollyHashIsEmpty(&pAnc->root) && !prollyHashIsEmpty(&pSide->root)
+   && ((pAnc->flags ^ pSide->flags) & PROLLY_NODE_INTKEY)==0 ){
+    ChunkStore *cs = doltliteGetChunkStore(db);
+    ProllyCache *cache = doltliteGetCache(db);
+    prollyCursorInit(&ancCur, cs, cache, &pAnc->root, pAnc->flags);
+    prollyCursorInit(&sideCur, cs, cache, &pSide->root, pSide->flags);
+    curInit = 1;
+    rc = prollyCursorFirst(&ancCur, &res);
+    while( rc==SQLITE_OK && !res && prollyCursorIsValid(&ancCur) ){
+      const u8 *pAncVal = 0, *pSideVal = 0, *pKey = 0;
+      int nAncVal = 0, nSideVal = 0, nKey = 0, sideRes;
+      if( pAnc->flags & PROLLY_NODE_INTKEY ){
+        rc = prollyCursorSeekInt(&sideCur, prollyCursorIntKey(&ancCur), &sideRes);
+      }else{
+        prollyCursorKey(&ancCur, &pKey, &nKey);
+        rc = prollyCursorSeekBlob(&sideCur, pKey, nKey, &sideRes);
+      }
+      if( rc!=SQLITE_OK ) break;
+      if( sideRes==0 && prollyCursorIsValid(&sideCur) ){
+        prollyCursorValue(&ancCur, &pAncVal, &nAncVal);
+        prollyCursorValue(&sideCur, &pSideVal, &nSideVal);
+        doltliteRecordInfoClear(&ancInfo);
+        doltliteRecordInfoClear(&sideInfo);
+        if( nAncVal>0 ) rc = doltliteParseRecordStrict(pAncVal, nAncVal, &ancInfo);
+        if( rc==SQLITE_OK && nSideVal>0 ){
+          rc = doltliteParseRecordStrict(pSideVal, nSideVal, &sideInfo);
+        }
+        if( rc!=SQLITE_OK ) break;
+        for(i=0; i<ancCi.nCol; i++){
+          int a = mergeReaderRecordSlot(&ancCi, i);
+          int b = mergeReaderRecordSlot(&sideCi, i);
+          if( !aSeen[i] && a>=0 && a<ancInfo.nField
+           && ancInfo.aType[a]!=0
+           && !mergeStoredFieldsEqual(pAncVal, nAncVal, &ancInfo, a,
+                                      pDefault, nDefault, &defaultInfo, i)
+           && mergeStoredFieldsEqual(pAncVal, nAncVal, &ancInfo, a,
+                                      pSideVal, nSideVal, &sideInfo, b) ){
+            aSeen[i] = 1;
+          }
+        }
+      }
+      rc = prollyCursorNext(&ancCur);
+    }
+  }
+  if( rc==SQLITE_OK ){
+    for(i=0; i<ancCi.nCol && aSeen[i]; i++){}
+    *pbEvidence = i==ancCi.nCol;
+  }
+done:
+  if( curInit ){
+    prollyCursorClose(&ancCur);
+    prollyCursorClose(&sideCur);
+  }
+  doltliteRecordInfoClear(&ancInfo);
+  doltliteRecordInfoClear(&sideInfo);
+  doltliteRecordInfoClear(&defaultInfo);
+  mergeColDefaultsFree(&defaults);
+  doltliteFreeColInfo(&ancCi);
+  doltliteFreeColInfo(&sideCi);
+  sqlite3_free(aSeen);
+  sqlite3_free(pDefault);
+  return rc;
+}
+
 int mergePreNormalizeRenamedDependents(
   sqlite3 *db,
   struct TableEntry *aAnc, int nAnc,
@@ -1285,7 +1387,8 @@ int mergePreNormalizeRenamedDependents(
   SchemaEntry *aOursSchema, int nOursSchema,
   SchemaEntry *aTheirsSchema, int nTheirsSchema,
   SchemaMergeAction **ppActions, int *pnActions,
-  int bTableRenames
+  int bTableRenames,
+  char **pzErrMsg
 ){
   int t, i, rc = SQLITE_OK;
 
@@ -1348,6 +1451,29 @@ int mergePreNormalizeRenamedDependents(
       if( mergeRenameMapLookup(azRenT, nRenT, azRenO[i]) ) goto table_done;
     }
 
+    for(i=0; i<2; i++){
+      SchemaEntry *pSide = i ? pTheirT : pOurT;
+      struct TableEntry *pAnc = doltliteFindTableByName(aAnc, nAnc, pAncT->zName);
+      struct TableEntry *pSideEnt = doltliteFindTableByName(
+          i ? aTheirs : aOurs, i ? nTheirs : nOurs, pAncT->zName);
+      struct TableEntry *pOther = doltliteFindTableByName(
+          i ? aOurs : aTheirs, i ? nOurs : nTheirs, pAncT->zName);
+      int bEvidence;
+      if( !(i ? nRenT : nRenO) || !pAnc || !pOther
+       || prollyHashCompare(&pAnc->root, &pOther->root)==0 ) continue;
+      rc = mergeRenameHasEvidence(db, pAnc, pSideEnt, pAncT->zSql,
+                                  pSide->zSql, pAncT->zName, &bEvidence);
+      if( rc!=SQLITE_OK ) goto table_done;
+      if( !bEvidence ){
+        if( pzErrMsg ){
+          *pzErrMsg = sqlite3_mprintf(
+              "cannot merge: table '%s' has ambiguous ancestry for renamed columns",
+              pAncT->zName);
+        }
+        rc = pzErrMsg && !*pzErrMsg ? SQLITE_NOMEM : SQLITE_ERROR;
+        goto table_done;
+      }
+    }
     for(i=0; i<nAncSchema; i++){
       SchemaEntry *pDepAnc = &aAncSchema[i];
       SchemaEntry *pDepOurs, *pDepTheirs, *pSurvivor;
