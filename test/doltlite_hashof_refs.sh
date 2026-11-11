@@ -135,4 +135,29 @@ run_test "table_without_indexes_keeps_root_schema_hash" \
 
 rm -f "$DBI" "$DBJ"
 
+run_test_lastline "hashof_leading_space_is_trimmed" \
+  "$(dirty "SELECT dolt_hashof(' HEAD') = dolt_hashof('HEAD');")" \
+  "1" \
+  "$DB"
+
+run_test_lastline "hashof_trailing_space_is_trimmed" \
+  "$(dirty "SELECT dolt_hashof('main ') = dolt_hashof('HEAD');")" \
+  "1" \
+  "$DB"
+
+run_test_lastline "hashof_tab_is_trimmed" \
+  "$(dirty "SELECT dolt_hashof(char(9) || 'HEAD' || char(10)) = dolt_hashof('HEAD');")" \
+  "1" \
+  "$DB"
+
+run_test_error_match "hashof_blank_rejected" \
+  "$(dirty "SELECT dolt_hashof(' ');")" \
+  "invalid ref spec" \
+  "$DB"
+
+run_test_error_match "hashof_space_before_ancestor_spec_rejected" \
+  "$(dirty "SELECT dolt_commit('-Am','c2'); SELECT dolt_hashof(' HEAD~1');")" \
+  "invalid ref spec" \
+  "$DB"
+
 dltest_finish
