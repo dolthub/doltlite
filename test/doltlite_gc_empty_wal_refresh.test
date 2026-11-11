@@ -87,6 +87,45 @@ foreach first {{SELECT dolt_gc()} VACUUM} {
   }
 }
 
+foreach layout {INTEGER INT} {
+  foreach maintenance {{SELECT dolt_gc()} VACUUM} {
+    foreach txn {BEGIN {SAVEPOINT s}} {
+      foreach versioned {0 1} {
+        catch {peer close}
+        reset_db
+        db eval "CREATE TABLE t(id $layout PRIMARY KEY,v TEXT)"
+        db eval {
+          INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-Am','base');
+          SELECT dolt_branch('other');
+        }
+        sqlite3 peer test.db/other
+        peer eval $maintenance
+        db eval $txn
+        db eval {SELECT * FROM t}
+        peer eval {INSERT INTO t VALUES(2,'peer')}
+        if {$versioned} {peer eval {SELECT dolt_commit('-am','peer')}}
+        set peerHead [peer one {SELECT dolt_hashof('HEAD')}]
+        set prefix [string map {" " _} compacted-noop-$layout-$maintenance-$txn-$versioned]
+        do_execsql_test $prefix.reset {SELECT dolt_reset('--soft')} 0
+        sqlite3 fresh test.db/other
+        do_test $prefix.peer-kept {fresh eval {SELECT id,v FROM t ORDER BY id}} {1 base 2 peer}
+        do_test $prefix.head-kept {fresh one {SELECT dolt_hashof('HEAD')}} $peerHead
+        do_test $prefix.next-write {
+          peer eval {INSERT INTO t VALUES(3,'later'); SELECT id FROM t ORDER BY id}
+        } {1 2 3}
+        do_test $prefix.next-commit {
+          peer eval {SELECT dolt_commit('-am','after reset'); PRAGMA integrity_check}
+          peer one {PRAGMA integrity_check}
+        } ok
+        do_test $prefix.durable {fresh eval {SELECT id,v FROM t ORDER BY id}} {1 base 2 peer 3 later}
+        do_test $prefix.integrity {fresh one {PRAGMA integrity_check}} ok
+        fresh close
+        catchsql ROLLBACK
+      }
+    }
+  }
+}
+
 compacted_setup {SELECT dolt_gc()} amend
 compacted_rewrite {SELECT dolt_gc()} amend
 forcedelete compacted-foreign.db compacted-saved.db

@@ -779,7 +779,7 @@ static int csCommitWithBusyHandler(
     if( acquiredLock ) chunkStoreUnlock(cs);
     return SQLITE_READONLY;
   }
-  if( cs->file.pFile && cs->wal.nWalData>0
+  if( cs->file.pFile
    && cs->staging.nPending==0 && cs->staging.nRecentUncommitted==0
    && !cs->bRefsStale
    && prollyHashCompare(&cs->refs.refsHash,
