@@ -1,0 +1,116 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+do_test schemas-history.setup {
+  execsql {
+    CREATE TABLE t(id INT PRIMARY KEY, a INT);
+    CREATE VIEW v1 AS SELECT id FROM t;
+    SELECT dolt_commit('-Am','c1');
+    DROP VIEW v1;
+    CREATE VIEW v1 AS SELECT a FROM t;
+    CREATE VIEW v2 AS SELECT 1;
+    SELECT dolt_commit('-Am','c2');
+    SELECT dolt_checkout('-b','f');
+    CREATE TRIGGER t1 AFTER INSERT ON t BEGIN SELECT 1; END;
+    SELECT dolt_commit('-Am','f1');
+    SELECT dolt_checkout('main');
+    DROP VIEW v2;
+    SELECT dolt_commit('-Am','c3');
+    SELECT dolt_merge('f');
+    CREATE VIEW w AS SELECT 2;
+  }
+  execsql {SELECT type, name FROM dolt_schemas ORDER BY 1, 2}
+} {trigger t1 view v1 view w}
+
+do_execsql_test schemas-history.history {
+  SELECT l.message, h.type, h.name, h.fragment
+    FROM dolt_history_dolt_schemas h
+    JOIN dolt_log l ON l.commit_hash=h.commit_hash
+   ORDER BY l.message, h.type, h.name;
+} [list \
+  {Merge branch 'f' into main} trigger t1 \
+    {CREATE TRIGGER t1 AFTER INSERT ON t BEGIN SELECT 1; END} \
+  {Merge branch 'f' into main} view v1 {CREATE VIEW v1 AS SELECT a FROM t} \
+  c1 view v1 {CREATE VIEW v1 AS SELECT id FROM t} \
+  c2 view v1 {CREATE VIEW v1 AS SELECT a FROM t} \
+  c2 view v2 {CREATE VIEW v2 AS SELECT 1} \
+  c3 view v1 {CREATE VIEW v1 AS SELECT a FROM t} \
+  f1 trigger t1 {CREATE TRIGGER t1 AFTER INSERT ON t BEGIN SELECT 1; END} \
+  f1 view v1 {CREATE VIEW v1 AS SELECT a FROM t} \
+  f1 view v2 {CREATE VIEW v2 AS SELECT 1} \
+]
+
+do_execsql_test schemas-history.history-columns {
+  SELECT count(*), count(extra), count(sql_mode), count(DISTINCT committer),
+         min(commit_date)>'2000'
+    FROM dolt_history_dolt_schemas;
+} {9 0 0 1 1}
+
+do_execsql_test schemas-history.diff-working {
+  SELECT to_type, to_name, to_fragment, to_commit_date, from_name, diff_type,
+         from_commit=(SELECT commit_hash FROM dolt_log LIMIT 1)
+    FROM dolt_diff_dolt_schemas WHERE to_commit='WORKING';
+} {view w {CREATE VIEW w AS SELECT 2} {} {} added 1}
+
+do_execsql_test schemas-history.diff-walk {
+  SELECT coalesce(tl.message,'?'), coalesce(d.to_name,''),
+         coalesce(d.from_name,''), d.diff_type
+    FROM dolt_diff_dolt_schemas d
+    JOIN dolt_log tl ON tl.commit_hash=d.to_commit
+   ORDER BY 1, 2, 3, 4;
+} [list \
+  {Merge branch 'f' into main} {} v2 removed \
+  {Merge branch 'f' into main} t1 {} added \
+  c1 v1 {} added \
+  c2 v1 v1 modified \
+  c2 v2 {} added \
+  c3 {} v2 removed \
+  f1 t1 {} added \
+]
+
+do_execsql_test schemas-history.diff-modified {
+  SELECT from_fragment, to_fragment, from_commit_date<=to_commit_date
+    FROM dolt_diff_dolt_schemas WHERE diff_type='modified';
+} {{CREATE VIEW v1 AS SELECT id FROM t} {CREATE VIEW v1 AS SELECT a FROM t} 1}
+
+do_execsql_test schemas-history.diff-slice {
+  SELECT to_name, from_name, to_commit, length(from_commit), diff_type
+    FROM dolt_diff_dolt_schemas('HEAD~1','WORKING') ORDER BY 1;
+  SELECT to_name, from_name, to_commit, diff_type
+    FROM dolt_diff_dolt_schemas
+   WHERE from_ref='HEAD~2' AND to_ref='STAGED' ORDER BY diff_type;
+} {t1 {} WORKING 40 added w {} WORKING 40 added t1 {} STAGED added {} v2 STAGED removed}
+
+do_execsql_test schemas-history.diff-slice-same {
+  SELECT count(*) FROM dolt_diff_dolt_schemas('HEAD','HEAD');
+} {0}
+
+do_catchsql_test schemas-history.diff-bad-ref {
+  SELECT * FROM dolt_diff_dolt_schemas('nope','HEAD');
+} {1 {dolt_diff_dolt_schemas: ref not found: nope}}
+
+do_catchsql_test schemas-history.diff-one-ref {
+  SELECT * FROM dolt_diff_dolt_schemas WHERE from_ref='HEAD';
+} {1 {dolt_diff_dolt_schemas requires both a from and a to revision}}
+
+do_execsql_test schemas-history.blame {
+  SELECT b.type, b.name, b.message, b.committer,
+         b."commit"=l.commit_hash, b.commit_date=l.date
+    FROM dolt_blame_dolt_schemas b
+    JOIN dolt_log l ON l.message=b.message
+   ORDER BY 1, 2;
+} {trigger t1 {Merge branch 'f' into main} doltlite 1 1 view v1 c2 doltlite 1 1}
+
+do_test schemas-history.empty {
+  catch {db close}
+  forcedelete test.db
+  sqlite3 db test.db
+  execsql {
+    CREATE TABLE t(id INT PRIMARY KEY);
+    SELECT count(*) FROM dolt_history_dolt_schemas;
+    SELECT count(*) FROM dolt_diff_dolt_schemas;
+    SELECT count(*) FROM dolt_blame_dolt_schemas;
+  }
+} {0 0 0}
+
+finish_test
