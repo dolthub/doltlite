@@ -628,7 +628,8 @@ void doltliteNonlocalTableList(Parse *pParse, const char *zRight){
 int doltliteNonlocalResolve(
   Parse *pParse,
   const char **pzName,
-  const char **pzDb
+  const char **pzDb,
+  int bLocalOnly
 ){
   sqlite3 *db = pParse->db;
   DoltliteNonlocal *p;
@@ -641,12 +642,13 @@ int doltliteNonlocalResolve(
   if( !p || !p->bLoaded ) return 0;
   r = nonlocalMatch(p, *pzName);
   if( !r ) return 0;
+  zRef = nonlocalRuleRef(p, r);
+  if( bLocalOnly && strcmp(zRef, p->zBranch)!=0 ) return 0;
   if( sqlite3StrICmp(r->zOptions, "immediate")!=0 ){
     sqlite3ErrorMsg(pParse, "Invalid nonlocal table options %s: only valid "
                     "value is 'immediate'.", r->zOptions);
     return -1;
   }
-  zRef = nonlocalRuleRef(p, r);
   if( nonlocalIsMissing(p, zRef) ){
     sqlite3ErrorMsg(pParse, "branch not found: %s", zRef);
     return -1;

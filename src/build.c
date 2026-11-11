@@ -468,7 +468,7 @@ Table *sqlite3LocateTable(
    && (zDbase || sqlite3FindTable(db, zName, "temp")==0) ){
     const char *zNonlocal = zName;
     const char *zNonlocalDb = zDbase;
-    int eNonlocal = doltliteNonlocalResolve(pParse, &zNonlocal, &zNonlocalDb);
+    int eNonlocal = doltliteNonlocalResolve(pParse, &zNonlocal, &zNonlocalDb, 0);
     if( eNonlocal<0 ) return 0;
     if( eNonlocal>0 ){
       p = sqlite3FindTable(db, zNonlocal, zNonlocalDb);
@@ -1511,7 +1511,7 @@ void sqlite3StartTable(
      && !db->init.busy && doltliteNonlocalBlocksCreate(db, zName) ){
       const char *zNonlocal = zName;
       const char *zNonlocalDb = 0;
-      if( noErr && doltliteNonlocalResolve(pParse, &zNonlocal, &zNonlocalDb)>0
+      if( noErr && doltliteNonlocalResolve(pParse, &zNonlocal, &zNonlocalDb, 0)>0
        && sqlite3FindTable(db, zNonlocal, zNonlocalDb) ){
         sqlite3CodeVerifySchema(pParse, iDb);
         sqlite3ForceNotReadOnly(pParse);
@@ -4089,11 +4089,32 @@ void sqlite3DropTable(Parse *pParse, SrcList *pName, int isView, int noErr){
   assert( pName->a[0].fg.fixedSchema==0 );
   assert( pName->a[0].fg.isSubquery==0 );
   if( sqlite3ReadSchema(pParse) ) goto exit_drop_table;
-  if( noErr ) db->suppressErr++;
 #ifdef DOLTLITE_PROLLY
-  /* DROP edits the local table. A nonlocal rule does not apply. */
   pParse->bLocalNames = 1;
+  if( !isView ){
+    SrcItem *pItem = &pName->a[0];
+    const char *zName = pItem->zName;
+    const char *zDb = pItem->u4.zDatabase;
+    if( zDb || sqlite3FindTable(db, zName, "temp")==0 ){
+      int eNonlocal = doltliteNonlocalResolve(pParse, &zName, &zDb, 1);
+      if( eNonlocal<0 ) goto exit_drop_table;
+      if( eNonlocal>0 && sqlite3FindTable(db, zName, zDb) ){
+        char *zNewName = sqlite3DbStrDup(db, zName);
+        char *zNewDb = sqlite3DbStrDup(db, zDb);
+        if( !zNewName || !zNewDb ){
+          sqlite3DbFree(db, zNewName);
+          sqlite3DbFree(db, zNewDb);
+          goto exit_drop_table;
+        }
+        sqlite3DbFree(db, pItem->zName);
+        sqlite3DbFree(db, pItem->u4.zDatabase);
+        pItem->zName = zNewName;
+        pItem->u4.zDatabase = zNewDb;
+      }
+    }
+  }
 #endif
+  if( noErr ) db->suppressErr++;
   assert( isView==0 || isView==LOCATE_VIEW );
   pTab = sqlite3LocateTableItem(pParse, isView, &pName->a[0]);
   if( noErr ) db->suppressErr--;
