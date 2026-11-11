@@ -59,3 +59,73 @@ try {
 } finally {
   db.close();
 }
+
+function loadImage(bytes, readOnly=false){
+  const loaded = new sqlite3.oo1.DB(':memory:');
+  const p = sqlite3.wasm.allocFromTypedArray(bytes);
+  const flags = sqlite3.capi.SQLITE_DESERIALIZE_FREEONCLOSE |
+    (readOnly ? sqlite3.capi.SQLITE_DESERIALIZE_READONLY
+              : sqlite3.capi.SQLITE_DESERIALIZE_RESIZEABLE);
+  const rc = sqlite3.capi.sqlite3_deserialize(
+    loaded.pointer, 'main', p, bytes.length, bytes.length, flags
+  );
+  if(rc){
+    loaded.close();
+    fail(`deserialize returned ${rc}`);
+  }
+  return loaded;
+}
+
+function checkSnapshot(bytes, rows, commits){
+  const copy = loadImage(bytes, true);
+  try {
+    if(copy.selectValue('SELECT count(*) FROM t') !== rows ||
+       copy.selectValue('SELECT group_concat(v) FROM (SELECT v FROM t ORDER BY id)') !==
+         (rows===1 ? 'first' : 'first,second'+',generation'.repeat(rows-2)) ||
+       copy.selectValue('SELECT count(*) FROM dolt_log') !== commits ||
+       copy.selectValue("SELECT count(*) FROM dolt_branches WHERE name='feature'") !== 1 ||
+       copy.selectValue("SELECT count(*) FROM sqlite_schema WHERE name='t_v'") !== 1 ||
+       copy.selectValue('PRAGMA integrity_check') !== 'ok'){
+      fail('re-exported image lost rows, history, refs, or schema');
+    }
+    const again = sqlite3.capi.sqlite3_js_db_export(copy.pointer);
+    if(!again.length) fail('read-only image re-export is empty');
+  } finally {
+    copy.close();
+  }
+}
+
+for(const source of [':memory:', '/reserialize.db']){
+  const original = new sqlite3.oo1.DB(source, 'c');
+  let bytes;
+  try {
+    original.exec("CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT);" +
+                  "CREATE INDEX t_v ON t(v); INSERT INTO t(v) VALUES('first');" +
+                  "SELECT dolt_commit('-Am','first'); SELECT dolt_branch('feature');");
+    bytes = sqlite3.capi.sqlite3_js_db_export(original.pointer);
+  } finally {
+    original.close();
+  }
+  const loaded = loadImage(bytes);
+  try {
+    for(let phase=0; phase<3; phase++){
+      if(phase===1) loaded.exec("INSERT INTO t(v) VALUES('second')");
+      if(phase===2) loaded.exec("SELECT dolt_commit('-Am','second')");
+      bytes = sqlite3.capi.sqlite3_js_db_export(loaded.pointer);
+      checkSnapshot(bytes, phase ? 2 : 1, phase===2 ? 3 : 2);
+    }
+  } finally {
+    loaded.close();
+  }
+  for(let generation=0; generation<3; generation++){
+    const copy = loadImage(bytes);
+    try {
+      copy.exec("INSERT INTO t(v) VALUES('generation')");
+      bytes = sqlite3.capi.sqlite3_js_db_export(copy.pointer);
+      checkSnapshot(bytes, generation+3, 3);
+    } finally {
+      copy.close();
+    }
+  }
+  console.log(`reserialize=${source}: unchanged, edited, committed, read-only and repeated generations pass`);
+}
