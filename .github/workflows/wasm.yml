@@ -126,6 +126,17 @@ jobs:
       run: |
         node ext/wasm/test-doltlite-export-roundtrip.mjs
 
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ runner.os }}-1.65.0
+
+    - name: Test OPFS SAH pool imports in Chromium
+      run: |
+        npm install --prefix build/wasm-browser --no-save playwright@1.65.0
+        node build/wasm-browser/node_modules/playwright/cli.js install chromium
+        node ext/wasm/test-doltlite-opfs-import.mjs
+
     - name: Test DoltLite wasm file:// remotes
       run: |
         node ext/wasm/test-doltlite-remote.mjs
