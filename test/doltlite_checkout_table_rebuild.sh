@@ -77,4 +77,27 @@ SELECT group_concat(name) FROM pragma_table_info('t');
 tr
 id,v,w" "$DB"
 
+DB="$ROOT/renamed_index.db"
+"$DOLTLITE" "$DB" "CREATE TABLE t(id INT PRIMARY KEY, a INT); CREATE INDEX ta ON t(a);
+INSERT INTO t VALUES(1,1); SELECT dolt_commit('-Am','c1');
+ALTER TABLE t RENAME TO t2;" >/dev/null
+run_test_error_match "checkout_table_names_index_owner_after_rename" \
+  "SELECT dolt_checkout('t');" \
+  "cannot check out table t: its index ta is now an index of table t2; drop that index and retry" "$DB"
+run_test "checkout_table_refused_leaves_rename_in_place" "
+SELECT group_concat(name) FROM sqlite_schema WHERE type='table';
+SELECT tbl_name FROM sqlite_schema WHERE name='ta';
+" "t2
+t2" "$DB"
+run_test "checkout_table_after_dropping_clashing_index" "
+DROP INDEX ta;
+SELECT dolt_checkout('t');
+SELECT tbl_name FROM sqlite_schema WHERE name='ta';
+SELECT table_name || '|' || staged || '|' || status FROM dolt_status;
+SELECT (SELECT count(*) FROM t) || '|' || (SELECT count(*) FROM t2);
+" "0
+t
+t2|0|new table
+1|1" "$DB"
+
 dltest_finish

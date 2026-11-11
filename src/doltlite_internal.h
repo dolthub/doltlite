@@ -1697,6 +1697,7 @@ int doltliteCheckoutDot(
   sqlite3 *db, sqlite3_context *context, const char *zSourceRef,
   const char **pzMissing
 );
+int doltliteCheckoutIndexOwner(sqlite3*, const char*, const char*, int*);
 int doltliteCatalogRenameMate(
   sqlite3 *db,
   const struct TableEntry *aBase, int nBase,
