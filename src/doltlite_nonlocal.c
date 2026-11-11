@@ -605,7 +605,7 @@ void doltliteNonlocalTableList(Parse *pParse, const char *zRight){
     const char *zSchema;
     int iDb;
     HashElem *k;
-    if( sqlite3StrICmp(r->zOptions, "immediate")!=0 ) continue;
+    if( strcmp(r->zOptions, "immediate")!=0 ) continue;
     zSchema = strcmp(zRef, p->zBranch)==0 ? "main"
             : nonlocalSchemaFor(db, p, zRef);
     if( !zSchema || (iDb = sqlite3FindDbName(db, zSchema))<0 ) continue;
@@ -644,7 +644,7 @@ int doltliteNonlocalResolve(
   if( !r ) return 0;
   zRef = nonlocalRuleRef(p, r);
   if( bLocalOnly && strcmp(zRef, p->zBranch)!=0 ) return 0;
-  if( sqlite3StrICmp(r->zOptions, "immediate")!=0 ){
+  if( strcmp(r->zOptions, "immediate")!=0 ){
     sqlite3ErrorMsg(pParse, "Invalid nonlocal table options %s: only valid "
                     "value is 'immediate'.", r->zOptions);
     return -1;
@@ -732,7 +732,7 @@ static int nonlocalResolveName(
   if( *pzDb && sqlite3StrICmp(*pzDb, "main")!=0 ) return 0;
   if( !p || !p->bLoaded ) return 0;
   r = nonlocalMatch(p, *pzName);
-  if( !r || sqlite3StrICmp(r->zOptions, "immediate")!=0 ) return 0;
+  if( !r || strcmp(r->zOptions, "immediate")!=0 ) return 0;
   zRef = nonlocalRuleRef(p, r);
   if( strcmp(zRef, p->zBranch)==0 ){
     zSchema = "main";
