@@ -42,6 +42,7 @@ set linemacros 0
 set useapicall 0
 set enable_recover 0
 set doltlite 0
+set doltlite_external_remotes 0
 set skipstructs 0
 set skipfns [list]
 set srcdir tsrc
@@ -53,6 +54,8 @@ for {set i 0} {$i<[llength $argv]} {incr i} {
     set enable_recover 1
   } elseif {[regexp {^-?-doltlite$} $x]} {
     set doltlite 1
+  } elseif {[regexp {^-?-doltlite-external-remotes$} $x]} {
+    set doltlite_external_remotes 1
   } elseif {[regexp {^-?-nostatic$} $x]} {
     set addstatic 0
   } elseif {[regexp {^-?-linemacros(?:=([01]))?$} $x ma ulm]} {
@@ -91,6 +94,10 @@ close $in
 #
 set fname sqlite3.c
 if {$enable_recover} { set fname sqlite3r.c }
+# The engine without its remote client, TLS and credential code, for a native
+# build that compiles those as objects (they also carry the remote server,
+# which the amalgamation never has).
+if {$doltlite_external_remotes} { set fname doltlite_engine.c }
 set tmpfname "$fname.tmp-[pid]-[clock clicks]"
 set out [open $tmpfname {WRONLY CREAT EXCL}]
 # Force the output to use unix line endings, even on Windows.
@@ -172,13 +179,17 @@ if {$doltlite} {
 #endif
 #ifndef DOLTLITE_ENABLE_CHUNK_SOURCE
 # define DOLTLITE_ENABLE_CHUNK_SOURCE 1
-#endif
-#if DOLTLITE_ENABLE_REMOTES
+#endif}
+  if {!$doltlite_external_remotes} {
+    puts $out \
+{#if DOLTLITE_ENABLE_REMOTES
 # define DOLTLITE_AMALGAMATION_AUTH 1
 # define DOLTLITE_AUTH_CLIENT_ONLY 1
 # define DOLTLITE_HAVE_AUTH 1
-#endif
-
+#endif}
+  }
+  puts $out \
+{
 /* winsock2.h must precede SQLite's first windows.h include. */
 #ifdef _WIN32
 # include <winsock2.h>
@@ -698,7 +709,7 @@ proc emit_doltlite_storage_block {} {
 # define the unprefixed sqlite3Btree*/sqlite3Pager* entry points and call the
 # orig_* engine emitted above for ATTACH'd stock databases.
 proc emit_doltlite_engine_block {} {
-  global out srcdir seen_hdr
+  global out srcdir seen_hdr doltlite_external_remotes
   section_comment "doltlite: BEGIN prolly engine + version-control layer"
   # blake3: a single-TU amalgamation cannot pass the per-file -m{sse,avx} flags
   # the SIMD sources need, so force the portable backend (the object/release
@@ -727,6 +738,7 @@ proc emit_doltlite_engine_block {} {
     unset -nocomplain seen_hdr($hdr)
   }
   set auth_seen_before [array names seen_hdr]
+  if {!$doltlite_external_remotes} {
   puts $out "#if DOLTLITE_ENABLE_REMOTES && defined(DOLTLITE_HAVE_AUTH)"
   puts $out "#if defined(__clang__)"
   puts $out "#pragma clang diagnostic push"
@@ -824,6 +836,7 @@ proc emit_doltlite_engine_block {} {
   puts $out "#pragma GCC diagnostic pop"
   puts $out "#endif"
   puts $out "#endif"
+  }
   foreach hdr [array names seen_hdr] {
     if {[lsearch -exact $auth_seen_before $hdr]<0} {
       unset seen_hdr($hdr)
@@ -866,10 +879,13 @@ proc emit_doltlite_engine_block {} {
     doltlite_dbpage.c doltlite_remote.c doltlite_remote_sql.c
     doltlite_http_remote.c
   }
+  set doltlite_remote_sources {
+    doltlite_remote.c doltlite_remote_sql.c doltlite_http_remote.c
+  }
   foreach f $doltlite_emitted {
-    if {$f ni {doltlite_creds.c doltlite_tls.c}} {
-      copy_file $srcdir/$f
-    }
+    if {$f in {doltlite_creds.c doltlite_tls.c}} continue
+    if {$doltlite_external_remotes && $f in $doltlite_remote_sources} continue
+    copy_file $srcdir/$f
   }
   set doltlite_unemitted {}
   foreach path [lsort [concat \
