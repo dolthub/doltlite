@@ -11704,9 +11704,12 @@ static void run_compacted_noop_commit(void){
     check("compacted_noop_seed", execSql(db,
         "INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-Am','base');"
         "SELECT dolt_branch('other')")==SQLITE_OK);
+    check("compacted_noop_close", sqlite3_close(db)==SQLITE_OK);
+    db = 0;
     sqlite3_snprintf(sizeof(branch), branch, "%s/other", path);
     check("compacted_noop_peer_open", open_db(branch, &peer)==SQLITE_OK);
     check("compacted_noop_gc", execSql(peer, "SELECT dolt_gc()")==SQLITE_OK);
+    check("compacted_noop_reopen", open_db(path, &db)==SQLITE_OK);
     check("compacted_noop_read", execSql(db,
         "BEGIN; SELECT * FROM t")==SQLITE_OK);
     check("compacted_noop_no_wal", doltliteGetChunkStore(db)->wal.nWalData==0);
