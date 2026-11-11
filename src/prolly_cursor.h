@@ -30,6 +30,7 @@ struct ProllyCursor {
   u8 bDropScan;
   u8 bScanFromStart;
   u8 bWriteScan;
+  u8 nFarSeek;
 
   int iLevel;
   ProllyCursorLevel aLevel[PROLLY_CURSOR_MAX_DEPTH];

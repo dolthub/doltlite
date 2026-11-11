@@ -515,6 +515,8 @@ int prollyCursorPrev(ProllyCursor *cur){
   return SQLITE_OK;
 }
 
+#define PROLLY_CURSOR_FAR_SEEKS 3
+
 static ProllyCacheEntry *cursorCurrentLeaf(ProllyCursor *cur){
   if( cur->eState!=PROLLY_CURSOR_VALID
    || !cur->aLevel[0].pEntry
@@ -577,10 +579,17 @@ int prollyCursorSeekBlob(ProllyCursor *cur,
   int leafRes;
   int leafIdx;
   ProllyStats *pStats;
+  ProllyCacheEntry *pPrevLeaf;
 
   pStats = cur->pCache ? cur->pCache->pStats : 0;
   pEntry = cursorCurrentLeaf(cur);
-  if( pEntry && pEntry->node.nItems>0 ){
+  pPrevLeaf = pEntry;
+  /* Probing the current leaf costs a scattered seek up to four wasted
+  ** comparisons, so it is skipped while recent seeks keep changing leaf.
+  ** A tree of a few leaves is exempt: there even a random key often falls
+  ** in the current one. */
+  if( pEntry && pEntry->node.nItems>0
+   && (cur->iLevel<2 || cur->nFarSeek<PROLLY_CURSOR_FAR_SEEKS) ){
     const u8 *pBound;
     int nBound;
     leafIdx = cur->aLevel[cur->iLevel].idx;
@@ -634,6 +643,11 @@ int prollyCursorSeekBlob(ProllyCursor *cur,
     cur->eState = PROLLY_CURSOR_EOF;
     *pRes = -1;
     return SQLITE_OK;
+  }
+  if( pEntry==pPrevLeaf ){
+    cur->nFarSeek = 0;
+  }else if( pPrevLeaf && cur->nFarSeek<PROLLY_CURSOR_FAR_SEEKS ){
+    cur->nFarSeek++;
   }
   leafIdx = prollyNodeSearchBlob(&pEntry->node, pKey, nKey, &leafRes,
                                 cur->pCache->pStats);
