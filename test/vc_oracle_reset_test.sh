@@ -500,6 +500,19 @@ SELECT dolt_add('-A');
 SELECT dolt_reset('nope', 'nope2');
 "
 
+oracle "reset_ref_and_table_unstages_all" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+INSERT INTO a VALUES (1, 10);
+SELECT dolt_commit('-am', 'c2');
+INSERT INTO a VALUES (2, 20);
+INSERT INTO b VALUES (2, 200);
+SELECT dolt_add('-A');
+SELECT dolt_reset('HEAD~1', 'a');
+"
+
 echo "--- NULL arguments count toward the positional arity ---"
 
 NULL_RESET_SEED="

@@ -106,6 +106,16 @@ run_test "multipath_reset_all_missing_unstages_all" \
   "SELECT count(*) FROM dolt_status WHERE staged=1;" \
   "0" "$DB3C"
 
+DB3D=/tmp/test_reset3d_$$.db; rm -f "$DB3D"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY); CREATE TABLE u(id INTEGER PRIMARY KEY); SELECT dolt_commit('-Am','c1'); INSERT INTO t VALUES(1); SELECT dolt_commit('-am','c2'); INSERT INTO t VALUES(2); INSERT INTO u VALUES(2); SELECT dolt_add('.'); SELECT dolt_reset('HEAD~1','t');" | $DOLTLITE "$DB3D" > /dev/null 2>&1
+run_test "ref_and_table_reset_unstages_all" \
+  "SELECT table_name || '|' || staged || '|' || status FROM dolt_status ORDER BY 1; SELECT count(*) FROM dolt_log; SELECT count(*) FROM t;" \
+  "t|0|modified
+u|0|modified
+3
+2" "$DB3D"
+rm -f "$DB3D"
+
 DB3DOT=/tmp/test_reset3dot_$$.db; rm -f "$DB3DOT"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY); CREATE TABLE u(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); INSERT INTO u VALUES(2); SELECT dolt_commit('-Am','init'); INSERT INTO t VALUES(3); INSERT INTO u VALUES(4); SELECT dolt_add('.'); SELECT dolt_reset('.');" | $DOLTLITE "$DB3DOT" > /dev/null 2>&1
 run_test "dot_reset_clears_every_stage" \

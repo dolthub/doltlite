@@ -723,6 +723,8 @@ static void doltliteResetFunc(
         continue;
       }else if( isHard || isSoft ){
         zRef = arg;
+      }else if( args.nPositional>1 ){
+        azPaths[nPaths++] = arg;
       }else{
         ProllyHash probe;
         rc = resetNameIsTablePath(context, db, cs, arg, &isTable);
