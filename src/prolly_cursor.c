@@ -612,8 +612,21 @@ int prollyCursorSeekBlob(ProllyCursor *cur,
     }
   }
 
-  rc = initCursorAtRoot(cur, &pEntry);
-  if( rc!=SQLITE_OK ) return rc;
+  if( cursorCurrentLeaf(cur) ){
+    int i;
+    for(i=1; i<=cur->iLevel; i++){
+      prollyCacheRelease(cur->pCache, cur->aLevel[i].pEntry);
+      cur->aLevel[i].pEntry = 0;
+      cur->aLevel[i].idx = 0;
+    }
+    cur->iLevel = 0;
+    cur->aLevel[0].idx = 0;
+    cur->eState = PROLLY_CURSOR_INVALID;
+    pEntry = cur->aLevel[0].pEntry;
+  }else{
+    rc = initCursorAtRoot(cur, &pEntry);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   if( cur->eState==PROLLY_CURSOR_EOF ){
     cur->eState = PROLLY_CURSOR_INVALID;
     *pRes = -1;
