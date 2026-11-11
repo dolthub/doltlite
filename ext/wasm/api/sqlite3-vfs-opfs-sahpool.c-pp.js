@@ -67,6 +67,21 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
   const initPromises = Object.create(null) /* cache of (name:result) of VFS init results */;
   const capi = sqlite3.capi;
   const util = sqlite3.util;
+  const isDoltliteDbHeader = (bytes)=>{
+//#if DOLTLITE_PROLLY
+    return bytes.byteLength>=4 && bytes[0]===67 && bytes[1]===84
+      && bytes[2]===76 && bytes[3]===68;
+//#else
+    return false;
+//#/if
+  };
+  const affirmImportSize = (n, isDoltlite)=>{
+    if(isDoltlite){
+      if(n<168) toss("Input size",n,"is not correct for a DoltLite database.");
+    }else if(n<512 || n%512!==0){
+      toss("Input size",n,"is not correct for an SQLite database.");
+    }
+  };
   const wasm = sqlite3.wasm;
   // Config opts for the VFS...
   const SECTOR_SIZE = 4096;
@@ -1108,12 +1123,13 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
             || this.nextAvailableSAH()
             || toss("No available handles to import to.");
       sah.truncate(0);
-      let nWrote = 0, chunk, checkedHeader = false, err = false;
+      let nWrote = 0, chunk, checkedHeader = false, isDoltlite = false;
       try{
         while( undefined !== (chunk = await callback()) ){
           if(chunk instanceof ArrayBuffer) chunk = new Uint8Array(chunk);
           if( !checkedHeader && 0===nWrote && chunk.byteLength>=15 ){
-            util.affirmDbHeader(chunk);
+            isDoltlite = isDoltliteDbHeader(chunk);
+            if(!isDoltlite) util.affirmDbHeader(chunk);
             checkedHeader = true;
           }
           const n = sah.write(chunk, {at: HEADER_OFFSET_DATA + nWrote});
@@ -1123,17 +1139,19 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
           }
           nWrote += chunk.byteLength;
         }
-        if( nWrote < 512 || 0!==nWrote % 512 ){
-          toss("Input size",nWrote,"is not correct for an SQLite database.");
-        }
+        let header;
         if( !checkedHeader ){
-          const header = new Uint8Array(20);
+          header = new Uint8Array(20);
           sah.read( header, {at: HEADER_OFFSET_DATA} );
-          util.affirmDbHeader( header );
+          isDoltlite = isDoltliteDbHeader(header);
         }
-        sah.write(new Uint8Array([1,1]), {
-          at: HEADER_OFFSET_DATA + 18
-        }/*force db out of WAL mode*/);
+        affirmImportSize(nWrote,isDoltlite);
+        if(!checkedHeader && !isDoltlite) util.affirmDbHeader(header);
+        if(!isDoltlite){
+          sah.write(new Uint8Array([1,1]), {
+            at: HEADER_OFFSET_DATA + 18
+          }/*force db out of WAL mode*/);
+        }
       }catch(e){
         this.setClientPath(sah, '', 0);
         throw e;
@@ -1146,7 +1164,9 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
     importDb(name, bytes){
       if( bytes instanceof ArrayBuffer ) bytes = new Uint8Array(bytes);
       else if( bytes instanceof Function ) return this.importDbChunked(name, bytes);
-      util.affirmIsDb(bytes);
+      const isDoltlite = isDoltliteDbHeader(bytes);
+      if(isDoltlite) affirmImportSize(bytes.byteLength,true);
+      else util.affirmIsDb(bytes);
       const sah = this.#mapFilenameToSAH.get(name)
             || this.nextAvailableSAH()
             || toss("No available handles to import to.");
@@ -1159,8 +1179,10 @@ sqlite3ApiBootstrap.initializers.push(function(sqlite3){
         sah.truncate(HEADER_OFFSET_DATA + n
                      /* Ensure no trailing junk when overwriting an
                         existing file with a shorter one. */);
-        sah.write(new Uint8Array([1,1]), {at: HEADER_OFFSET_DATA+18}
-                   /* force db out of WAL mode */);
+        if(!isDoltlite){
+          sah.write(new Uint8Array([1,1]), {at: HEADER_OFFSET_DATA+18}
+                     /* force db out of WAL mode */);
+        }
         this.setClientPath(sah, name, capi.SQLITE_OPEN_MAIN_DB);
       }
       return nWrote;
