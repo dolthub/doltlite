@@ -83,11 +83,13 @@ rm -f "$DB"
 DB=/tmp/test_docs2_$$.db
 rm -f "$DB"
 
-run_test "zero_row_write_materializes" \
+run_test "zero_row_write_stays_lazy" \
   "DELETE FROM dolt_docs WHERE doc_name='nope';
-   SELECT table_name, status FROM dolt_status;
+   SELECT count(*) FROM dolt_status;
+   SELECT count(*) FROM sqlite_master WHERE name='dolt_docs';
    SELECT doc_name FROM dolt_docs;" \
-  "dolt_docs|new table
+  "0
+0
 AGENT.md" "$DB"
 
 rm -f "$DB"

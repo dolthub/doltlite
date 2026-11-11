@@ -87,6 +87,34 @@ echo ""
 
 echo "--- lazy table and writes ---"
 
+for table in dolt_docs dolt_tests dolt_ignore dolt_nonlocal_tables; do
+  case "$table" in
+    dolt_docs) key=doc_name; assignment="doc_text='changed'"; values="'new','inserted'" ;;
+    dolt_tests) key=test_name; assignment="test_group='changed'"; values="'new','group','SELECT 1','expected_rows','==','1'" ;;
+    dolt_ignore) key=pattern; assignment="ignored=1"; values="'new',1" ;;
+    dolt_nonlocal_tables) key=table_name; assignment="options='immediate'"; values="'new',NULL,'target','immediate'" ;;
+  esac
+  for operation in delete update insert; do
+    case "$operation" in
+      delete) setup="DELETE FROM $table WHERE $key='missing';" ;;
+      update) setup="UPDATE $table SET $assignment WHERE $key='missing';" ;;
+      insert) setup="INSERT INTO $table SELECT $values WHERE 0;" ;;
+    esac
+    oracle_query tests "lazy_${table}_${operation}" "$setup" \
+      "SELECT 'T|' || count(*) FROM dolt_status;" \
+      "SELECT concat('T|',count(*)) FROM dolt_status;"
+  done
+  oracle_query tests "lazy_${table}_write_rollback" "
+DELETE FROM $table WHERE $key='missing';
+BEGIN;
+INSERT INTO $table VALUES($values);
+ROLLBACK;
+" \
+    "SELECT 'T|' || count(*) FROM dolt_status;" \
+    "SELECT concat('T|',count(*)) FROM dolt_status;"
+done
+
+
 oracle_tests "fresh_select_empty" "SELECT * FROM dolt_tests;" "EXPECT_EMPTY"
 oracle_status "fresh_read_no_status" "SELECT * FROM dolt_tests;" "EXPECT_EMPTY"
 
@@ -94,9 +122,9 @@ oracle_tests "insert_materializes" "
 INSERT INTO dolt_tests VALUES ('row_count', 'basic', 'SELECT 1', 'expected_rows', '==', '1');
 "
 
-oracle_status "zero_row_delete_materializes" "
+oracle_status "zero_row_delete_stays_lazy" "
 DELETE FROM dolt_tests WHERE test_name='missing';
-"
+" "EXPECT_EMPTY"
 
 oracle_query tests "rollback_first_write" "
 BEGIN;
@@ -108,7 +136,7 @@ ROLLBACK;
   "SELECT concat('T|', (SELECT count(*) FROM dolt_tests), '|',
       (SELECT count(*) FROM dolt_status WHERE table_name='dolt_tests'));"
 
-oracle_query tests "rollback_after_zero_row_materialization" "
+oracle_query tests "rollback_after_zero_row_write" "
 DELETE FROM dolt_tests WHERE test_name='missing';
 BEGIN;
 INSERT INTO dolt_tests VALUES ('rolled',NULL,'SELECT 1','expected_rows','==','1');

@@ -155,11 +155,11 @@ INSERT INTO dolt_docs VALUES ('README.md', '# my project');
 
 oracle_status "status_new_table_zero_row_delete" "
 DELETE FROM dolt_docs WHERE doc_name = 'nope';
-"
+" "EXPECT_EMPTY"
 
 oracle_status "status_new_table_zero_row_update" "
 UPDATE dolt_docs SET doc_text = 'x' WHERE doc_name = 'nope';
-"
+" "EXPECT_EMPTY"
 
 echo "--- row operations ---"
 

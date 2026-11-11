@@ -69,10 +69,6 @@ static int testsMaterialize(TestsVtab *p){
   return doltliteLazyCreateTable(&p->base, p->db, "dolt_tests", zTestsCreate);
 }
 
-static int testsBegin(sqlite3_vtab *pBase){
-  return testsMaterialize((TestsVtab*)pBase);
-}
-
 static int testsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
                        sqlite3_int64 *pRowid){
   TestsVtab *p = (TestsVtab*)pBase;
@@ -108,7 +104,7 @@ static sqlite3_module doltliteTestsModule = {
   0, 0, testsConnect, doltliteVtabBestIndexEmpty, doltliteVtabDisconnect, 0,
   testsOpen, doltliteVtabClose, doltliteVtabEmptyFilter, doltliteVtabEmptyNext,
   doltliteVtabEofAlways, doltliteVtabEmptyColumn, doltliteVtabZeroRowid,
-  testsUpdate, testsBegin, 0, 0, 0, 0, 0, 0, 0, 0, 0
+  testsUpdate, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
 typedef struct TestDef TestDef;
