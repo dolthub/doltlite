@@ -259,12 +259,12 @@ rm -f "$DB" "$CONTROL_FILE"
 DB=/tmp/test_dolt_tests_zero_$$.db
 rm -f "$DB"
 
-run_test "zero_row_write_materializes" \
+run_test "zero_row_write_stays_lazy" \
   "DELETE FROM dolt_tests WHERE test_name='missing';
-   SELECT table_name, status FROM dolt_status;
+   SELECT count(*) FROM dolt_status;
    SELECT count(*) FROM sqlite_master WHERE name='dolt_tests';" \
-  "dolt_tests|new table
-1" "$DB"
+  "0
+0" "$DB"
 
 rm -f "$DB"
 DB=/tmp/test_dolt_tests_txn_$$.db

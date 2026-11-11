@@ -153,6 +153,63 @@ do_execsql_test lazy-system-ordinary-resolution {
   SELECT v FROM aux.ordinary;
 } {aux main temp main aux}
 
+foreach {table key assignment values} {
+  dolt_docs doc_name {doc_text='changed'} {'new','inserted'}
+  dolt_tests test_name {test_group='changed'}
+    {'new','group','SELECT 1','expected_rows','==','1'}
+  dolt_ignore pattern {ignored=1} {'new',1}
+  dolt_nonlocal_tables table_name {options='immediate'}
+    {'new',NULL,'target','immediate'}
+} {
+  foreach mode {autocommit transaction savepoint} {
+    foreach operation {delete update insert replace} {
+      reset_db
+      set before [execsql {SELECT dolt_hashof_catalog('WORKING')}]
+      if {$mode eq "transaction"} {execsql BEGIN}
+      if {$mode eq "savepoint"} {execsql {SAVEPOINT caller}}
+      switch $operation {
+        delete {set sql "DELETE FROM $table WHERE $key='missing'"}
+        update {set sql "UPDATE $table SET $assignment WHERE $key='missing'"}
+        insert {set sql "INSERT INTO $table SELECT $values WHERE 0"}
+        replace {set sql "REPLACE INTO $table SELECT $values WHERE 0"}
+      }
+      set name lazy-no-row-$table-$mode-$operation
+      do_execsql_test $name-execute $sql {}
+      do_execsql_test $name-catalog "
+        SELECT count(*) FROM main.sqlite_schema WHERE name='$table';
+        SELECT count(*) FROM dolt_status;
+        SELECT dolt_hashof_catalog('WORKING');
+      " [list 0 0 $before]
+      if {$mode eq "autocommit"} {
+        do_execsql_test $name-insert "INSERT INTO $table VALUES($values)" {}
+        do_execsql_test $name-created "
+          SELECT count(*) FROM main.sqlite_schema WHERE name='$table';
+          SELECT $key FROM $table WHERE $key='new';
+        " {1 new}
+      } else {
+        do_execsql_test $name-insert "INSERT INTO $table VALUES($values)" {}
+        if {$mode eq "transaction"} {
+          execsql ROLLBACK
+        } else {
+          execsql {ROLLBACK TO caller; RELEASE caller}
+        }
+        do_execsql_test $name-rollback "
+          SELECT count(*) FROM main.sqlite_schema WHERE name='$table';
+          SELECT count(*) FROM dolt_status;
+        " {0 0}
+      }
+      db close
+      sqlite3 db test.db
+      set expected 1
+      if {$mode ne "autocommit"} {set expected 0}
+      do_execsql_test $name-reopen "
+        SELECT count(*) FROM main.sqlite_schema WHERE name='$table';
+        PRAGMA integrity_check;
+      " [list $expected ok]
+    }
+  }
+}
+
 db close
 forcedelete lazy-system-aux.db
 finish_test

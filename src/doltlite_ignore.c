@@ -401,10 +401,6 @@ static int ignoreMaterialize(IgnoreVtab *p){
   return doltliteLazyCreateTable(&p->base, p->db, "dolt_ignore", zIgnoreCreate);
 }
 
-static int ignoreBegin(sqlite3_vtab *pBase){
-  return ignoreMaterialize((IgnoreVtab*)pBase);
-}
-
 
 
 static const char *ignoreInsertSql(sqlite3 *db){
@@ -438,7 +434,7 @@ static sqlite3_module doltliteIgnoreModule = {
   0, 0, ignoreConnect, doltliteVtabBestIndexEmpty, doltliteVtabDisconnect, 0,
   ignoreOpen, doltliteVtabClose, doltliteVtabEmptyFilter, doltliteVtabEmptyNext,
   doltliteVtabEofAlways, doltliteVtabEmptyColumn, doltliteVtabZeroRowid,
-  ignoreUpdate, ignoreBegin, 0, 0, 0, 0, 0, 0, 0, 0, 0
+  ignoreUpdate, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
 int doltliteVtabSkipIgnored(

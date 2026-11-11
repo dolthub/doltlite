@@ -256,10 +256,6 @@ static int docsMaterialize(DocsVtab *p){
   return docsSeedAgent(p);
 }
 
-static int docsBegin(sqlite3_vtab *pBase){
-  return docsMaterialize((DocsVtab*)pBase);
-}
-
 static const char *docsInsertSql(sqlite3 *db){
   return doltliteVtabOnConflictOr(db,
       "INSERT OR REPLACE INTO main.dolt_docs(doc_name, doc_text) VALUES(?1, ?2)",
@@ -291,7 +287,7 @@ static sqlite3_module doltliteDocsModule = {
   0, 0, docsConnect, docsBestIndex, doltliteVtabDisconnect, 0,
   docsOpen, docsClose, docsFilter, docsNext, docsEof,
   docsColumn, doltliteVtabZeroRowid,
-  docsUpdate, docsBegin, 0, 0, 0, 0, 0, 0, 0, 0, 0
+  docsUpdate, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
 int doltliteDocsRegister(sqlite3 *db){

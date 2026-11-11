@@ -859,10 +859,6 @@ static int nonlocalMaterialize(NonlocalVtab *p){
                                  zNonlocalCreate);
 }
 
-static int nonlocalBegin(sqlite3_vtab *pBase){
-  return nonlocalMaterialize((NonlocalVtab*)pBase);
-}
-
 static int nonlocalUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
                           sqlite3_int64 *pRowid){
   NonlocalVtab *p = (NonlocalVtab*)pBase;
@@ -898,7 +894,7 @@ static sqlite3_module doltliteNonlocalModule = {
   0, 0, nonlocalConnect, doltliteVtabBestIndexEmpty, doltliteVtabDisconnect, 0,
   nonlocalOpen, doltliteVtabClose, doltliteVtabEmptyFilter,
   doltliteVtabEmptyNext, doltliteVtabEofAlways, doltliteVtabEmptyColumn,
-  doltliteVtabZeroRowid, nonlocalUpdate, nonlocalBegin,
+  doltliteVtabZeroRowid, nonlocalUpdate, 0,
   0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 

@@ -1243,8 +1243,8 @@ FuncDef *sqlite3VtabOverloadFunction(
 
 #ifdef DOLTLITE_PROLLY
 /*
-** dolt_tests, dolt_ignore, and dolt_docs CREATE their backing table from
-** xBegin. That CREATE runs after OP_Transaction and before the row write.
+** Lazy system tables CREATE their backing table from xUpdate. That CREATE
+** runs after OP_Transaction and before the row write.
 ** The statement journal has to be open already, so a failed write rolls
 ** the CREATE back with the statement.
 */
