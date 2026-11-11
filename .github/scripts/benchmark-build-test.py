@@ -54,7 +54,7 @@ def main():
                                     env=dict(env, FAIL_COMMAND=fail, WARN_COMMAND=warning), capture_output=True, text=True)
             assert result.returncode == (42 if fail else 1 if warning else 0), result
             commands = log.read_text().splitlines()
-            expected = ["configure ", "make -j2 DOLTLITE_LTO=1 doltlite doltlite-lib", "cc -O2 -Werror -I. -I../src -o bench_timer_doltlite ../test/sysbench_timer.c libdoltlite.a -lpthread -lz -lm"]
+            expected = ["configure ", "make -j2 doltlite doltlite-lib", "cc -O2 -Werror -I. -I../src -o bench_timer_doltlite ../test/sysbench_timer.c libdoltlite.a -lpthread -lz -lm"]
             if fail:
                 expected = expected[:["configure", "make", "cc"].index(fail) + 1]
             assert commands == expected, commands
@@ -62,7 +62,7 @@ def main():
                 assert "warning: injected warning" in (root / "source/build/build.log").read_text()
             checks += 1
         shutil.copytree(root / "source/build", root / "benchmark-baseline")
-        valid_log = "make -j2 DOLTLITE_LTO=1 doltlite doltlite-lib\n"
+        valid_log = "make -j2 doltlite doltlite-lib\n"
         base = root / "benchmark-baseline"
         for bad in ("", "warning", "log", "binary", "permission"):
             (base / "build.log").write_text(valid_log)
