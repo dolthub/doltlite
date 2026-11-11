@@ -1283,7 +1283,9 @@ static int replaceBatchLeafNoRechunk(
   ProllyMutMapIter *pIter,
   int isLast,
   ProllyHash *pHash,
-  int *pChanged
+  int *pChanged,
+  u8 **ppData,
+  int *pnData
 ){
   ProllyNodeBuilder b;
   int rc = SQLITE_OK;
@@ -1292,8 +1294,11 @@ static int replaceBatchLeafNoRechunk(
   int i;
 
   rc = tryReplaceBatchLeafDirect(pMut, pLeaf, pIter, isLast,
-                                 pHash, pChanged, 0);
-  if( rc!=SQLITE_NOTFOUND ) return rc;
+                                 pHash, pChanged, ppData);
+  if( rc!=SQLITE_NOTFOUND ){
+    if( ppData && *ppData ) *pnData = pLeaf->nData;
+    return rc;
+  }
 
   prollyNodeBuilderInit(&b, 0, pMut->flags);
   for(i=0; i<(int)pLeaf->nItems; i++){
@@ -1337,7 +1342,24 @@ static int replaceBatchLeafNoRechunk(
     return SQLITE_NOTFOUND;
   }
 
-  if( changed ){
+  if( changed && ppData ){
+    u8 *pData = 0;
+    int nData = 0;
+    rc = prollyNodeBuilderFinish(&b, &pData, &nData);
+    if( rc==SQLITE_OK && sizeChanged ){
+      ProllyNode node;
+      rc = prollyNodeParse(&node, pData, nData);
+      if( rc==SQLITE_OK && !nodeHasSameChunkShape(&node, !isLast) ){
+        rc = SQLITE_NOTFOUND;
+      }
+    }
+    if( rc==SQLITE_OK ){
+      *ppData = pData;
+      *pnData = nData;
+    }else{
+      sqlite3_free(pData);
+    }
+  }else if( changed ){
     if( sizeChanged ){
       /* A length-changing replacement may move chunk boundaries. Validate and
       ** rechunk if they moved; history independence forbids freezing the old shape. */
@@ -1352,6 +1374,48 @@ static int replaceBatchLeafNoRechunk(
   return SQLITE_OK;
 }
 
+#define REPLACE_BATCH_HELD 16
+
+typedef struct ReplaceHeldLeaf ReplaceHeldLeaf;
+struct ReplaceHeldLeaf {
+  u8 *pData;
+  int nData;
+  int iHash;
+};
+
+static void freeHeldLeaves(ReplaceHeldLeaf *a, int n){
+  int i;
+  for(i=0; i<n; i++) sqlite3_free(a[i].pData);
+}
+
+/* Hash the held leaves as one SIMD batch, stage them in order, and patch
+** each hash into its slot of the parent image. */
+static int writeHeldLeaves(
+  ChunkStore *pStore,
+  ReplaceHeldLeaf *a,
+  int n,
+  u8 *pParent
+){
+  const u8 *apData[REPLACE_BATCH_HELD];
+  int anData[REPLACE_BATCH_HELD];
+  ProllyHash aHash[REPLACE_BATCH_HELD];
+  int rc = SQLITE_OK;
+  int i;
+  for(i=0; i<n; i++){
+    apData[i] = a[i].pData;
+    anData[i] = a[i].nData;
+  }
+  if( n>0 ) prollyHashComputeMany(apData, anData, n, aHash);
+  for(i=0; i<n && rc==SQLITE_OK; i++){
+    rc = chunkStorePutHashed(pStore, a[i].pData, a[i].nData, &aHash[i]);
+    if( rc==SQLITE_OK ){
+      memcpy(pParent + a[i].iHash, aHash[i].data, PROLLY_HASH_SIZE);
+    }
+  }
+  freeHeldLeaves(a, n);
+  return rc;
+}
+
 static int replaceBatchNodeNoRechunk(
   ProllyMutator *pMut,
   const ProllyNode *pNode,
@@ -1361,6 +1425,8 @@ static int replaceBatchNodeNoRechunk(
   int *pChanged
 ){
   ProllyNodeBuilder b;
+  ReplaceHeldLeaf aHeld[REPLACE_BATCH_HELD];
+  int nHeld = 0;
   u8 *pData;
   int rc = SQLITE_OK;
   int changed = 0;
@@ -1368,7 +1434,7 @@ static int replaceBatchNodeNoRechunk(
 
   if( pNode->level==0 ){
     return replaceBatchLeafNoRechunk(pMut, pNode, pIter, isLast,
-                                     pHash, pChanged);
+                                     pHash, pChanged, 0, 0);
   }
 
   prollyNodeBuilderInit(&b, pNode->level, pMut->flags);
@@ -1388,10 +1454,14 @@ static int replaceBatchNodeNoRechunk(
     ProllyHash newChildHash;
     u64 childCount = 0;
     int childChanged = 0;
+    u8 *pLeafData = 0;
+    int nLeafData = 0;
+    int bHold = pData!=0 && pNode->level==1;
 
     prollyNodeKey(pNode, i, &pBoundKey, &nBoundKey);
     prollyNodeValue(pNode, i, &pChildVal, &nChildVal);
     if( nChildVal!=PROLLY_HASH_SIZE ){
+      freeHeldLeaves(aHeld, nHeld);
       sqlite3_free(pData);
       prollyNodeBuilderFree(&b);
       return SQLITE_CORRUPT;
@@ -1402,6 +1472,7 @@ static int replaceBatchNodeNoRechunk(
       rc = parentChildSubtreeCount(pMut->pStore, pMut->pCache,
                                    pNode, i, &childCount);
       if( rc!=SQLITE_OK ){
+        freeHeldLeaves(aHeld, nHeld);
         sqlite3_free(pData);
         prollyNodeBuilderFree(&b);
         return rc;
@@ -1414,9 +1485,11 @@ static int replaceBatchNodeNoRechunk(
       pChildEntry = prollyCacheGetPrefix(pMut->pCache, &childHash, 0);
       rc = SQLITE_NOTFOUND;
       if( pChildEntry && pChildEntry->node.nValuePrefix ){
+        nLeafData = pChildEntry->node.nData;
         rc = tryReplaceBatchLeafDirect(pMut, &pChildEntry->node, pIter,
                                        childIsLast, &newChildHash,
-                                       &childChanged, 0);
+                                       &childChanged,
+                                       bHold ? &pLeafData : 0);
         prollyCacheRelease(pMut->pCache, pChildEntry);
         pChildEntry = 0;
       }
@@ -1428,13 +1501,35 @@ static int replaceBatchNodeNoRechunk(
           rc = SQLITE_OK;
         }
         if( rc==SQLITE_OK ){
-          rc = replaceBatchNodeNoRechunk(pMut, &pChildEntry->node, pIter,
-                                         childIsLast, &newChildHash,
-                                         &childChanged);
+          if( bHold && pChildEntry->node.level==0 ){
+            rc = replaceBatchLeafNoRechunk(pMut, &pChildEntry->node, pIter,
+                                           childIsLast, &newChildHash,
+                                           &childChanged,
+                                           &pLeafData, &nLeafData);
+          }else{
+            rc = replaceBatchNodeNoRechunk(pMut, &pChildEntry->node, pIter,
+                                           childIsLast, &newChildHash,
+                                           &childChanged);
+          }
           prollyCacheRelease(pMut->pCache, pChildEntry);
         }
       }
+      if( rc==SQLITE_OK && pLeafData ){
+        aHeld[nHeld].pData = pLeafData;
+        aHeld[nHeld].nData = nLeafData;
+        aHeld[nHeld].iHash = (int)(pChildVal - pNode->pData);
+        nHeld++;
+        pLeafData = 0;
+        if( nHeld==REPLACE_BATCH_HELD ){
+          rc = writeHeldLeaves(pMut->pStore, aHeld, nHeld, pData);
+          nHeld = 0;
+        }
+        childChanged = 0;
+        changed = 1;
+      }
       if( rc!=SQLITE_OK ){
+        sqlite3_free(pLeafData);
+        freeHeldLeaves(aHeld, nHeld);
         sqlite3_free(pData);
         prollyNodeBuilderFree(&b);
         return rc;
@@ -1461,6 +1556,14 @@ static int replaceBatchNodeNoRechunk(
     }
   }
 
+  if( nHeld ){
+    rc = writeHeldLeaves(pMut->pStore, aHeld, nHeld, pData);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(pData);
+      prollyNodeBuilderFree(&b);
+      return rc;
+    }
+  }
   if( changed ){
     if( pData ){
       rc = writeOwnedNode(pMut->pStore, 0, pData, pNode->nData, pHash);
