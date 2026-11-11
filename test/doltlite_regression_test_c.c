@@ -11690,6 +11690,51 @@ static void run_rollback_reader(void){
   }
 }
 
+static void run_compacted_noop_commit(void){
+  char path[512], branch[600];
+  int layout;
+  make_dbpath(path, sizeof(path), "compacted_noop_commit");
+  for(layout=0; layout<2; layout++){
+    sqlite3 *db = 0, *peer = 0, *fresh = 0;
+    removeDbFiles(path);
+    check("compacted_noop_open", open_db(path, &db)==SQLITE_OK);
+    check("compacted_noop_schema", execSql(db, layout
+        ? "CREATE TABLE t(id INT PRIMARY KEY,v TEXT)"
+        : "CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT)")==SQLITE_OK);
+    check("compacted_noop_seed", execSql(db,
+        "INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-Am','base');"
+        "SELECT dolt_branch('other')")==SQLITE_OK);
+    check("compacted_noop_close", sqlite3_close(db)==SQLITE_OK);
+    db = 0;
+    sqlite3_snprintf(sizeof(branch), branch, "%s/other", path);
+    check("compacted_noop_peer_open", open_db(branch, &peer)==SQLITE_OK);
+    check("compacted_noop_gc", execSql(peer, "SELECT dolt_gc()")==SQLITE_OK);
+    check("compacted_noop_reopen", open_db(path, &db)==SQLITE_OK);
+    check("compacted_noop_read", execSql(db,
+        "BEGIN; SELECT * FROM t")==SQLITE_OK);
+    check("compacted_noop_no_wal", doltliteGetChunkStore(db)->wal.nWalData==0);
+    check("compacted_noop_peer_write", execSql(peer,
+        "INSERT INTO t VALUES(2,'peer')")==SQLITE_OK);
+    check("compacted_noop_reset", execSql(db,
+        "SELECT dolt_reset('--soft')")==SQLITE_OK);
+    check("compacted_noop_next_write", execSql(peer,
+        "INSERT INTO t VALUES(3,'later')")==SQLITE_OK);
+    check("compacted_noop_next_commit", execSql(peer,
+        "SELECT dolt_commit('-am','after reset')")==SQLITE_OK);
+    check("compacted_noop_fresh_open", open_db(branch, &fresh)==SQLITE_OK);
+    check("compacted_noop_peer_kept", queryInt64(fresh,
+        "SELECT count(*) FROM t WHERE id=2 AND v='peer'")==1);
+    check("compacted_noop_rows", queryInt64(fresh, "SELECT count(*) FROM t")==3);
+    check("compacted_noop_integrity", strcmp(queryScalarText(fresh,
+        "PRAGMA integrity_check"), "ok")==0);
+    sqlite3_close(fresh);
+    execSqlSilent(db, "ROLLBACK");
+    sqlite3_close(peer);
+    sqlite3_close(db);
+    removeDbFiles(path);
+  }
+}
+
 typedef struct PublicationProbe PublicationProbe;
 struct PublicationProbe {
   sqlite3 *peer;
@@ -20696,6 +20741,7 @@ static const RegressionCase aCases[] = {
   { "nocase_nul_record_parse", "NOCASE NUL Record Parse Test", run_nocase_nul_record_parse },
   { "defer_fk_after_own_ddl", "Defer Foreign Keys After Own DDL", run_defer_fk_after_own_ddl },
   { "uri_branch_readonly_open", "Read-only URI Branch Open Test", run_uri_branch_readonly_open },
+  { "compacted_noop_commit", "Compacted No-op Commit Test", run_compacted_noop_commit },
   { "opfs_like_vfs", "OPFS-like VFS File Database Test", run_opfs_like_vfs },
   { "opfs_large_transaction", "OPFS Large Transaction Test", run_opfs_large_transaction }
 };
