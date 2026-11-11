@@ -307,6 +307,30 @@ static int nonlocalDetachUnused(sqlite3 *db, DoltliteNonlocal *p){
   return nDetached;
 }
 
+/* Dolt resolves a rule's ref to a branch without regard to case. A ref
+** that resolves to nothing as written takes the spelling of the branch
+** it matches that way; branch names are unique without regard to case. */
+static int nonlocalBranchSpelling(sqlite3 *db, NonlocalRule *r){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  const char *zFound = 0;
+  char *zNew;
+  int i;
+  if( !cs ) return SQLITE_OK;
+  for(i=0; i<cs->refs.nBranches; i++){
+    const char *z = cs->refs.aBranches[i].zName;
+    if( z && sqlite3StrICmp(z, r->zRef)==0 ){
+      zFound = z;
+      break;
+    }
+  }
+  if( !zFound ) return SQLITE_OK;
+  zNew = sqlite3_mprintf("%s", zFound);
+  if( !zNew ) return SQLITE_NOMEM;
+  sqlite3_free(r->zRef);
+  r->zRef = zNew;
+  return SQLITE_OK;
+}
+
 static int nonlocalCheckRefs(sqlite3 *db, DoltliteNonlocal *p){
   int i;
   nonlocalMissingClear(p);
@@ -319,6 +343,13 @@ static int nonlocalCheckRefs(sqlite3 *db, DoltliteNonlocal *p){
     rc = doltliteResolveRef(db, zRef, &h);
     if( rc==SQLITE_NOMEM ) return rc;
     if( rc==SQLITE_OK ) continue;
+    rc = nonlocalBranchSpelling(db, &p->aRule[i]);
+    if( rc!=SQLITE_OK ) return rc;
+    zRef = nonlocalRuleRef(p, &p->aRule[i]);
+    if( strcmp(zRef, p->zBranch)==0 || nonlocalIsMissing(p, zRef)
+     || doltliteResolveRef(db, zRef, &h)==SQLITE_OK ){
+      continue;
+    }
     az = sqlite3_realloc64(p->azMissing, sizeof(*az)*(p->nMissing+1));
     if( !az ) return SQLITE_NOMEM;
     p->azMissing = az;
