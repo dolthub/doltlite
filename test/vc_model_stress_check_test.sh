@@ -215,26 +215,45 @@ SELECT dolt_commit('-Am','m_victim');" >/dev/null
 done
 
 for key in INTEGER INT; do
-  for interrupt in 0 1; do
-    d=$(newdir "removal_diff_${key}_$interrupt" "$key")
-    "$DOLTLITE" "$d/db.db" "INSERT INTO w VALUES(100000001,'removed'),(100000002,'also removed');
+  for op in revert cherry_pick; do
+    for mode in 0 1 2 3; do
+      d=$(newdir "removal_diff_${op}_${key}_$mode" "$key")
+      "$DOLTLITE" "$d/db.db" "INSERT INTO w VALUES(100000001,'removed'),(100000002,'also removed');
 SELECT dolt_commit('-Am','inserted');" >/dev/null
-    status=0
-    out=$("$BIN" --record-removals "$d" "$interrupt" 2>&1) || status=$?
-    expected=$(printf 'D\t100000001\nD\t100000002')
-    if [ "$status" -eq 0 ] && [ "$out" = "$expected" ]; then
-      echo "ok removal_diff_with_peer_writer_${key}_$interrupt"
-    else
-      echo "FAIL removal_diff_with_peer_writer_${key}_$interrupt: status=$status $out"
-      fails=$((fails+1))
-    fi
-    printf '%s\n' $'I\t100000001\tmain\t1000\t1100' \
-      $'I\t100000002\tmain\t1200\t1300' > "$d/log.0"
-    printf '%s\n' "$out" >> "$d/log.0"
-    check "recorded_removal_excuses_only_its_rows_${key}_$interrupt" 0 "$d"
-    printf '%s\n' $'I\t100000003\tmain\t2000\t2100' >> "$d/log.0"
-    check "recorded_removal_preserves_lost_write_detection_${key}_$interrupt" 1 "$d" 1 \
-      'LOST acked id 100000003'
+      if [ "$op" = cherry_pick ]; then
+        "$DOLTLITE" "$d/db.db" "SELECT dolt_checkout('-b','remove');
+DELETE FROM w; SELECT dolt_commit('-am','removed'); SELECT dolt_checkout('main');" >/dev/null
+      fi
+      status=0
+      out=$("$BIN" --record-removals "$d" "$mode" "$op" 2>&1) || status=$?
+      expected=$(printf 'D\t100000001\nD\t100000002')
+      if [ "$mode" -eq 3 ]; then expected=; fi
+      receipts=$(printf '%s\n' "$out" | grep '^D')
+      if [ "$status" -eq 0 ] && [ "$receipts" = "$expected" ]; then
+        echo "ok removal_diff_with_peer_writer_${op}_${key}_$mode"
+      else
+        echo "FAIL removal_diff_with_peer_writer_${op}_${key}_$mode: status=$status $out"
+        fails=$((fails+1))
+      fi
+      printf '%s\n' $'I\t100000001\tmain\t1000\t1100' \
+        $'I\t100000002\tmain\t1200\t1300' > "$d/log.0"
+      printf '%s\n' "$out" >> "$d/log.0"
+      if [ "$mode" -eq 3 ]; then
+        check "failed_replay_keeps_rows_${op}_$key" 0 "$d"
+        "$DOLTLITE" "$d/db.db" "DELETE FROM w;
+SELECT dolt_commit('-am','deleted');" >/dev/null
+        if [ "$op" = cherry_pick ]; then
+          "$DOLTLITE" "$d/db.db" "SELECT dolt_branch('-D','remove');" >/dev/null
+        fi
+        check "failed_replay_has_no_removal_receipt_${op}_$key" 2 "$d" 1 \
+          'LOST acked id 100000001'
+      else
+        check "recorded_removal_excuses_only_its_rows_${op}_${key}_$mode" 0 "$d"
+        printf '%s\n' $'I\t100000003\tmain\t2000\t2100' >> "$d/log.0"
+        check "recorded_removal_preserves_lost_write_detection_${op}_${key}_$mode" 1 "$d" 1 \
+          'LOST acked id 100000003'
+      fi
+    done
   done
 done
 

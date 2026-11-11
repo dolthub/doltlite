@@ -429,38 +429,79 @@ static int vc(Conn *c, const char *zOp, const char *zSql, int flags, const char 
   return rc;
 }
 
-static void logRemoved(void){
-  char sql[700], h[sizeof(gRes)], path[900];
-  sqlite3 *reader = 0;
+typedef struct RemovedRows {
+  sqlite3_int64 *aId;
+  int nId;
+  int nAlloc;
+  char hash[sizeof(gRes)];
+} RemovedRows;
+
+static void collectRemoved(sqlite3 *reader, RemovedRows *p){
+  char sql[700];
   sqlite3_stmt *st = 0;
   int rc;
-  snprintf(h, sizeof(h), "%s", gRes);
-  if( strlen(h)<20 ){
-    logf_("COLLECT_ERROR\tno commit hash for removal diff: %s", h);
+  snprintf(p->hash, sizeof(p->hash), "%s", gRes);
+  if( strlen(p->hash)<20 ){
+    logf_("COLLECT_ERROR\tno commit hash for removal diff: %s", p->hash);
     _exit(11);
   }
-  snprintf(path, sizeof(path), "%s@%s", zDb, h);
-  snprintf(sql, sizeof(sql), "SELECT from_id FROM dolt_diff_w('%s~1','%s') WHERE diff_type='removed'", h, h);
+  snprintf(sql, sizeof(sql), "SELECT from_id FROM dolt_diff_w('%s~1','%s') WHERE diff_type='removed'", p->hash, p->hash);
   alarm(gStmtWedgeSec);
-  rc = sqlite3_open_v2(path, &reader, SQLITE_OPEN_READONLY, 0);
-  if( rc==SQLITE_OK ){
-    sqlite3_busy_timeout(reader, 5000);
-    rc = sqlite3_prepare_v2(reader, sql, -1, &st, 0);
-  }
+  rc = sqlite3_prepare_v2(reader, sql, -1, &st, 0);
   if( rc==SQLITE_OK ){
     while( (rc = sqlite3_step(st))==SQLITE_ROW ){
-      logf_("D\t%lld", sqlite3_column_int64(st, 0));
-      tripRemove(sqlite3_column_int64(st, 0));
+      if( p->nId==p->nAlloc ){
+        int nAlloc = p->nAlloc ? p->nAlloc*2 : 16;
+        sqlite3_int64 *aId = sqlite3_realloc64(p->aId,
+            (sqlite3_uint64)nAlloc*sizeof(*aId));
+        if( !aId ){
+          rc = SQLITE_NOMEM;
+          break;
+        }
+        p->aId = aId;
+        p->nAlloc = nAlloc;
+      }
+      p->aId[p->nId++] = sqlite3_column_int64(st, 0);
     }
   }
   alarm(0);
   if( rc!=SQLITE_DONE ){
-    logf_("COLLECT_ERROR\tremoval diff %s: rc=%d %s", h, rc,
-          reader ? sqlite3_errmsg(reader) : "open failed");
+    logf_("COLLECT_ERROR\tremoval diff %s: rc=%d %s", p->hash, rc,
+          sqlite3_errmsg(reader));
   }
   sqlite3_finalize(st);
-  sqlite3_close(reader);
   if( rc!=SQLITE_DONE ) _exit(11);
+}
+
+static int replay(Conn *c, const char *zOp, const char *zSql, RemovedRows *p){
+  int ownTxn = sqlite3_get_autocommit(c->db);
+  int rc;
+  memset(p, 0, sizeof(*p));
+  if( ownTxn ){
+    rc = ex(c, "begin_replay", "BEGIN IMMEDIATE");
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  rc = vc(c, zOp, zSql, 0, 0);
+  if( rc==SQLITE_OK ) collectRemoved(c->db, p);
+  if( ownTxn ){
+    if( rc==SQLITE_OK ) rc = ex(c, "commit_replay", "COMMIT");
+    if( !sqlite3_get_autocommit(c->db) ) ex(c, "rollback_replay", "ROLLBACK");
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(p->aId);
+    memset(p, 0, sizeof(*p));
+  }
+  return rc;
+}
+
+static void logRemoved(RemovedRows *p){
+  int i;
+  for(i=0; i<p->nId; i++){
+    logf_("D\t%lld", p->aId[i]);
+    tripRemove(p->aId[i]);
+  }
+  sqlite3_free(p->aId);
+  memset(p, 0, sizeof(*p));
 }
 
 static const char *otherBranch(void){ return azBr[rn(4)]; }
@@ -614,6 +655,7 @@ abort:
 
 static void opVc(Conn *c){
   char sql[512], br[128];
+  RemovedRows removed;
   int k = rn(100);
   curBranch(c, br, sizeof(br));
   if( k<10 ){
@@ -631,11 +673,11 @@ static void opVc(Conn *c){
     if( !c->inTxn && rn(2) ){ opCommit(c); staleProbe(c, "commit"); }
     if( getenv("VCMODEL_NO_CP") ) return;
     snprintf(sql, sizeof(sql), "SELECT dolt_cherry_pick('%s')", otherBranch());
-    if( vc(c, "cherry_pick", sql, 0, 0)==SQLITE_OK ) logRemoved();
+    if( replay(c, "cherry_pick", sql, &removed)==SQLITE_OK ) logRemoved(&removed);
   }else if( k<41 ){
     if( !c->inTxn && rn(2) ){ opCommit(c); staleProbe(c, "commit"); }
     if( getenv("VCMODEL_NO_REVERT") ) return;
-    if( vc(c, "revert", "SELECT dolt_revert('HEAD')", 0, 0)==SQLITE_OK ) logRemoved();
+    if( replay(c, "revert", "SELECT dolt_revert('HEAD')", &removed)==SQLITE_OK ) logRemoved(&removed);
   }else if( k<46 ){
     vc(c, "reset_soft", "SELECT dolt_reset('--soft')", 0, 0);
   }else if( k<50 ){
@@ -1535,6 +1577,13 @@ static void buildDb(void){
   sqlite3_close(db);
 }
 
+static int denyReplayCommit(void *p, int op, const char *a, const char *b,
+                            const char *c, const char *d){
+  (void)p; (void)b; (void)c; (void)d;
+  return op==SQLITE_TRANSACTION && !strcmp(a, "COMMIT")
+      ? SQLITE_DENY : SQLITE_OK;
+}
+
 static int interruptCollector(void *p){
   (void)p;
   return 1;
@@ -1566,17 +1615,32 @@ int main(int argc, char **argv){
     checkModel(99);
     return nViol!=0;
   }
-  if( !strcmp(argv[1], "--record-removals") && argc==4 ){
-    Conn c;
+  if( !strcmp(argv[1], "--record-removals") && (argc==4 || argc==5) ){
+    Conn *c = &aC[0];
+    RemovedRows removed;
     int up[2], down[2], rc, childStatus = 0;
+    int mode = atoi(argv[3]);
+    int cherryPick = argc==5 && !strcmp(argv[4], "cherry_pick");
     pid_t child;
     char ready = 'x';
-    memset(&c, 0, sizeof(c));
+    memset(c, 0, sizeof(*c));
+    nConn = 1;
     snprintf(zDb, sizeof(zDb), "%s/db.db", argv[2]);
     gLog = stdout;
-    rc = sqlite3_open(zDb, &c.db);
+    rc = sqlite3_open(zDb, &c->db);
     if( rc==SQLITE_OK ){
-      rc = sqlite3_exec(c.db, "SELECT dolt_revert('HEAD')", resCb, 0, 0);
+      if( mode==3 ) sqlite3_set_authorizer(c->db, denyReplayCommit, 0);
+      rc = replay(c, cherryPick ? "cherry_pick" : "revert",
+          cherryPick ? "SELECT dolt_cherry_pick('remove')"
+                     : "SELECT dolt_revert('HEAD')", &removed);
+    }
+    if( mode==3 ){
+      sqlite3_set_authorizer(c->db, 0, 0);
+      rc = rc==SQLITE_AUTH && sqlite3_get_autocommit(c->db) && removed.nId==0
+          ? SQLITE_OK : SQLITE_ERROR;
+      if( rc==SQLITE_OK ) logRemoved(&removed);
+      sqlite3_close(c->db);
+      return rc!=SQLITE_OK;
     }
     if( rc!=SQLITE_OK || pipe(up) || pipe(down) ) return 2;
     child = fork();
@@ -1584,8 +1648,28 @@ int main(int argc, char **argv){
     if( child==0 ){
       sqlite3 *peer = 0;
       close(up[0]); close(down[1]);
-      sqlite3_close(c.db);
+      sqlite3_close(c->db);
       rc = sqlite3_open(zDb, &peer);
+      if( rc==SQLITE_OK && mode==2 && cherryPick ){
+        rc = sqlite3_exec(peer, "SELECT dolt_branch('-D','remove')",
+                          0, 0, 0);
+      }
+      if( rc==SQLITE_OK && mode==2 ){
+        rc = sqlite3_exec(peer,
+            "SELECT dolt_commit('-a','--amend','-m','replacement');"
+            "SELECT dolt_gc()", 0, 0, 0);
+        if( rc==SQLITE_OK ){
+          char path[900];
+          sqlite3 *collected = 0;
+          snprintf(path, sizeof(path), "%s@%s", zDb, removed.hash);
+          rc = sqlite3_open_v2(path, &collected, SQLITE_OPEN_READONLY, 0);
+          if( rc==SQLITE_OK ){
+            rc = sqlite3_exec(collected, "SELECT count(*) FROM w", 0, 0, 0);
+          }
+          sqlite3_close(collected);
+          rc = rc==SQLITE_CANTOPEN ? SQLITE_OK : SQLITE_ERROR;
+        }
+      }
       if( rc==SQLITE_OK ){
         rc = sqlite3_exec(peer,
             "BEGIN IMMEDIATE; INSERT INTO w(id,v) VALUES(99,'uncommitted')",
@@ -1600,13 +1684,13 @@ int main(int argc, char **argv){
     }
     close(up[1]); close(down[0]);
     if( read(up[0], &ready, 1)!=1 || ready!='g' ) rc = SQLITE_ERROR;
-    if( atoi(argv[3]) ) sqlite3_progress_handler(c.db, 1, interruptCollector, 0);
-    if( rc==SQLITE_OK ) logRemoved();
-    sqlite3_progress_handler(c.db, 0, 0, 0);
+    if( mode==1 ) sqlite3_progress_handler(c->db, 1, interruptCollector, 0);
+    if( rc==SQLITE_OK ) logRemoved(&removed);
+    sqlite3_progress_handler(c->db, 0, 0, 0);
     if( write(down[1], &ready, 1)!=1 ) rc = SQLITE_ERROR;
     close(up[0]); close(down[1]);
     if( waitpid(child, &childStatus, 0)!=child ) rc = SQLITE_ERROR;
-    sqlite3_close(c.db);
+    sqlite3_close(c->db);
     return rc!=SQLITE_OK || !WIFEXITED(childStatus) || WEXITSTATUS(childStatus)!=0;
   }
   if( !strcmp(argv[1], "--check") ){
