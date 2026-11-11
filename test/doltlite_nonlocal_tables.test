@@ -519,6 +519,28 @@ do_test nonlocal-qualified-ref-local-kept {
   nl_disk main {SELECT v FROM cfg}
 } {v1}
 
+nl_reset
+do_execsql_test nonlocal-ref-case.write {
+  INSERT INTO dolt_nonlocal_tables VALUES('nl','MAIN','users','immediate');
+  INSERT INTO nl VALUES(2,'w');
+  SELECT group_concat(id) FROM nl;
+} {1,2}
+do_test nonlocal-ref-case.target {
+  nl_disk main {SELECT group_concat(id) FROM users}
+} {1,2}
+do_execsql_test nonlocal-ref-case.own-branch {
+  UPDATE dolt_nonlocal_tables SET target_ref='Other';
+  SELECT group_concat(id) FROM nl;
+} {1}
+do_catchsql_test nonlocal-ref-case.missing {
+  UPDATE dolt_nonlocal_tables SET target_ref='NOPE';
+  SELECT * FROM nl;
+} {1 {branch not found: NOPE}}
+do_execsql_test nonlocal-ref-case.created-later {
+  SELECT dolt_branch('nope');
+  SELECT group_concat(id) FROM nl;
+} {0 1}
+
 # A rule whose target cannot be opened fails the statement; it never
 # falls back to the source branch's table of the same name.
 do_test nonlocal-unopenable-target {
