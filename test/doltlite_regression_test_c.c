@@ -14634,7 +14634,8 @@ static void run_checkout_table_index_name_collision(void){
   check("begin_checkout_index_collision", execSql(db, "BEGIN")==SQLITE_OK);
   res = queryScalarText(db, "SELECT dolt_checkout('b1','t')");
   snprintf(zCheckout, sizeof(zCheckout), "%s", res);
-  check("txn_checkout_matches_create_index", strcmp(zCheckout, zCreate)==0);
+  check("txn_checkout_names_index_owner", strstr(zCheckout,
+        "cannot check out table t: its index ix is now an index of table o")!=0);
   check("txn_checkout_keeps_branch",
         strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("txn_checkout_keeps_oldix",
@@ -14653,7 +14654,8 @@ static void run_checkout_table_index_name_collision(void){
 
   res = queryScalarText(db, "SELECT dolt_checkout('b1','t')");
   snprintf(zCheckout, sizeof(zCheckout), "%s", res);
-  check("checkout_matches_create_index", strcmp(zCheckout, zCreate)==0);
+  check("checkout_names_index_owner", strstr(zCheckout,
+        "cannot check out table t: its index ix is now an index of table o")!=0);
   check("checkout_keeps_branch",
         strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("checkout_keeps_oldix",
