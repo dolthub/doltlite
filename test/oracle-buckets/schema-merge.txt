@@ -1,0 +1,2 @@
+vc_oracle_correct_schema_merge_matrix_test.sh
+vc_oracle_schema_merge_test.sh

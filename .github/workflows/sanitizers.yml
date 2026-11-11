@@ -12,13 +12,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Buckets are grouped so no job runs much past six minutes.
           - suite: oracles
             bucket: remotes-recovery
           - suite: oracles-vc
             bucket: refs-workspace diff-history-data
           - suite: oracles-merge
-            bucket: merge-replay-schema
+            bucket: merge-replay
+          - suite: oracles-schema-merge
+            bucket: schema-merge
           - suite: oracles-features
             bucket: feature-interaction
           # Every DoltLite shell suite (sanitizer manifest set), in two
