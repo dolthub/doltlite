@@ -703,6 +703,9 @@ proc emit_doltlite_engine_block {} {
   # blake3: a single-TU amalgamation cannot pass the per-file -m{sse,avx} flags
   # the SIMD sources need, so force the portable backend (the object/release
   # builds keep SIMD). NEON is left disabled (BLAKE3_USE_NEON unset).
+  # DOLTLITE_BLAKE3_SIMD_OBJECTS says the SIMD sources are compiled separately
+  # and linked in, so the dispatcher keeps its runtime selection.
+  puts $out "#ifndef DOLTLITE_BLAKE3_SIMD_OBJECTS"
   foreach m {BLAKE3_NO_SSE2 BLAKE3_NO_SSE41 BLAKE3_NO_AVX2 BLAKE3_NO_AVX512} {
     puts $out "#ifndef $m"
     puts $out "#define $m 1"
@@ -713,6 +716,7 @@ proc emit_doltlite_engine_block {} {
   puts $out "#ifndef BLAKE3_USE_NEON"
   puts $out "#define BLAKE3_USE_NEON 0"
   puts $out "#endif"
+  puts $out "#endif /* DOLTLITE_BLAKE3_SIMD_OBJECTS */"
   copy_file $srcdir/doltlite_parse.h
   set auth_system_headers {
     dirent.h errno.h fcntl.h inttypes.h limits.h stdarg.h stddef.h stdint.h

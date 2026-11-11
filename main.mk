@@ -593,6 +593,23 @@ LIBOBJS0 = alter.o analyze.o attach.o auth.o \
 #
 include $(TOP)/doltlite.mk
 
+#
+# DOLTLITE_SINGLE_FILE=1 builds everything that links the library objects
+# from the amalgamation instead: one translation unit, so the compiler
+# inlines across what are otherwise some 330 files. That is how the stock
+# SQLite the benchmarks compare against is built. BLAKE3's SIMD sources need
+# their own -m flags, so they stay separate objects and the amalgamation is
+# told to keep the runtime dispatch to them.
+#
+# The amalgamation makes the engine's internal functions static and leaves
+# out the in-process remote server, so the C unit tests and doltlite-remotesrv
+# do not link in this mode.
+#
+DOLTLITE_SINGLE_FILE ?= 0
+ifeq ($(DOLTLITE_SINGLE_FILE),1)
+LIBOBJS0 := libdoltlite.single.o $(BLAKE3_SIMD_OBJS)
+endif
+
 LIBOBJS = $(LIBOBJS0)
 
 #
@@ -1879,6 +1896,9 @@ status.o:	$(TOP)/src/status.c $(DEPS_OBJ_COMMON)
 
 sqlite3.o:	sqlite3.h sqlite3.c
 	$(T.cc.sqlite) -c sqlite3.c
+
+libdoltlite.single.o:	sqlite3.h sqlite3.c
+	$(T.cc.sqlite) -DDOLTLITE_BLAKE3_SIMD_OBJECTS -c sqlite3.c -o $@
 
 table.o:	$(TOP)/src/table.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/table.c
