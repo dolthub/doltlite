@@ -324,4 +324,38 @@ INSERT INTO dolt_nonlocal_tables VALUES
   ('ghost', 'main', '', 'immediate');
 "
 
+for key in INTEGER INT; do
+  for ref in NULL "''" "'other'"; do
+    oracle "nonlocal_drop_same_branch_alias_${key}_${ref}" "
+CREATE TABLE users(id $key PRIMARY KEY, name VARCHAR(20));
+INSERT INTO users VALUES(1,'original');
+CREATE INDEX users_name ON users(name);
+CREATE TABLE u(id INT PRIMARY KEY);
+INSERT INTO u VALUES(9);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','other');
+INSERT INTO dolt_nonlocal_tables VALUES('u',$ref,'users','immediate');
+SELECT CONCAT('R|before|',id,'|',name) FROM u;
+DROP TABLE u;
+SELECT CONCAT('R|status|',table_name,'|',status) FROM dolt_status WHERE table_name='users';
+SELECT CONCAT('R|local|',id) FROM u;
+CREATE TABLE users(id $key PRIMARY KEY, name VARCHAR(20));
+INSERT INTO users VALUES(2,'replacement');
+SELECT CONCAT('R|after|',id,'|',name) FROM u ORDER BY id;
+"
+  done
+done
+
+oracle "nonlocal_drop_same_branch_wildcard_alias" "
+CREATE TABLE users(id INT PRIMARY KEY, name VARCHAR(20));
+INSERT INTO users VALUES(1,'original');
+SELECT dolt_commit('-Am','base');
+INSERT INTO dolt_nonlocal_tables VALUES('alias_*',NULL,'users','immediate');
+DROP TABLE alias_users;
+SELECT CONCAT('R|status|',table_name,'|',status) FROM dolt_status WHERE table_name='users';
+CREATE TABLE users(id INT PRIMARY KEY, name VARCHAR(20));
+INSERT INTO users VALUES(2,'replacement');
+SELECT CONCAT('R|after|',id,'|',name) FROM alias_users ORDER BY id;
+"
+
 vc_oracle_finish

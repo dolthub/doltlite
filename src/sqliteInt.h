@@ -5597,7 +5597,7 @@ int doltliteNonlocalSync(sqlite3*);
 void doltliteNonlocalDetached(sqlite3*);
 int doltliteNonlocalMatches(sqlite3*, const char*);
 int doltliteNonlocalActive(sqlite3*);
-int doltliteNonlocalResolve(Parse*, const char**, const char**);
+int doltliteNonlocalResolve(Parse*, const char**, const char**, int);
 void doltliteNonlocalNoteUse(Parse*, Table*, const char*);
 int doltliteNonlocalLocalTable(Parse*, Table*, Table**);
 const char *doltliteNonlocalLocalName(Parse*, Table*);

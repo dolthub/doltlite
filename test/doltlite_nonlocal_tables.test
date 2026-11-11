@@ -994,4 +994,128 @@ do_test nonlocal-trigger-create.merge-binds-local-table {
   db eval {SELECT msg FROM log}
 } {{trig m}}
 
+foreach key {INTEGER INT} {
+  foreach ref {NULL "''" "'other'"} {
+    foreach qualifier {{} main.} {
+      set label nonlocal-drop-alias-$key-$ref-$qualifier
+      nl_reset
+      db eval "CREATE TABLE target(id $key PRIMARY KEY, v TEXT)"
+      db eval {
+        INSERT INTO target VALUES(1,'kept');
+        CREATE INDEX target_v ON target(v);
+        CREATE TABLE audit(id INT PRIMARY KEY);
+        CREATE TRIGGER target_tr AFTER INSERT ON target BEGIN
+          INSERT INTO audit VALUES(new.id);
+        END;
+        CREATE TABLE u(id INT PRIMARY KEY);
+        INSERT INTO u VALUES(9);
+        SELECT dolt_commit('-Am','alias base');
+      }
+      db eval "INSERT INTO dolt_nonlocal_tables VALUES('u',$ref,'target','immediate')"
+      do_execsql_test $label.read {SELECT v FROM u} kept
+      do_execsql_test $label.drop "DROP TABLE ${qualifier}u" {}
+      do_execsql_test $label.catalog {
+        SELECT count(*) FROM sqlite_master WHERE name IN ('target','target_v','target_tr');
+        SELECT id FROM u;
+        SELECT count(*) FROM dolt_nonlocal_tables;
+        PRAGMA integrity_check;
+      } {0 9 1 ok}
+      do_test $label.reopen {
+        db close
+        sqlite3 db [file normalize test.db]/other
+        db eval {
+          SELECT count(*) FROM sqlite_master WHERE name='target';
+          SELECT id FROM u;
+        }
+      } {0 9}
+    }
+  }
+}
+
+nl_reset
+do_execsql_test nonlocal-drop-alias.rollback {
+  INSERT INTO dolt_nonlocal_tables VALUES('u',NULL,'notes','immediate');
+  BEGIN;
+  DROP TABLE u;
+  SELECT count(*) FROM sqlite_master WHERE name='notes';
+  ROLLBACK;
+  SELECT count(*) FROM sqlite_master WHERE name='notes';
+  DROP TABLE IF EXISTS u;
+  DROP TABLE IF EXISTS u;
+  SELECT count(*) FROM sqlite_master WHERE name='notes';
+} {0 1 0}
+
+nl_reset
+do_execsql_test nonlocal-drop-alias.temp {
+  INSERT INTO dolt_nonlocal_tables VALUES('u',NULL,'notes','immediate');
+  CREATE TEMP TABLE u(id INT PRIMARY KEY);
+  DROP TABLE u;
+  SELECT count(*) FROM main.sqlite_master WHERE name='notes';
+  CREATE TEMP TABLE notes(id INT PRIMARY KEY);
+  DROP TABLE main.u;
+  SELECT count(*) FROM main.sqlite_master WHERE name='notes';
+  SELECT count(*) FROM temp.sqlite_master WHERE name='notes';
+} {1 0 1}
+
+nl_reset
+do_execsql_test nonlocal-drop-alias.wildcard {
+  INSERT INTO dolt_nonlocal_tables VALUES('alias_*',NULL,'notes','immediate');
+  DROP TABLE alias_notes;
+  SELECT count(*) FROM sqlite_master WHERE name='notes';
+} 0
+
+nl_reset
+do_execsql_test nonlocal-drop-alias.no-chain {
+  INSERT INTO dolt_nonlocal_tables VALUES
+    ('u',NULL,'notes','immediate'), ('notes',NULL,'cfg','immediate');
+  DROP TABLE u;
+  SELECT count(*) FROM sqlite_master WHERE name='notes';
+  SELECT count(*) FROM cfg;
+} {0 1}
+
+nl_reset
+do_execsql_test nonlocal-drop-alias.foreign-key-setup {
+  PRAGMA foreign_keys=ON;
+  CREATE TABLE child(id INT PRIMARY KEY REFERENCES notes(id));
+  INSERT INTO notes VALUES(1,'parent');
+  INSERT INTO child VALUES(1);
+  INSERT INTO dolt_nonlocal_tables VALUES('u',NULL,'notes','immediate');
+} {}
+do_catchsql_test nonlocal-drop-alias.foreign-key-refused {
+  DROP TABLE u;
+} {1 {FOREIGN KEY constraint failed}}
+do_execsql_test nonlocal-drop-alias.foreign-key-retry {
+  SELECT id FROM notes;
+  DELETE FROM child;
+  DROP TABLE u;
+  SELECT count(*) FROM sqlite_master WHERE name='notes';
+  PRAGMA integrity_check;
+} {1 0 ok}
+
+nl_reset
+do_execsql_test nonlocal-drop-alias.foreign-key-cascade {
+  PRAGMA foreign_keys=ON;
+  CREATE TABLE child(id INT PRIMARY KEY REFERENCES notes(id) ON DELETE CASCADE);
+  INSERT INTO notes VALUES(1,'parent');
+  INSERT INTO child VALUES(1);
+  INSERT INTO dolt_nonlocal_tables VALUES('u',NULL,'notes','immediate');
+  DROP TABLE u;
+  SELECT count(*) FROM child;
+  PRAGMA integrity_check;
+} {0 ok}
+
+nl_reset
+do_execsql_test nonlocal-drop-alias.remote-stays-local {
+  INSERT INTO dolt_nonlocal_tables VALUES('u','main','users','immediate');
+  DROP TABLE IF EXISTS u;
+  SELECT count(*) FROM u;
+  CREATE TABLE local_only(id INT PRIMARY KEY);
+  INSERT INTO dolt_nonlocal_tables VALUES('local_only','missing','users','invalid');
+  DROP TABLE local_only;
+  SELECT count(*) FROM sqlite_master WHERE name='local_only';
+} {1 0}
+do_test nonlocal-drop-alias.remote-preserved {
+  nl_disk main {SELECT count(*) FROM users}
+} 1
+
 finish_test
