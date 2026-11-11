@@ -672,4 +672,108 @@ foreach keymode {integer text without-rowid} {
   }
 }
 
+foreach {layout key} {rowid {INTEGER PRIMARY KEY} clustered {INT PRIMARY KEY}} {
+  foreach operation {merge cherry_pick} {
+    foreach direction {forward reverse} {
+      foreach default {{} {DEFAULT 9}} {
+        reset_db
+        execsql "CREATE TABLE t(id $key,cd INT,pad TEXT)"
+        execsql {
+          CREATE INDEX old_idx ON t(cd);
+          INSERT INTO t VALUES(1,11,'base');
+          SELECT dolt_commit('-Am','base');
+          SELECT dolt_branch('side');
+          ALTER TABLE t RENAME COLUMN cd TO r1;
+        }
+        execsql "ALTER TABLE t ADD COLUMN cd INT $default"
+        execsql {
+          CREATE INDEX new_idx ON t(cd);
+          SELECT dolt_commit('-Am','rename and re-add');
+          SELECT dolt_checkout('side');
+          INSERT INTO t VALUES(2,33,'new');
+          SELECT dolt_commit('-Am','insert');
+        }
+        set target side
+        set branch main
+        if {$direction eq "reverse"} {set target main; set branch side}
+        execsql "SELECT dolt_checkout('$branch')"
+        set name rename-readd-$layout-$operation-$direction-[string map {{ } _} $default]
+        do_test $name-apply {string length [execsql "SELECT dolt_${operation}('$target')"]} 40
+        set added {}
+        if {$default ne ""} {set added 9}
+        set expected [list 1 11 base $added 2 33 new $added]
+        do_execsql_test $name-rows {SELECT id,r1,pad,cd FROM t NOT INDEXED ORDER BY id} $expected
+        do_execsql_test $name-indexes {
+          SELECT id FROM t INDEXED BY old_idx WHERE r1=33;
+          SELECT count(*) FROM t INDEXED BY new_idx;
+          PRAGMA integrity_check;
+        } {2 2 ok}
+        db close
+        sqlite3 db test.db/$branch
+        do_execsql_test $name-reopen {SELECT id,r1,pad,cd FROM t ORDER BY id} $expected
+        do_execsql_test $name-edit {
+          UPDATE t SET r1=44,cd=55 WHERE id=2;
+          SELECT id FROM t INDEXED BY old_idx WHERE r1=44;
+          SELECT id FROM t INDEXED BY new_idx WHERE cd=55;
+          PRAGMA integrity_check;
+        } {2 2 ok}
+      }
+    }
+  }
+}
+
+foreach evidence {slot name ambiguous missing edited mixed} {
+  foreach direction {forward reverse} {
+    reset_db
+    execsql {CREATE TABLE t(id INTEGER PRIMARY KEY,cd INT)}
+    if {$evidence ne "missing"} {
+      if {$evidence eq "ambiguous"} {
+        execsql {INSERT INTO t VALUES(1,NULL)}
+      } else {
+        execsql {INSERT INTO t VALUES(1,11)}
+      }
+    }
+    if {$evidence eq "mixed"} {execsql {INSERT INTO t VALUES(3,44)}}
+    execsql {SELECT dolt_commit('-Am','base'); SELECT dolt_branch('side')}
+    if {$evidence eq "name"} {
+      execsql {
+        ALTER TABLE t ADD COLUMN r1 INT;
+        UPDATE t SET r1=cd;
+        ALTER TABLE t DROP COLUMN cd;
+        ALTER TABLE t ADD COLUMN cd INT;
+        UPDATE t SET cd=r1,r1=NULL;
+      }
+    } else {
+      execsql {ALTER TABLE t RENAME COLUMN cd TO r1; ALTER TABLE t ADD COLUMN cd INT}
+      if {$evidence eq "edited"} {execsql {UPDATE t SET r1=22}}
+      if {$evidence eq "mixed"} {execsql {UPDATE t SET cd=r1,r1=NULL WHERE id=3}}
+    }
+    execsql {
+      SELECT dolt_commit('-Am','schema');
+      SELECT dolt_checkout('side');
+      INSERT INTO t VALUES(2,33);
+      SELECT dolt_commit('-Am','insert');
+    }
+    set target side
+    set branch main
+    if {$direction eq "reverse"} {set target main; set branch side}
+    execsql "SELECT dolt_checkout('$branch')"
+    set name rename-readd-evidence-$evidence-$direction
+    if {$evidence in {ambiguous missing edited mixed}} {
+      set before [execsql {SELECT * FROM t; SELECT dolt_hashof('HEAD')}]
+      do_test $name-refused {
+        set result [catchsql "SELECT dolt_merge('$target')"]
+        list [lindex $result 0] [string match {*ambiguous ancestry*} [lindex $result 1]]
+      } {1 1}
+      do_test $name-unchanged {execsql {SELECT * FROM t; SELECT dolt_hashof('HEAD')}} $before
+    } else {
+      do_test $name-merge {string length [execsql "SELECT dolt_merge('$target')"]} 40
+      set expected {1 11 {} 2 33 {}}
+      if {$evidence eq "name"} {set expected {1 {} 11 2 {} 33}}
+      do_execsql_test $name-rows {SELECT id,r1,cd FROM t ORDER BY id} $expected
+    }
+    do_execsql_test $name-integrity {PRAGMA integrity_check} {ok}
+  }
+}
+
 finish_test

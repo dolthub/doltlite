@@ -104,13 +104,16 @@ static int mergePass1CheckDuplicateIndexColumns(MergePass1Ctx *c){
       }
       for(j=0; j<c->nAncSchema; j++){
         SchemaEntry *pOld = &c->aAncSchema[j];
+        SchemaEntry *pKept;
         if( !pOld->zType || strcmp(pOld->zType, "index")!=0 ) continue;
         if( !pOld->zName || !pOld->zSql || !pOld->zTblName ) continue;
         if( sqlite3_stricmp(pOld->zTblName, aNew[i].zTblName)!=0 ) continue;
         /* A drop of the older index is a replacement, not a duplicate. */
-        if( !findSchemaEntry(aNew, nNew, pOld->zName) ) continue;
+        pKept = findSchemaEntry(aNew, nNew, pOld->zName);
+        if( !pKept || !pKept->zSql || !pKept->zTblName
+         || sqlite3_stricmp(pKept->zTblName, aNew[i].zTblName)!=0 ) continue;
         if( !findSchemaEntry(aOther, nOther, pOld->zName) ) continue;
-        if( !mergeIndexSameKey(aNew[i].zSql, pOld->zSql) ) continue;
+        if( !mergeIndexSameKey(aNew[i].zSql, pKept->zSql) ) continue;
         if( c->pzErrMsg ){
           sqlite3_free(*c->pzErrMsg);
           *c->pzErrMsg = sqlite3_mprintf(

@@ -1177,7 +1177,8 @@ int normalizeSideToMergedLayout(
     }
     found = parsedColumnIndexByName(
         aOurs, nOurs, aTheirs[j].zName);
-    if( found<0 && aTheirsAnc[j]>=0 ){
+    if( aTheirsAnc[j]>=0
+     && (found<0 || aOursAnc[found]!=aTheirsAnc[j]) ){
       int k;
       bInAnc = 1;
       for(k=0; k<nOurs; k++){

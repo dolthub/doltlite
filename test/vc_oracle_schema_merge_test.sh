@@ -2697,4 +2697,36 @@ SELECT concat(id,'|',payload) FROM tx INDEXED BY tx_idx WHERE payload='transacti
   done
 done
 
+echo "--- rename followed by re-adding the old column name ---"
+for key in INTEGER INT; do
+  for operation in merge cherry_pick; do
+    for direction in forward reverse; do
+      ddl="ALTER TABLE t RENAME COLUMN cd TO r1; ALTER TABLE t ADD COLUMN cd INT;"
+      dml="INSERT INTO t VALUES(2,33);"
+      ours="$ddl"
+      theirs="$dml"
+      if [ "$direction" = reverse ]; then ours="$dml"; theirs="$ddl"; fi
+      tag="rename_readd_${key}_${operation}_${direction}"
+      DB="$TMPROOT/$tag.db"
+      cat <<SQL | dl_setup "$DB" "$tag"
+CREATE TABLE t(id $key PRIMARY KEY,cd INT);
+INSERT INTO t VALUES(1,11);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+$ours
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feat');
+$theirs
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+SQL
+      run_dual_command_outcome "${tag}_apply" "$DB" \
+        "SELECT dolt_${operation}('feat');" "CALL dolt_${operation}('feat');" ok
+      expect_dual_value "${tag}_renamed_values" "$DB" '1:11,2:33' \
+        "SELECT group_concat(concat(id,':',r1),',') FROM (SELECT id,r1 FROM t ORDER BY id);" \
+        "SELECT GROUP_CONCAT(CONCAT(id,':',r1) ORDER BY id SEPARATOR ',') FROM t;"
+    done
+  done
+done
+
 vc_oracle_finish
