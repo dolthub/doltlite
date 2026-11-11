@@ -34,7 +34,7 @@ rule applies on the branch whose working set holds it.
 
 - Names are matched case-insensitively against the rules in `table_name`
   order; the first match wins, and it wins over a local table of the same
-  name. `dolt_*` and `sqlite_*` names are never redirected.
+  name.
 - A branch target is that branch's working set: reads see its uncommitted
   rows and writes land there, uncommitted, for that branch to commit. A tag
   or commit target is read-only.
@@ -47,8 +47,8 @@ rule applies on the branch whose working set holds it.
   in one call.
 - `dolt_clean` never drops a table a rule claims.
 - The connection attaches each target branch as a hidden database named
-  `dolt_nonlocal:<ref>` while a rule names it. It appears in
-  `PRAGMA database_list` but not in `.tables`; an unqualified name never
+  `dolt_nonlocal:<ref>` while a rule names it. It is omitted from
+  `PRAGMA database_list` and `.tables`; an unqualified name never
   resolves into it except through a rule.
 
 ## Errors
@@ -66,6 +66,8 @@ no-op, as in Dolt.
 
 ## Differences from Dolt
 
+- `dolt_*` and `sqlite_*` names are never redirected. Dolt can redirect
+  materialized user-space system tables such as `dolt_ignore`.
 - Nonlocal tables are listed in `.tables` and `PRAGMA table_list`, as Dolt
   lists them in `SHOW TABLES`, but not in `sqlite_master`.
 - `@@dolt_multi_branch_commit` is not implemented; call `dolt_commit_all`.
