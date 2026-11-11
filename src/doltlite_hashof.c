@@ -89,6 +89,26 @@ static int hashofResolveRef(
   return rc;
 }
 
+/* Dolt ignores whitespace around a ref that has no ancestor suffix. */
+static int hashofResolveTrimmed(
+  sqlite3 *db,
+  const char *zRef,
+  ProllyHash *pCommit
+){
+  int n = (int)strlen(zRef);
+  char *zTrim;
+  int rc;
+  if( (int)strcspn(zRef, "~^")!=n ) return hashofResolveRef(db, zRef, pCommit);
+  while( n>0 && sqlite3Isspace(zRef[0]) ){ zRef++; n--; }
+  while( n>0 && sqlite3Isspace(zRef[n-1]) ) n--;
+  if( zRef[n]==0 ) return hashofResolveRef(db, zRef, pCommit);
+  zTrim = sqlite3_mprintf("%.*s", n, zRef);
+  if( !zTrim ) return SQLITE_NOMEM;
+  rc = hashofResolveRef(db, zTrim, pCommit);
+  sqlite3_free(zTrim);
+  return rc;
+}
+
 static void doltliteHashofFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db;
   const char *zRef;
@@ -121,7 +141,7 @@ static void doltliteHashofFunc(sqlite3_context *ctx, int argc, sqlite3_value **a
     sqlite3_result_error_code(ctx, rc);
     return;
   }
-  rc = hashofResolveRef(db, zRef, &commitHash);
+  rc = hashofResolveTrimmed(db, zRef, &commitHash);
   if( rc==SQLITE_NOTFOUND ){
     sqlite3_result_error(ctx, "dolt_hashof: invalid ref spec", -1);
     return;
