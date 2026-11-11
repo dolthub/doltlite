@@ -17,15 +17,6 @@
 
 #include <string.h>
 #include <ctype.h>
-#include <time.h>
-
-#ifdef _WIN32
-static time_t dlWinTimegm(struct tm *pTm){
-  return _mkgmtime(pTm);
-}
-#define timegm dlWinTimegm
-#endif
-
 static int parseFixedInt(const char **pz, int nDigits, int *pOut){
   const char *z = *pz;
   int i, v = 0;
@@ -45,9 +36,9 @@ static int doltliteParseCommitDate(const char *zDate, i64 *pUnix){
   const char *p = zDate;
   int y, mo, d, h = 0, mi = 0, s = 0;
   int offSign = 0, offH = 0, offM = 0;
-  struct tm tm;
-  time_t t;
-  struct tm *pBack;
+  static const u8 aMonthDays[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+  i64 era, yoe, doy, days;
+  int bLeap;
 
   if( !zDate || !pUnix ) return SQLITE_ERROR;
   if( !parseFixedInt(&p, 4, &y) || *p++!='-'
@@ -82,23 +73,19 @@ static int doltliteParseCommitDate(const char *zDate, i64 *pUnix){
   if( y<1 || y>9999 || mo<1 || mo>12 || d<1 || d>31 ) return SQLITE_ERROR;
   if( h>23 || mi>59 || s>59 || offH>23 || offM>59 ) return SQLITE_ERROR;
 
-  memset(&tm, 0, sizeof(tm));
-  tm.tm_year = y - 1900;
-  tm.tm_mon = mo - 1;
-  tm.tm_mday = d;
-  tm.tm_hour = h;
-  tm.tm_min = mi;
-  tm.tm_sec = s;
-  tm.tm_isdst = 0;
-  t = timegm(&tm);
-  pBack = gmtime(&t);
-  if( !pBack
-   || pBack->tm_year!=y-1900 || pBack->tm_mon!=mo-1
-   || pBack->tm_mday!=d || pBack->tm_hour!=h
-   || pBack->tm_min!=mi || pBack->tm_sec!=s ){
-    return SQLITE_ERROR;
-  }
-  *pUnix = (i64)t - (i64)offSign*((i64)offH*3600 + (i64)offM*60);
+  bLeap = (y%4==0 && y%100!=0) || y%400==0;
+  if( d>aMonthDays[mo-1] + (mo==2 && bLeap) ) return SQLITE_ERROR;
+
+  /* Days since 1970-01-01 in the proleptic Gregorian calendar, computed
+  ** here because the C library refuses years before 1900 on some
+  ** platforms. */
+  if( mo<=2 ) y--;
+  era = (y>=0 ? y : y-399)/400;
+  yoe = y - era*400;
+  doy = (153*(mo + (mo>2 ? -3 : 9)) + 2)/5 + d - 1;
+  days = era*146097 + yoe*365 + yoe/4 - yoe/100 + doy - 719468;
+  *pUnix = days*86400 + h*3600 + mi*60 + s
+         - (i64)offSign*((i64)offH*3600 + (i64)offM*60);
   return SQLITE_OK;
 }
 

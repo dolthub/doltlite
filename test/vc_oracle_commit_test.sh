@@ -691,6 +691,14 @@ SELECT dolt_commit('-m', 'epoch', '--date', '1970-01-01T00:00:00Z');
 "SELECT 'R|' || unixepoch(date) FROM dolt_log WHERE message='epoch';" \
 "SELECT CONCAT('R|', TIMESTAMPDIFF(SECOND, '1970-01-01 00:00:00', date)) FROM dolt_log WHERE message='epoch';"
 
+oracle_query "commit_with_year_one_date" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'year-one', '--date', '0001-01-01');
+" "SELECT 'R|' || date FROM dolt_log WHERE message='year-one';" \
+  "SELECT concat('R|', DATE_FORMAT(date, '%Y-%m-%d %H:%i:%s')) FROM dolt_log WHERE message='year-one';"
+
 oracle_query "commit_with_pre_epoch_date" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);

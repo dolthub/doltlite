@@ -65,6 +65,36 @@ run_test_lastline "date_fractional_comma_truncated" \
   "2024-01-15 10:00:00" \
   "$DB"
 
+run_test_lastline "date_year_one" \
+  "$(setup y1 '0001-01-01')" \
+  "0001-01-01 00:00:00" \
+  "$DB"
+
+run_test_lastline "date_before_year_1000" \
+  "$(setup y999 '0999-12-31T23:59:59Z')" \
+  "0999-12-31 23:59:59" \
+  "$DB"
+
+run_test_lastline "date_before_1900" \
+  "$(setup y1500 '1500-06-01T12:00:00+02:00')" \
+  "1500-06-01 10:00:00" \
+  "$DB"
+
+run_test_lastline "date_leap_day" \
+  "$(setup leap '2000-02-29')" \
+  "2000-02-29 00:00:00" \
+  "$DB"
+
+run_test_lastline "date_year_9999" \
+  "$(setup y9999 '9999-12-31T23:59:59Z')" \
+  "9999-12-31 23:59:59" \
+  "$DB"
+
+run_test_error_match "date_century_non_leap_day_rejected" \
+  "$(err_setup '1900-02-29')" \
+  "could not parse --date" \
+  "$DB"
+
 run_test_error_match "date_junk_rejected" \
   "$(err_setup '2024-01-15T10:00:00junk')" \
   "could not parse --date" \
