@@ -641,16 +641,27 @@ static SQLITE_INLINE const char *doltliteDiffTypeNameFromPresence(
   return "modified";
 }
 
+/* Proleptic Gregorian arithmetic: the C library cannot convert the full
+** range of commit dates on every platform. */
 static SQLITE_INLINE void doltliteResultTimestamp(sqlite3_context *ctx, i64 timestamp){
-  time_t t = (time_t)timestamp;
-  struct tm *tm = gmtime(&t);
-  if( tm ){
-    char buf[32];
-    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm);
-    sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
-  }else{
-    sqlite3_result_null(ctx);
-  }
+  i64 days = timestamp/86400;
+  i64 sec = timestamp - days*86400;
+  i64 z, era, doe, yoe, doy, mp, y;
+  int m, d;
+  char buf[48];
+  if( sec<0 ){ sec += 86400; days--; }
+  z = days + 719468;
+  era = (z>=0 ? z : z-146096)/146097;
+  doe = z - era*146097;
+  yoe = (doe - doe/1460 + doe/36524 - doe/146096)/365;
+  doy = doe - (365*yoe + yoe/4 - yoe/100);
+  mp = (5*doy + 2)/153;
+  d = (int)(doy - (153*mp + 2)/5 + 1);
+  m = (int)(mp<10 ? mp+3 : mp-9);
+  y = yoe + era*400 + (m<=2);
+  sqlite3_snprintf(sizeof(buf), buf, "%04lld-%02d-%02d %02d:%02d:%02d",
+                   y, m, d, (int)(sec/3600), (int)(sec/60%60), (int)(sec%60));
+  sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
 }
 
 static SQLITE_INLINE void doltliteRefResultError(
