@@ -178,6 +178,39 @@ static void dotFreeNames(DotName *aName, int nName){
   sqlite3_free(aName);
 }
 
+/* Whether zTable already has the index zIndex. Index names are global, so
+** the name held by another table blocks restoring it; that is reported
+** with the owning table rather than as "index already exists". */
+int doltliteCheckoutIndexOwner(
+  sqlite3 *db,
+  const char *zTable,
+  const char *zIndex,
+  int *pExists
+){
+  sqlite3_stmt *pStmt = 0;
+  char *zOwner = 0;
+  int rc = sqlite3_prepare_v2(db,
+      "SELECT tbl_name FROM sqlite_master WHERE type='index'"
+      " AND name=?1 COLLATE NOCASE", -1, &pStmt, 0);
+  *pExists = 0;
+  if( rc!=SQLITE_OK ) return rc;
+  sqlite3_bind_text(pStmt, 1, zIndex, -1, SQLITE_STATIC);
+  if( sqlite3_step(pStmt)==SQLITE_ROW ){
+    zOwner = sqlite3_mprintf("%s", sqlite3_column_text(pStmt, 0));
+    if( !zOwner ) rc = SQLITE_NOMEM;
+  }
+  sqlite3_finalize(pStmt);
+  if( zOwner && sqlite3_stricmp(zOwner, zTable)!=0 ){
+    sqlite3ErrorWithMsg(db, SQLITE_ERROR,
+        "cannot check out table %s: its index %s is now an index of "
+        "table %s; drop that index and retry", zTable, zIndex, zOwner);
+    rc = SQLITE_ERROR;
+  }
+  *pExists = zOwner!=0;
+  sqlite3_free(zOwner);
+  return rc;
+}
+
 int doltliteCheckoutDot(
   sqlite3 *db,
   sqlite3_context *context,

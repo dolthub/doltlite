@@ -759,35 +759,13 @@ static int checkoutReconcileTableIndexes(
 
   for(j=0; j<nSourceSchema; j++){
     int exists;
-    sqlite3_stmt *pChk = 0;
     if( !aSourceSchema[j].zType || strcmp(aSourceSchema[j].zType, "index")!=0 ) continue;
     if( !aSourceSchema[j].zTblName
      || sqlite3_stricmp(aSourceSchema[j].zTblName, zTable)!=0 ) continue;
     if( !aSourceSchema[j].zName || !aSourceSchema[j].zSql ) continue;
-    /* Index names are global, so another table holding this name blocks
-    ** the restore; say which table rather than "index already exists". */
-    rc = sqlite3_prepare_v2(db,
-        "SELECT tbl_name FROM sqlite_master WHERE type='index'"
-        " AND name=?1 COLLATE NOCASE",
-        -1, &pChk, 0);
+    rc = doltliteCheckoutIndexOwner(db, zTable, aSourceSchema[j].zName,
+                                    &exists);
     if( rc!=SQLITE_OK ) return rc;
-    sqlite3_bind_text(pChk, 1, aSourceSchema[j].zName, -1, SQLITE_STATIC);
-    exists = sqlite3_step(pChk)==SQLITE_ROW;
-    if( exists ){
-      const char *zOwner = (const char*)sqlite3_column_text(pChk, 0);
-      if( zOwner && sqlite3_stricmp(zOwner, zTable)!=0 ){
-        char *zErr = sqlite3_mprintf(
-            "cannot check out table %s: its index %s is now an index of "
-            "table %s; drop that index and retry",
-            zTable, aSourceSchema[j].zName, zOwner);
-        sqlite3_finalize(pChk);
-        if( !zErr ) return SQLITE_NOMEM;
-        sqlite3ErrorWithMsg(db, SQLITE_ERROR, "%s", zErr);
-        sqlite3_free(zErr);
-        return SQLITE_ERROR;
-      }
-    }
-    sqlite3_finalize(pChk);
     if( !exists ){
       rc = sqlite3_exec(db, aSourceSchema[j].zSql, 0, 0, 0);
       if( rc!=SQLITE_OK ) return rc;
