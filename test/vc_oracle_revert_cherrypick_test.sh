@@ -1246,11 +1246,14 @@ ROLLBACK;
 "SELECT concat((SELECT group_concat(id ORDER BY id SEPARATOR ',') FROM t), '|', (SELECT count(*) FROM dolt_log))"
 done
 
+# Dolt gives a pick the source's author date and the current millisecond as
+# committer date, so a pick onto the source's own parent can equal the source.
+# A dated source commit keeps its committer date out of the pick's reach.
 identity_setup="CREATE TABLE t(id INT PRIMARY KEY,v INT);
 SELECT dolt_commit('-Am','base');
 SELECT dolt_branch('other');
 INSERT INTO t VALUES(1,10);
-SELECT dolt_commit('-Am','add row');
+SELECT dolt_commit('-Am','add row','--date','2020-01-01T00:00:00');
 SELECT dolt_checkout('other');
 SELECT dolt_cherry_pick('main');
 UPDATE t SET v=20;

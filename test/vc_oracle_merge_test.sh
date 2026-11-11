@@ -2520,7 +2520,7 @@ CREATE TABLE t(id INT PRIMARY KEY,v INT);
 SELECT dolt_commit('-Am','base');
 SELECT dolt_branch('other');
 INSERT INTO t VALUES(1,10);
-SELECT dolt_commit('-Am','add row');
+SELECT dolt_commit('-Am','add row','--date','2020-01-01T00:00:00');
 SELECT dolt_checkout('other');
 SELECT dolt_cherry_pick('main');
 UPDATE t SET v=20;
