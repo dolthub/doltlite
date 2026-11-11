@@ -173,6 +173,14 @@ $SEED
 SELECT dolt_reset('--hard');
 "
 
+oracle "reset_hard_empty_ref_is_head" "
+$SEED
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_reset('--hard', '');
+"
+
 echo "--- reset with ref (move HEAD) ---"
 
 oracle "reset_soft_to_previous_commit" "

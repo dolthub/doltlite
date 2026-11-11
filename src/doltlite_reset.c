@@ -719,7 +719,9 @@ static void doltliteResetFunc(
     int isTable = 0;
     if( !zRef ){
 
-      if( isHard || isSoft ){
+      if( isHard && arg[0]==0 ){
+        continue;
+      }else if( isHard || isSoft ){
         zRef = arg;
       }else{
         ProllyHash probe;

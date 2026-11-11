@@ -744,7 +744,19 @@ run_test "hard_reset_invents_no_sequence_table" \
   "0
 1" "$DB21"
 
-rm -f "$DB19" "$DB20" "$DB21"
+DB22=/tmp/test_reset22_$$.db; rm -f "$DB22"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+SELECT dolt_commit('-A','-m','init');
+INSERT INTO t VALUES(1,'staged');
+SELECT dolt_add('t');
+INSERT INTO t VALUES(2,'working');" | $DOLTLITE "$DB22" > /dev/null 2>&1
+run_test "hard_reset_empty_ref_is_head" \
+  "SELECT dolt_reset('--hard',''); SELECT count(*) FROM t; SELECT count(*) FROM dolt_status;" \
+  "0
+0
+0" "$DB22"
+
+rm -f "$DB19" "$DB20" "$DB21" "$DB22"
 
 
 dltest_finish
