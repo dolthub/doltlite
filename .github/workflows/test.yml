@@ -189,7 +189,9 @@ jobs:
           # Grouped so each job runs under about ten minutes; the stock
           # SQLite oracles ride with the shortest Dolt buckets.
           - group: merge
-            bucket: merge-replay-schema
+            bucket: merge-replay
+          - group: schema-merge
+            bucket: schema-merge
           - group: refs-diff
             bucket: refs-workspace diff-history-data
           - group: features-sql

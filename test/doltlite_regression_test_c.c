@@ -2060,6 +2060,10 @@ static int failClose(sqlite3_file *pFile){
 
 static int failRead(sqlite3_file *pFile, void *zBuf, int iAmt, sqlite3_int64 iOfst){
   FailFile *p = (FailFile*)pFile;
+  if( gOpfsLikeIo && iAmt>65536 ){
+    memset(zBuf, 0, (size_t)iAmt);
+    return SQLITE_IOERR_SHORT_READ;
+  }
   if( p->isMainDb && gReadHook && iOfst>=gReadHookOffset ){
     void (*xHook)(void*) = gReadHook;
     gReadHook = 0;
@@ -2374,6 +2378,54 @@ static void run_opfs_like_vfs(void){
   }
   gOpfsLikeIo = 0;
   removeDbFiles(dbpath);
+}
+
+static void run_opfs_large_transaction(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  int counts[] = {1000, 5000, 20000};
+  int i;
+
+  check("opfs_large_register", registerFailVfs()==SQLITE_OK);
+  gOpfsLikeIo = 1;
+  gFailNoFetch = 1;
+  for(i=0; i<(int)(sizeof(counts)/sizeof(counts[0])); i++){
+    char sql[512], expected[64];
+    int n = counts[i];
+    make_dbpath(dbpath, sizeof(dbpath), "test_opfs_large");
+    removeDbFiles(dbpath);
+    check("opfs_large_open", open_fail_db(dbpath, &db)==SQLITE_OK);
+    if( !db ) continue;
+    sqlite3_snprintf(sizeof(sql), sql,
+        "CREATE TABLE t(id INTEGER PRIMARY KEY,v INT); BEGIN;"
+        "WITH RECURSIVE c(v) AS (VALUES(0) UNION ALL SELECT v+1 FROM c"
+        " WHERE v<%d) INSERT INTO t(v) SELECT v FROM c; COMMIT;", n-1);
+    check("opfs_large_insert", execSql(db, sql)==SQLITE_OK);
+    sqlite3_snprintf(sizeof(expected), expected, "%d", n);
+    check("opfs_large_count",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), expected)==0);
+    check("opfs_large_commit", execSql(db,
+        "SELECT dolt_commit('-Am','rows');")==SQLITE_OK);
+    check("opfs_large_close", sqlite3_close(db)==SQLITE_OK);
+    db = 0;
+    check("opfs_large_reopen", open_fail_db(dbpath, &db)==SQLITE_OK);
+    if( db ){
+      check("opfs_large_persist",
+          strcmp(queryScalarText(db, "SELECT count(*) FROM t"), expected)==0);
+      sqlite3_snprintf(sizeof(expected), expected, "%lld", (i64)n*(n-1)/2);
+      check("opfs_large_values",
+          strcmp(queryScalarText(db, "SELECT sum(v) FROM t"), expected)==0);
+      check("opfs_large_log",
+          strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_log"), "2")==0);
+      check("opfs_large_integrity",
+          strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
+      sqlite3_close(db);
+      db = 0;
+    }
+    removeDbFiles(dbpath);
+  }
+  gFailNoFetch = 0;
+  gOpfsLikeIo = 0;
 }
 
 static int persist_working_set(sqlite3 *db){
@@ -20644,7 +20696,8 @@ static const RegressionCase aCases[] = {
   { "nocase_nul_record_parse", "NOCASE NUL Record Parse Test", run_nocase_nul_record_parse },
   { "defer_fk_after_own_ddl", "Defer Foreign Keys After Own DDL", run_defer_fk_after_own_ddl },
   { "uri_branch_readonly_open", "Read-only URI Branch Open Test", run_uri_branch_readonly_open },
-  { "opfs_like_vfs", "OPFS-like VFS File Database Test", run_opfs_like_vfs }
+  { "opfs_like_vfs", "OPFS-like VFS File Database Test", run_opfs_like_vfs },
+  { "opfs_large_transaction", "OPFS Large Transaction Test", run_opfs_large_transaction }
 };
 
 static int run_case_by_name(const char *zName){

@@ -1134,7 +1134,7 @@ static int csFindLastCheckpointRoot(
     int i;
     if( iStart<cs->wal.iWalOffset ) iStart = cs->wal.iWalOffset;
     n = (int)(iEnd-iStart);
-    rc = sqlite3OsRead(cs->file.pFile, aBuf, n, iStart);
+    rc = csReadSliced(cs, aBuf, n, iStart);
     if( rc!=SQLITE_OK ) goto root_scan_done;
     for(i=(iEnd==nFile ? n-1 : n-5); i>=0; i--){
       i64 iRoot;
