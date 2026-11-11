@@ -761,4 +761,28 @@ run_test "decl_nocase_and_text_affinity" \
   "2" "$DBDECL"
 rm -f "$DBDECL"
 
+DBABS=/tmp/test_diff_table_absent_$$.db; rm -f "$DBABS"
+echo "CREATE TABLE base(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am','c0');
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am','c1');
+DROP TABLE t;
+SELECT dolt_commit('-Am','c2');
+CREATE TABLE t(id INTEGER PRIMARY KEY);" | $DOLTLITE "$DBABS" > /dev/null 2>&1
+run_test_error_match "slice_absent_on_both_sides_same_ref" \
+  "SELECT count(*) FROM dolt_diff_t('HEAD','HEAD');" \
+  "table not found: t" "$DBABS"
+run_test_error_match "slice_absent_on_both_sides" \
+  "SELECT count(*) FROM dolt_diff_t('HEAD~2','HEAD');" \
+  "table not found: t" "$DBABS"
+run_test_error_match "range_absent_on_both_sides" \
+  "SELECT count(*) FROM dolt_diff_t('HEAD~2..HEAD');" \
+  "table not found: t" "$DBABS"
+run_test "slice_dropped_table_still_diffs" \
+  "SELECT count(*) FROM dolt_diff_t('HEAD~1','HEAD'); SELECT count(*) FROM dolt_diff_t('HEAD','WORKING'); SELECT count(*) FROM dolt_diff_t;" \
+  "0
+0
+0" "$DBABS"
+rm -f "$DBABS"
+
 dltest_finish

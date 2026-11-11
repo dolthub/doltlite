@@ -136,6 +136,7 @@ struct DiffTblCursor {
   AuditRow row;
   int hasRow;
   int sourceError;
+  int tableMissing;
 };
 
 static int dtMapChunkSourceError(
@@ -656,6 +657,10 @@ static int buildSliceDiffPair(
     }
   }
 
+  if( prollyHashIsEmpty(&from.schemaHash) && prollyHashIsEmpty(&to.schemaHash) ){
+    pCur->tableMissing = 1;
+    return SQLITE_OK;
+  }
   if( prollyHashCompare(&from.tblRoot, &to.tblRoot)==0
    && prollyHashCompare(&from.schemaHash, &to.schemaHash)==0 ){
     return SQLITE_OK;
@@ -1069,6 +1074,7 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
   c->pairsDone = 0;
   c->hasRow = 0;
   c->sourceError = 0;
+  c->tableMissing = 0;
   c->sliceTime = 0;
   c->zFromFilter[0] = 0;
   c->zToFilter[0] = 0;
@@ -1130,6 +1136,12 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
     if( rc==SQLITE_OK ) rc = startHistoryWalk(c, db, pVtab->zTableName);
   }
   if( rc!=SQLITE_OK ) return rc;
+  if( c->tableMissing ){
+    sqlite3_free(pVtab->base.zErrMsg);
+    pVtab->base.zErrMsg = sqlite3_mprintf("table not found: %s",
+                                          pVtab->zTableName);
+    return pVtab->base.zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+  }
   if( c->nPairs==0 && !c->walkActive ){
     c->pairsDone = 1;
     return SQLITE_OK;
