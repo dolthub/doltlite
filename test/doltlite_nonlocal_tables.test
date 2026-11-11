@@ -92,6 +92,14 @@ do_catchsql_test nonlocal-bad-options {
 do_execsql_test nonlocal-bad-options-cleared {
   DELETE FROM dolt_nonlocal_tables WHERE table_name='manual_t';
 } {}
+do_catchsql_test nonlocal-options-case {
+  INSERT INTO dolt_nonlocal_tables VALUES('upper_t','main','users','IMMEDIATE');
+  SELECT * FROM upper_t;
+} {1 {Invalid nonlocal table options IMMEDIATE: only valid value is 'immediate'.}}
+do_execsql_test nonlocal-options-case-unlisted {
+  SELECT count(*) FROM pragma_table_list WHERE name='upper_t';
+  DELETE FROM dolt_nonlocal_tables WHERE table_name='upper_t';
+} {0}
 
 # Nonlocal and local writes commit, or roll back, together.
 do_execsql_test nonlocal-txn-commit {
