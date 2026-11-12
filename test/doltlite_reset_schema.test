@@ -91,4 +91,61 @@ foreach kind {view trigger} {
   }
 }
 
+# An untracked view or trigger whose name the reset restores to another
+# object gives the name back; unrelated untracked views are kept.
+foreach {name target} {head {} ref c1} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+    INSERT INTO t VALUES(1,1);
+  }
+  if {$name eq "head"} {
+    execsql {
+      CREATE TABLE x(id INTEGER PRIMARY KEY, a INT);
+      CREATE INDEX xa ON x(a);
+      INSERT INTO x VALUES(7,7);
+      SELECT dolt_commit('-Am','c0');
+      DROP TABLE x;
+    }
+  } else {
+    execsql {
+      SELECT dolt_commit('-Am','c0');
+      CREATE TABLE x(id INTEGER PRIMARY KEY, a INT);
+      CREATE INDEX xa ON x(a);
+      INSERT INTO x VALUES(7,7);
+      SELECT dolt_commit('-Am','c1');
+      SELECT dolt_tag('c1');
+      SELECT dolt_reset('--hard','HEAD~1');
+    }
+  }
+  execsql {
+    CREATE VIEW x AS SELECT a FROM t;
+    CREATE TRIGGER xi INSTEAD OF INSERT ON x BEGIN
+      INSERT INTO t VALUES(NEW.a, NEW.a);
+    END;
+    CREATE VIEW xa AS SELECT id FROM t;
+    CREATE VIEW keep AS SELECT id FROM t;
+  }
+  set prefix reset-hard-name-collision-$name
+  do_test $prefix-reset {
+    if {$target eq ""} {
+      catchsql {SELECT dolt_reset('--hard')}
+    } else {
+      catchsql {SELECT dolt_reset('--hard','c1')}
+    }
+  } {0 0}
+  set query {
+    SELECT type, name FROM sqlite_master ORDER BY name;
+    SELECT id FROM x WHERE a=7;
+    SELECT id FROM keep;
+    PRAGMA integrity_check;
+  }
+  set expected {view keep table t table x index xa 7 1 ok}
+  do_execsql_test $prefix-usable $query $expected
+  db close
+  sqlite3 db test.db
+  do_execsql_test $prefix-reopen $query $expected
+  do_execsql_test $prefix-reset-again {SELECT dolt_reset('--hard')} {0}
+}
+
 finish_test

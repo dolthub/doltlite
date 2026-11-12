@@ -543,6 +543,26 @@ static int doltlitePreserveUntrackedOnHardReset(
         clearSchemaEntry(&aWorkSchema[k]);
       }
     }
+    /* A restored object takes its name back from an untracked view or
+    ** trigger, and a trigger on such a view goes with it. */
+    for(k=0; rc==SQLITE_OK && k<nWorkSchema && preserveSchemas; k++){
+      SchemaEntry *p = &aWorkSchema[k];
+      if( !p->zType || !p->zName ) continue;
+      if( strcmp(p->zType, "view")!=0 && strcmp(p->zType, "trigger")!=0 ){
+        continue;
+      }
+      if( !findSchemaEntry(aTargetSchema, nTargetSchema, p->zName) ) continue;
+      if( strcmp(p->zType, "view")==0 ){
+        for(j=0; j<nWorkSchema; j++){
+          SchemaEntry *q = &aWorkSchema[j];
+          if( q!=p && q->zType && strcmp(q->zType, "trigger")==0
+           && q->zTblName && sqlite3_stricmp(q->zTblName, p->zName)==0 ){
+            clearSchemaEntry(q);
+          }
+        }
+      }
+      clearSchemaEntry(p);
+    }
     /* Build FROM the target so dropped tracked tables are restored, then
     ** append untracked entries past the target range (working numbers can
     ** collide). Locate untracked objects through working schema rows. */
