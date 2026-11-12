@@ -4561,7 +4561,11 @@ void sqlite3VdbeRecordUnpack(
   }
   testcase( u == pKeyInfo->nKeyField + 1 );
   testcase( u < pKeyInfo->nKeyField + 1 );
+#ifdef DOLTLITE_PROLLY
+  assert( u<=p->nField );
+#else
   assert( u<=pKeyInfo->nKeyField + 1 );
+#endif
   p->nField = u;
 }
 

@@ -69,4 +69,28 @@ foreach {kind type key update pk} {
   }
 }
 
+foreach unique {UNIQUE {}} {
+  foreach collation {NOCASE RTRIM} {
+    foreach pk {a,b a,b,d} {
+      reset_db
+      execsql "
+        CREATE TABLE t(a INT NOT NULL, b TEXT NOT NULL, d INT NOT NULL,
+                       c, PRIMARY KEY($pk));
+        INSERT INTO t VALUES(1,'x',3,10),(2,'y',4,20);
+        CREATE $unique INDEX i ON t(b COLLATE $collation);
+      "
+      set key [expr {$collation eq "NOCASE" ? "'X'" : "'x '"}]
+      foreach phase {pending reopened} {
+        if {$phase eq "reopened"} {
+          db close
+          sqlite3 db test.db
+        }
+        do_execsql_test collated-$unique-$collation-$pk-$phase "
+          SELECT c FROM t INDEXED BY i WHERE b=$key COLLATE $collation;
+        " {10}
+      }
+    }
+  }
+}
+
 finish_test

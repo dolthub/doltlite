@@ -64,6 +64,29 @@ foreach {kind schema} {
   } {1}
 }
 
+foreach {kind schema} {
+  ipk {id INTEGER PRIMARY KEY, v TEXT}
+  autoinc {id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT}
+  keyless {v TEXT}
+} {
+  reset_db
+  execsql "CREATE TABLE t($schema)"
+  execsql {
+    CREATE VIEW zv AS SELECT rowid AS id, v FROM t;
+    CREATE TRIGGER atr INSTEAD OF INSERT ON zv BEGIN
+      INSERT INTO t(rowid, v) VALUES(new.id, new.v);
+    END;
+  }
+  do_execsql_test shared-rowid-$kind-view-explicit {
+    INSERT INTO zv VALUES(1,'a');
+    SELECT rowid, v FROM t;
+  } {1 a}
+  do_execsql_test shared-rowid-$kind-view-generated {
+    INSERT INTO zv(v) VALUES('b'),('c');
+    SELECT rowid, v FROM t ORDER BY rowid;
+  } {1 a 2 b 3 c}
+}
+
 reset_db
 do_execsql_test shared-rowid-sequence-setup {
   CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT);

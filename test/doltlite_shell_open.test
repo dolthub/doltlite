@@ -78,6 +78,22 @@ do_test 5.2 {
   set res [catchcmd "br.db@nope" {SELECT 1;}]
   list [lindex $res 0] [regexp {branch or revision "nope" not found} $res]
 } {1 1}
+do_test 5.3 {
+  catchcmd "br.db/feat" {SELECT active_branch();}
+} {0 feat}
+do_test 5.4 {
+  catchcmd ":memory:" {.open br.db/feat
+SELECT active_branch();}
+} {0 feat}
+do_test 5.5 {
+  catchcmd ":memory:" {.open br.db@feat
+SELECT active_branch();}
+} {0 feat}
+ifcapable mem5 {
+  do_test 5.6 {
+    catchcmd "-heap 20000000 br.db/feat" {SELECT active_branch();}
+  } {0 feat}
+}
 
 sqlite3 db test.db
 finish_test
