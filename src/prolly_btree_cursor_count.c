@@ -237,6 +237,114 @@ static int countBlobKeysBefore(
   return rc;
 }
 
+static int estimateBlobRank(
+  Btree *pBtree,
+  struct TableEntry *pTE,
+  const u8 *pKey,
+  int nKey,
+  i64 *pRank,
+  i64 *pTotal
+){
+  ProllyCursor cur;
+  ProllyNode *pNode;
+  u64 total = 0, rank = 0;
+  int res = 0;
+  int rc;
+  int i, j;
+
+  prollyCursorInit(&cur, pBtree->pBt->pStore, &pBtree->pBt->cache,
+                   &pTE->root, pTE->flags);
+  rc = prollyCursorSeekBlob(&cur, pKey, nKey, &res);
+  if( rc!=SQLITE_OK ) goto done;
+  if( cur.eState!=PROLLY_CURSOR_VALID ){
+    *pRank = *pTotal = 0;
+    goto done;
+  }
+  pNode = &cur.aLevel[0].pEntry->node;
+  if( pNode->level==0 ){
+    total = pNode->nItems;
+  }else{
+    if( !prollyNodeHasSubtreeCounts(pNode) ){
+      rc = SQLITE_NOTFOUND;
+      goto done;
+    }
+    for(i=0; i<pNode->nItems; i++){
+      u64 n = prollyNodeChildSubtreeCount(pNode, i);
+      if( n>(u64)LARGEST_INT64-total ){
+        rc = SQLITE_CORRUPT;
+        goto done;
+      }
+      total += n;
+    }
+  }
+  for(i=0; i<cur.iLevel; i++){
+    pNode = &cur.aLevel[i].pEntry->node;
+    if( !prollyNodeHasSubtreeCounts(pNode) ){
+      rc = SQLITE_NOTFOUND;
+      goto done;
+    }
+    for(j=0; j<cur.aLevel[i].idx; j++){
+      u64 n = prollyNodeChildSubtreeCount(pNode, j);
+      if( n>total-rank ){
+        rc = SQLITE_CORRUPT;
+        goto done;
+      }
+      rank += n;
+    }
+  }
+  rank += cur.aLevel[cur.iLevel].idx + (res<0);
+  if( rank>total ){
+    rc = SQLITE_CORRUPT;
+    goto done;
+  }
+  *pRank = (i64)rank;
+  *pTotal = (i64)total;
+done:
+  prollyCursorClose(&cur);
+  return rc;
+}
+
+/* Ascending numeric prefixes only; planning must never flush pending edits. */
+int sqlite3BtreeProllyRangeRank(
+  Btree *pBtree,
+  Pgno iTable,
+  i64 value,
+  i64 *pLess,
+  i64 *pLessEq,
+  i64 *pTotal
+){
+  struct TableEntry *pTE;
+  u8 key[18];
+  u8 *pNext = 0;
+  int nKey = 0, nNext = 0;
+  int rc;
+
+  if( !pBtree || sqlite3BtreeUsesOrig(pBtree) ) return SQLITE_NOTFOUND;
+  pTE = findTable(pBtree, iTable);
+  if( !pTE || (pTE->flags & BTREE_INTKEY)!=0 ) return SQLITE_NOTFOUND;
+  if( pTE->pPending && !prollyMutMapIsEmpty((ProllyMutMap*)pTE->pPending) ){
+    return SQLITE_NOTFOUND;
+  }
+  if( prollyHashIsEmpty(&pTE->root) ){
+    *pLess = *pLessEq = *pTotal = 0;
+    return SQLITE_OK;
+  }
+  rc = sortKeyFromInt64(value, key, &nKey);
+  if( rc==SQLITE_OK ) rc = blobFieldSuccessor(key, nKey, &pNext, &nNext);
+  if( rc==SQLITE_OK ){
+    rc = estimateBlobRank(pBtree, pTE, key, nKey, pLess, pTotal);
+  }
+  if( rc==SQLITE_OK ){
+    if( pNext ){
+      rc = estimateBlobRank(pBtree, pTE, pNext, nNext, pLessEq, pTotal);
+    }else{
+      *pLessEq = *pTotal;
+    }
+  }
+  sqlite3_free(pNext);
+  return rc;
+}
+
 static int countTreeBlobPrefixRange(
   BtCursor *pCur,
   UnpackedRecord *pLower,

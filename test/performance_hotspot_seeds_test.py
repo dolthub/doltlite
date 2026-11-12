@@ -84,8 +84,8 @@ class SeedTests(unittest.TestCase):
 
     def test_retired_corpus_moves_to_search_and_random_exploration_continues(self):
         specs = list(seeds.specs())
-        self.assertEqual(len(specs), 36)
-        self.assertEqual(sum(len(cases) for _, cases, _ in specs), 48)
+        self.assertEqual(len(specs), 37)
+        self.assertEqual(sum(len(cases) for _, cases, _ in specs), 49)
         names = {path.stem for path in seeds.SEED_DIR.glob('*.json')}
         narrow_cases = {'index_fetch', 'join_pk', 'point_payload', 'point_pk', 'reverse_scan'}
         self.assertEqual(names, {'narrow_rows_'+name for name in narrow_cases}
@@ -104,7 +104,7 @@ class SeedTests(unittest.TestCase):
                                   'issue_3427', 'issue_3877', 'issue_3877_late',
                                   'issue_3258', 'issue_3271',
                                   'issue_3265', 'issue_3270',
-                                  'bulk_writes_delete_plain', 'issue_3300', 'issue_3301'})
+                                  'bulk_writes_delete_plain', 'issue_3300', 'issue_3301', 'issue_4842'})
         for name in names:
             bundle = json.loads((seeds.SEED_DIR/(name+'.json')).read_text())
             matches = [(p, case, sql) for p, cases, sql in specs for case in cases
@@ -120,7 +120,7 @@ class SeedTests(unittest.TestCase):
             for index, spec in enumerate(specs):
                 self.assertEqual(next(generated), (index, *spec, 'retired'))
             index, profile, cases, setup, origin = next(generated)
-            self.assertEqual(index, 36)
+            self.assertEqual(index, 37)
             self.assertEqual(len(cases), 4)
             self.assertEqual({case.recipe['operator'] for case in cases}, {'update_blob'})
             self.assertIn('CREATE TABLE u', setup)
