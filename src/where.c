@@ -2055,12 +2055,14 @@ static int whereRangeSkipScanEst(
 #endif /* SQLITE_ENABLE_STAT4 */
 
 #ifdef DOLTLITE_PROLLY
+static int doltliteLimitStopsEarly(WhereInfo*, LogEst);
 static int doltliteRangeScanEst(
-  Parse *pParse,
+  WhereInfo *pWInfo,
   WhereTerm *pLower,
   WhereTerm *pUpper,
   WhereLoop *pLoop
 ){
+  Parse *pParse = pWInfo->pParse;
   Index *pIdx = pLoop->u.btree.pIndex;
   Table *pTab = pIdx->pTable;
   sqlite3 *db = pParse->db;
@@ -2073,7 +2075,8 @@ static int doltliteRangeScanEst(
   if( pLoop->u.btree.nEq!=0 || pIdx->aiRowLogEst[0]<120
    || (pTab->tabFlags & TF_HasStat1)==0
    || (pLoop->wsFlags & (WHERE_IDX_ONLY|WHERE_IPK|WHERE_EXPRIDX))!=0
-   || (db->flags & SQLITE_EnableQPSG)!=0 || pIdx->aSortOrder[0] ){
+   || (db->flags & SQLITE_EnableQPSG)!=0 || pIdx->aSortOrder[0]
+   || doltliteLimitStopsEarly(pWInfo, pIdx->aiRowLogEst[0]) ){
     return SQLITE_NOTFOUND;
   }
   iCol = pIdx->aiColumn[0];
@@ -2164,7 +2167,7 @@ static int whereRangeScanEst(
   LogEst nNew;
 
 #ifdef DOLTLITE_PROLLY
-  rc = doltliteRangeScanEst(pParse, pLower, pUpper, pLoop);
+  rc = doltliteRangeScanEst(pBuilder->pWInfo, pLower, pUpper, pLoop);
   if( rc!=SQLITE_NOTFOUND ){
     if( rc!=SQLITE_OK ){
       sqlite3ErrorMsg(pParse, "%s", sqlite3ErrStr(rc));

@@ -454,13 +454,13 @@ class HotspotTests(unittest.TestCase):
         self.assertEqual(counts, {'narrow_rows': 5, 'zero_row_updates': 2,
                                  'in_transaction_mutations': 6, 'integer_keys': 2,
                                  'bulk_writes': 10, 'small_cache': 7, 'after_deletes': 4,
-                                 'index_row_fetches': 2, 'planner_choices': 3, 'pending_edits': 1})
+                                 'index_row_fetches': 2, 'planner_choices': 4, 'pending_edits': 1})
         self.assertEqual(sql.call_count, 75)
         grouped = {}
         for name, bundle, databases in fixtures:
             previous = grouped.setdefault(bundle['setup_sql'], databases)
             self.assertEqual(databases, previous)
-        self.assertEqual(len(grouped), 33)
+        self.assertEqual(len(grouped), 34)
 
     def test_retained_gate_measures_fixed_batches(self):
         bundle = json.loads((hotspots.TEST_DIR/'performance-hotspot-seeds/narrow_rows_point_pk.json').read_text())

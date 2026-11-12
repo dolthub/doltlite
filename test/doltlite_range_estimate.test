@@ -82,6 +82,34 @@ foreach {name type pk key suffix} {
 
 reset_db
 db eval {
+  PRAGMA cache_size=-4096;
+  CREATE TABLE t(id TEXT,seq INTEGER NOT NULL,grp INTEGER NOT NULL,
+                v INTEGER NOT NULL,payload BLOB,PRIMARY KEY(id,seq));
+  WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<8192)
+  INSERT INTO t SELECT printf('%016x',i),i,i%256,(i*7919)%1000000,
+                       zeroblob(1024) FROM c;
+  CREATE INDEX t_g ON t(grp);
+  CREATE INDEX t_gv ON t(grp,v);
+  CREATE TEMP TABLE g(seq INTEGER PRIMARY KEY,grp INTEGER);
+  INSERT INTO g SELECT row_number() OVER (ORDER BY grp,seq),grp FROM t;
+  UPDATE t SET grp=(SELECT grp FROM g WHERE g.seq=t.seq);
+  DROP TABLE g;
+  CREATE INDEX t_s ON t(seq);
+  ANALYZE;
+}
+set query {
+  SELECT sum(seq),sum(length(payload)) FROM (
+    SELECT seq,payload FROM t WHERE grp<16 ORDER BY seq LIMIT 81
+  )
+}
+do_test early-limit-plan {
+  expr {[lsearch -exact [range_estimate_plan db $query] {SCAN t USING INDEX t_s}]>=0}
+} 1
+do_test early-limit-rows {db eval $query} \
+  [db eval [string map {{FROM t WHERE} {FROM t INDEXED BY t_s WHERE}} $query]]
+
+reset_db
+db eval {
   CREATE TABLE t(id TEXT PRIMARY KEY,seq INTEGER NOT NULL,
                  grp INTEGER NOT NULL,v INTEGER NOT NULL,payload BLOB);
   WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<8192)

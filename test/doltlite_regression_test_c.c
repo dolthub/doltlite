@@ -49,6 +49,8 @@ extern int doltliteRemoteSrvResolveRootForTest(
 extern int btreeReadWorkingCatalog(
   ChunkStore*, const char*, ProllyHash*, ProllyHash*
 );
+extern int sqlite3BtreeProllyRangeRank(Btree*, Pgno, i64, i64*, i64*, i64*);
+extern int sqlite3BtreeHasPendingChanges(Btree*);
 
 static int nPass = 0;
 static int nFail = 0;
