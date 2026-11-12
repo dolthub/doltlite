@@ -47,6 +47,13 @@ int csReadUnlock(ChunkStore *cs, CsReadLock *pLock){
   return rc;
 }
 
+/* SQLITE_BUSY also covers a VFS without the direct lock; the caller then
+** takes the stepwise protocol, which reports the real outcome. */
+int csFileLockExclusiveDirect(sqlite3_file *pFile){
+  int rc = sqlite3OsFileControl(pFile, SQLITE_FCNTL_DOLTLITE_LOCK_EXCLUSIVE, 0);
+  return rc==SQLITE_OK ? SQLITE_OK : SQLITE_BUSY;
+}
+
 int csFileLockPromote(sqlite3_file *pFile){
   return sqlite3OsLock(pFile, SQLITE_LOCK_RESERVED);
 }
@@ -142,8 +149,10 @@ static int csFileRelock(CsFileLock pLock, int bCreate){
   int rc;
   if( !pLock ) return SQLITE_ERROR;
   rc = sqlite3OsDoltliteModeOf(pLock->pFile, pLock->zPath, 1);
-  if( rc==SQLITE_OK ) rc = sqlite3OsLock(pLock->pFile, SQLITE_LOCK_SHARED);
-  if( rc==SQLITE_OK ) rc = csFileLockPromote(pLock->pFile);
+  if( rc==SQLITE_OK && csFileLockExclusiveDirect(pLock->pFile)!=SQLITE_OK ){
+    rc = sqlite3OsLock(pLock->pFile, SQLITE_LOCK_SHARED);
+    if( rc==SQLITE_OK ) rc = csFileLockPromote(pLock->pFile);
+  }
 #if SQLITE_OS_UNIX
   if( rc==SQLITE_OK && !pLock->readOnly ){
     int bMoved = 1;

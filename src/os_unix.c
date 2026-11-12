@@ -2266,6 +2266,37 @@ static void setPendingFd(unixFile *pFile){
   pFile->pPreallocatedUnused = 0;
 }
 
+#ifdef DOLTLITE_PROLLY
+/* NO_LOCK to EXCLUSIVE_LOCK in one fcntl over the bytes an EXCLUSIVE
+** holder owns. Any conflict is SQLITE_BUSY and leaves the file unlocked,
+** so the caller can fall back to the stepwise unixLock() protocol. */
+static int unixLockExclusiveDirect(unixFile *pFile){
+  unixInodeInfo *pInode = pFile->pInode;
+  struct flock lock;
+  int rc = SQLITE_BUSY;
+  if( pFile->pMethod->xLock!=unixLock || !pInode ) return SQLITE_NOTFOUND;
+  sqlite3_mutex_enter(pInode->pLockMutex);
+  if( pFile->eFileLock==NO_LOCK
+   && pInode->eFileLock==NO_LOCK
+   && pInode->nShared==0
+  ){
+    lock.l_type = F_WRLCK;
+    lock.l_whence = SEEK_SET;
+    lock.l_start = PENDING_BYTE;
+    lock.l_len = SHARED_SIZE + 2;
+    if( unixFileLock(pFile, &lock)==0 ){
+      pFile->eFileLock = EXCLUSIVE_LOCK;
+      pInode->eFileLock = EXCLUSIVE_LOCK;
+      pInode->nShared = 1;
+      pInode->nLock++;
+      rc = SQLITE_OK;
+    }
+  }
+  sqlite3_mutex_leave(pInode->pLockMutex);
+  return rc;
+}
+#endif
+
 /*
 ** Lower the locking level on file descriptor pFile to eFileLock.  eFileLock
 ** must be either NO_LOCK or SHARED_LOCK.
@@ -2387,6 +2418,12 @@ static int posixUnlock(sqlite3_file *id, int eFileLock, int handleNFSUnlock){
     lock.l_whence = SEEK_SET;
     lock.l_start = PENDING_BYTE;
     lock.l_len = 2L;  assert( PENDING_BYTE+1==RESERVED_BYTE );
+#ifdef DOLTLITE_PROLLY
+    /* The unlock below releases these two bytes as well. */
+    if( eFileLock==NO_LOCK && pInode->nShared==1 ){
+      pInode->eFileLock = SHARED_LOCK;
+    }else
+#endif
     if( unixFileLock(pFile, &lock)==0 ){
       pInode->eFileLock = SHARED_LOCK;
     }else{
@@ -4350,6 +4387,9 @@ static int unixFileControl(sqlite3_file *id, int op, void *pArg){
     }
     case SQLITE_FCNTL_DOLTLITE_GRAPH_LOCK: {
       return unixGraphLock(pFile, *(int*)pArg);
+    }
+    case SQLITE_FCNTL_DOLTLITE_LOCK_EXCLUSIVE: {
+      return unixLockExclusiveDirect(pFile);
     }
     case SQLITE_FCNTL_DOLTLITE_BRANCH_PRESENCE: {
       return unixBranchPresence(pFile, (DoltliteBranchPresence*)pArg);

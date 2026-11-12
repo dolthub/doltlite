@@ -447,11 +447,15 @@ static int csCommitToFile(
   if( rc!=SQLITE_OK ) goto commit_done;
 
   if( !cs->isBuffer ){
-    rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_SHARED);
-    if( rc==SQLITE_OK ){
-      rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_RESERVED);
+    int bDirect = csFileLockExclusiveDirect(cs->file.pFile)==SQLITE_OK;
+    rc = SQLITE_OK;
+    if( !bDirect ){
+      rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_SHARED);
+      if( rc==SQLITE_OK ){
+        rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_RESERVED);
+      }
     }
-    if( rc==SQLITE_OK ){
+    if( rc==SQLITE_OK && !bDirect ){
       int haveReserved = 1;
       do {
         if( !haveReserved ){
