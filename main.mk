@@ -602,9 +602,9 @@ include $(TOP)/doltlite.mk
 # The unit is doltlite_engine.c: the amalgamation without its remote client,
 # TLS and credential code. Those stay objects, along with the remote server
 # the amalgamation never has, and so do BLAKE3's SIMD sources, which need
-# their own -m flags. The engine's internals keep external linkage
-# (SQLITE_PRIVATE is empty) because those objects and the C unit tests call
-# them.
+# their own -m flags. The engine's internals stay static, apart from the few
+# the remote objects call (listed in tool/mksqlite3c.tcl), so the C unit
+# tests, which reach into the engine, do not link in this mode.
 #
 DOLTLITE_SINGLE_FILE ?= 0
 ifeq ($(DOLTLITE_SINGLE_FILE),1)
@@ -1903,8 +1903,7 @@ doltlite_engine.c:	sqlite3.c
 		--doltlite-external-remotes $(EXTRA_SRC)
 
 libdoltlite.single.o:	sqlite3.h doltlite_engine.c
-	$(T.cc.sqlite) -DSQLITE_PRIVATE= -DDOLTLITE_BLAKE3_SIMD_OBJECTS \
-		-c doltlite_engine.c -o $@
+	$(T.cc.sqlite) -DDOLTLITE_BLAKE3_SIMD_OBJECTS -c doltlite_engine.c -o $@
 
 table.o:	$(TOP)/src/table.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/table.c
@@ -3222,7 +3221,10 @@ c-tests: doltlite-c-tests-build
 # distribution channel) re-links anyway and an unversioned dylib is
 # what the formula expects.
 #
+# ar adds members without dropping old ones, so an archive left by the other
+# value of DOLTLITE_SINGLE_FILE would end up holding the engine twice.
 libdoltlite$(T.lib):	$(LIBOBJS0)
+	rm -f $@
 	$(AR) $(AR.flags) $@ $(LIBOBJS0)
 
 LDFLAGS.libdoltlite.os-specific = $(subst $(libsqlite3.DLL),libdoltlite$(T.dll),$(LDFLAGS.libsqlite3.os-specific))
