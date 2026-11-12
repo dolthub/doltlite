@@ -11690,6 +11690,115 @@ static void run_rollback_reader(void){
   }
 }
 
+static void run_range_rank(void){
+  const i64 bounds[] = {
+    SMALLEST_INT64, -2147483648LL, -1, 0, 1, 2, 2147483647LL,
+    9007199254740992LL, 9007199254740993LL, LARGEST_INT64
+  };
+  char path[512];
+  int layout, size, i;
+  make_dbpath(path, sizeof(path), "range_rank");
+  for(layout=0; layout<2; layout++){
+    for(size=0; size<2; size++){
+      sqlite3 *db = 0;
+      Btree *pBt;
+      Pgno root;
+      char *sql;
+      removeDbFiles(path);
+      check("range_rank_open", open_db(path, &db)==SQLITE_OK);
+      sql = sqlite3_mprintf(
+          "CREATE TABLE t(id %s PRIMARY KEY,n NUMERIC NOT NULL);"
+          "WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1"
+          " FROM c WHERE i<%d) INSERT INTO t SELECT %s,i%%23-11 FROM c;"
+          "INSERT INTO t VALUES(9001,1.5),(9002,-0.5),"
+          "(9003,9007199254740993),(9004,9223372036854775807),"
+          "(9005,-9223372036854775808),(9006,'text'),"
+          "(9007,1e999),(9008,-1e999);"
+          "CREATE INDEX t_n ON t(n);",
+          layout ? "TEXT" : "INTEGER", size ? 8192 : 32,
+          layout ? "printf('%016x',i)" : "i");
+      check("range_rank_setup", execSql(db, sql)==SQLITE_OK);
+      sqlite3_free(sql);
+      pBt = db->aDb[0].pBt;
+      root = (Pgno)queryInt64(db,
+          "SELECT rootpage FROM sqlite_schema WHERE name='t_n'");
+      for(i=0; i<(int)(sizeof(bounds)/sizeof(bounds[0])); i++){
+        i64 less = -1, lessEq = -1, total = -1;
+        check("range_rank_count", sqlite3BtreeProllyRangeRank(
+            pBt, root, bounds[i], &less, &lessEq, &total)==SQLITE_OK);
+        sql = sqlite3_mprintf("SELECT sum(n<%lld) FROM t NOT INDEXED", bounds[i]);
+        check("range_rank_less", less==queryInt64(db, sql));
+        sqlite3_free(sql);
+        sql = sqlite3_mprintf("SELECT sum(n<=%lld) FROM t NOT INDEXED", bounds[i]);
+        check("range_rank_less_eq", lessEq==queryInt64(db, sql));
+        sqlite3_free(sql);
+        check("range_rank_total", total==queryInt64(db,
+            "SELECT sum(1) FROM t NOT INDEXED"));
+      }
+      check("range_rank_begin", execSql(db,
+          "BEGIN; UPDATE t SET n=n+1 WHERE n=1")==SQLITE_OK);
+      {
+        i64 less, lessEq, total;
+        check("range_rank_pending", sqlite3BtreeProllyRangeRank(
+            pBt, root, 0, &less, &lessEq, &total)==SQLITE_NOTFOUND);
+        check("range_rank_still_pending", sqlite3BtreeHasPendingChanges(pBt));
+      }
+      check("range_rank_rollback", execSql(db, "ROLLBACK")==SQLITE_OK);
+      sqlite3_close(db);
+      removeDbFiles(path);
+    }
+  }
+}
+
+static void run_range_rank_ioerr(void){
+  char path[512];
+  sqlite3 *db = 0;
+  i64 expected;
+  int nth, seen = 0;
+  make_dbpath(path, sizeof(path), "range_rank_ioerr");
+  removeDbFiles(path);
+  check("range_io_register", registerFailVfs()==SQLITE_OK);
+  check("range_io_seed_open", open_db(path, &db)==SQLITE_OK);
+  check("range_io_seed", execSql(db,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY,n INTEGER NOT NULL,v INTEGER NOT NULL);"
+      "WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<8192)"
+      "INSERT INTO t SELECT i,(i%16==0),i FROM c;"
+      "CREATE INDEX t_n ON t(n); ANALYZE;")==SQLITE_OK);
+  expected = queryInt64(db, "SELECT sum(v) FROM t WHERE n<1");
+  sqlite3_close(db);
+  gFailNoFetch = 1;
+  for(nth=1; nth<64; nth++){
+    sqlite3_stmt *stmt = 0;
+    int rc, hits;
+    db = 0;
+    check("range_io_open", open_fail_db(path, &db)==SQLITE_OK);
+    if( !db ) break;
+    sqlite3_extended_result_codes(db, 1);
+    check("range_io_schema", execSql(db,
+        "SELECT name FROM sqlite_schema WHERE 0")==SQLITE_OK);
+    gFailHits = 0;
+    gFailReadNth = nth;
+    rc = sqlite3_prepare_v2(db, "SELECT sum(v) FROM t WHERE n<1", -1, &stmt, 0);
+    hits = gFailHits;
+    gFailReadNth = 0;
+    if( hits ){
+      seen++;
+      check("range_io_prepare", (rc&0xff)==SQLITE_IOERR);
+    }else{
+      check("range_io_no_fault", rc==SQLITE_OK);
+    }
+    sqlite3_finalize(stmt);
+    check("range_io_retry", queryInt64(db,
+        "SELECT sum(v) FROM t WHERE n<1")==expected);
+    sqlite3_close(db);
+    if( !hits ) break;
+  }
+  gFailReadNth = 0;
+  gFailNoFetch = 0;
+  check("range_io_injected", seen>0);
+  removeDbFiles(path);
+}
+
 static void run_compacted_noop_commit(void){
   char path[512], branch[600];
   int layout;
@@ -20741,6 +20850,8 @@ static const RegressionCase aCases[] = {
   { "nocase_nul_record_parse", "NOCASE NUL Record Parse Test", run_nocase_nul_record_parse },
   { "defer_fk_after_own_ddl", "Defer Foreign Keys After Own DDL", run_defer_fk_after_own_ddl },
   { "uri_branch_readonly_open", "Read-only URI Branch Open Test", run_uri_branch_readonly_open },
+  { "range_rank", "Numeric Index Prefix Rank Test", run_range_rank },
+  { "range_rank_ioerr", "Numeric Index Prefix Rank Read Error Test", run_range_rank_ioerr },
   { "compacted_noop_commit", "Compacted No-op Commit Test", run_compacted_noop_commit },
   { "opfs_like_vfs", "OPFS-like VFS File Database Test", run_opfs_like_vfs },
   { "opfs_large_transaction", "OPFS Large Transaction Test", run_opfs_large_transaction }

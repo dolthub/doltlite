@@ -176,6 +176,7 @@ doltlite_ignore_values
 doltlite_pending_scan
 doltlite_pending_delete_scan
 doltlite_dml_scan_cost
+doltlite_range_estimate
 doltlite_index_cost_tie
 doltlite_correlated_in
 doltlite_numeric_desc_compat

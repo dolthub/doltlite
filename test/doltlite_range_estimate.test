@@ -1,0 +1,121 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+set testprefix doltlite-range-estimate
+
+proc range_estimate_plan {conn sql} {
+  set plan {}
+  $conn eval "EXPLAIN QUERY PLAN $sql" row {lappend plan $row(detail)}
+  return $plan
+}
+
+foreach {name type pk key suffix} {
+  text TEXT id {printf('%016x',i)} {}
+  blob BLOB id {CAST(printf('%016x',i) AS BLOB)} {}
+  composite TEXT {id,seq} {printf('%016x',i%128)} {WITHOUT ROWID}
+  integer INTEGER id i {}
+} {
+  reset_db
+  forcedelete range-oracle.db
+  sqlite3 oracle {file:range-oracle.db?doltlite_engine=sqlite} -uri 1
+  foreach conn {db oracle} {
+    $conn eval "
+      CREATE TABLE t(id $type,seq INTEGER NOT NULL,grp INTEGER NOT NULL,
+                     v INTEGER NOT NULL,PRIMARY KEY($pk)) $suffix;
+      WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<8192)
+      INSERT INTO t SELECT $key,i,(i%16==0),(i*7919)%1000000 FROM c;
+      CREATE INDEX t_g ON t(grp);
+      CREATE INDEX t_s ON t(seq);
+    "
+  }
+  do_test $name-no-statistics {
+    range_estimate_plan db {SELECT sum(v) FROM t WHERE grp<1}
+  } {{SEARCH t USING INDEX t_g (grp<?)}}
+  foreach conn {db oracle} {$conn eval {ANALYZE}}
+  foreach {op value access} {
+    < 1 SCAN <= 0 SCAN > -1 SCAN >= 0 SCAN
+    < 0 SEARCH <= -1 SEARCH > 0 SEARCH >= 1 SEARCH
+  } {
+    set query "SELECT count(*),sum(v) FROM t WHERE grp $op $value"
+    do_test $name-$op-$value-plan {
+      set plan [range_estimate_plan db $query]
+      expr {[lsearch -glob $plan "$access t*"]>=0}
+    } 1
+    do_test $name-$op-$value-rows {db eval $query} [oracle eval $query]
+  }
+  do_test $name-broad-between-plan {
+    range_estimate_plan db {SELECT sum(v) FROM t WHERE grp BETWEEN 0 AND 0}
+  } {{SCAN t}}
+  do_test $name-narrow-between-plan {
+    set plan [range_estimate_plan db {SELECT sum(v) FROM t WHERE seq BETWEEN 10 AND 20}]
+    expr {[lsearch -glob $plan {SEARCH t USING INDEX t_s*}]>=0}
+  } 1
+  do_test $name-covering-plan {
+    range_estimate_plan db {SELECT sum(grp) FROM t WHERE grp<1}
+  } {{SEARCH t USING COVERING INDEX t_g (grp<?)}}
+  do_test $name-stability {
+    sqlite3_db_config db ENABLE_QPSG 1
+    set plan [range_estimate_plan db {SELECT sum(v) FROM t WHERE grp<1}]
+    sqlite3_db_config db ENABLE_QPSG 0
+    set plan
+  } {{SEARCH t USING INDEX t_g (grp<?)}}
+  do_test $name-likelihood {
+    range_estimate_plan db {SELECT sum(v) FROM t WHERE likelihood(grp<1,0.01)}
+  } {{SEARCH t USING INDEX t_g (grp<?)}}
+  foreach conn {db oracle} {
+    $conn eval "BEGIN; WITH c(i) AS (VALUES(8193))
+      INSERT INTO t SELECT $key,i,0,7 FROM c"
+  }
+  do_test $name-pending {
+    range_estimate_plan db {SELECT sum(v) FROM t WHERE grp<1}
+  } {{SEARCH t USING INDEX t_g (grp<?)}}
+  do_test $name-pending-rows {
+    db eval {SELECT sum(v) FROM t WHERE grp<1}
+  } [oracle eval {SELECT sum(v) FROM t WHERE grp<1}]
+  foreach conn {db oracle} {$conn eval {ROLLBACK}}
+  db cache flush
+  do_test $name-after-rollback {
+    range_estimate_plan db {SELECT sum(v) FROM t WHERE grp<1}
+  } {{SCAN t}}
+  oracle close
+}
+
+reset_db
+db eval {
+  CREATE TABLE t(id TEXT PRIMARY KEY,seq INTEGER NOT NULL,
+                 grp INTEGER NOT NULL,v INTEGER NOT NULL,payload BLOB);
+  WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<8192)
+  INSERT INTO t SELECT printf('%016x',i),i,(i%16==0),
+                       (i*7919)%1000000,zeroblob(32) FROM c;
+  CREATE INDEX t_gv ON t(grp,v);
+  CREATE INDEX t_s ON t(seq);
+  CREATE TABLE u(id INTEGER PRIMARY KEY,v INTEGER);
+  INSERT INTO u SELECT seq,v FROM t WHERE seq%2=0;
+  ANALYZE;
+}
+set query {
+  SELECT count(*),sum(x) FROM (
+    SELECT t.seq AS x FROM t WHERE t.grp<1
+      AND EXISTS(SELECT 1 FROM u WHERE u.id=t.seq AND u.v>=t.v)
+    EXCEPT SELECT v FROM u
+  )
+}
+do_test except-plan {
+  set plan [range_estimate_plan db $query]
+  expr {[lsearch -exact $plan {SCAN t}]>=0
+     && [lsearch -glob $plan {SEARCH t USING INDEX t_gv*}]<0}
+} 1
+do_test except-rows {db eval $query} \
+  [db eval [string map {{FROM t WHERE} {FROM t NOT INDEXED WHERE}} $query]]
+
+set expected [db eval {SELECT sum(v) FROM t WHERE grp<1}]
+faultsim_save_and_close
+do_faultsim_test $testprefix-fault -faults {oom-* ioerr-*} -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db eval {SELECT sum(v) FROM t WHERE grp<1}
+} -test {
+  faultsim_test_result [list 0 $::expected]
+}
+
+finish_test

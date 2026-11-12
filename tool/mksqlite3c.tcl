@@ -680,6 +680,7 @@ proc emit_doltlite_storage_block {} {
     sqlite3BtreeProllyIndexRowid
     sqlite3BtreeProllyIndexHasNocaseNul
     sqlite3BtreeProllyIndexHasWideNumericDesc
+    sqlite3BtreeProllyRangeRank
     sqlite3BtreeProllyClearCompareKey
     sqlite3BtreeSqlRowid
     sqlite3BtreeSqlRowidMoveto

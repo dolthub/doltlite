@@ -415,6 +415,9 @@ int sqlite3BtreeCount(sqlite3*, BtCursor*, i64*);
 int sqlite3BtreeCountRange(sqlite3*, BtCursor*, i64, i64, i64*);
 int sqlite3BtreeCountIndexRange(sqlite3*, BtCursor*, UnpackedRecord*,
                                 UnpackedRecord*, i64*);
+#ifdef DOLTLITE_PROLLY
+int sqlite3BtreeProllyRangeRank(Btree*, Pgno, i64, i64*, i64*, i64*);
+#endif
 
 #ifdef SQLITE_TEST
 int sqlite3BtreeCursorInfo(BtCursor*, int*, int);

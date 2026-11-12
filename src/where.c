@@ -2054,6 +2054,64 @@ static int whereRangeSkipScanEst(
 }
 #endif /* SQLITE_ENABLE_STAT4 */
 
+#ifdef DOLTLITE_PROLLY
+static int doltliteRangeScanEst(
+  Parse *pParse,
+  WhereTerm *pLower,
+  WhereTerm *pUpper,
+  WhereLoop *pLoop
+){
+  Index *pIdx = pLoop->u.btree.pIndex;
+  Table *pTab = pIdx->pTable;
+  sqlite3 *db = pParse->db;
+  Btree *pBt;
+  WhereTerm *bounds[2];
+  i64 lower = 0, upper = 0, total = 0;
+  int iDb, iCol, i;
+  char aff;
+
+  if( pLoop->u.btree.nEq!=0 || pIdx->aiRowLogEst[0]<120
+   || (pTab->tabFlags & TF_HasStat1)==0
+   || (pLoop->wsFlags & (WHERE_IDX_ONLY|WHERE_IPK|WHERE_EXPRIDX))!=0
+   || (db->flags & SQLITE_EnableQPSG)!=0 || pIdx->aSortOrder[0] ){
+    return SQLITE_NOTFOUND;
+  }
+  iCol = pIdx->aiColumn[0];
+  if( iCol<0 || pTab->aCol[iCol].notNull==0 ) return SQLITE_NOTFOUND;
+  aff = sqlite3TableColumnAffinity(pTab, iCol);
+  if( aff!=SQLITE_AFF_INTEGER && aff!=SQLITE_AFF_NUMERIC
+   && aff!=SQLITE_AFF_REAL ) return SQLITE_NOTFOUND;
+  iDb = sqlite3SchemaToIndex(db, pTab->pSchema);
+  if( iDb<0 || iDb>=db->nDb || (pBt = db->aDb[iDb].pBt)==0 ){
+    return SQLITE_NOTFOUND;
+  }
+  bounds[0] = pLower;
+  bounds[1] = pUpper;
+  for(i=0; i<2; i++){
+    i64 less = 0, lessEq = 0;
+    int value;
+    int rc;
+    WhereTerm *pTerm = bounds[i];
+    if( pTerm==0 ) continue;
+    if( pTerm->truthProb<=0
+     || !sqlite3ExprIsInteger(pTerm->pExpr->pRight, &value, pParse, 0) ){
+      return SQLITE_NOTFOUND;
+    }
+    rc = sqlite3BtreeProllyRangeRank(pBt, pIdx->tnum, value,
+                                    &less, &lessEq, &total);
+    if( rc!=SQLITE_OK ) return rc;
+    if( i==0 ){
+      lower = (pTerm->eOperator & WO_GT)!=0 ? lessEq : less;
+    }else{
+      upper = (pTerm->eOperator & WO_LE)!=0 ? lessEq : less;
+    }
+  }
+  if( pUpper==0 ) upper = total;
+  pLoop->nOut = MIN(pLoop->nOut,
+      sqlite3LogEst((u64)MAX((i64)2, upper-lower)));
+  return SQLITE_OK;
+}
+#endif
 /*
 ** This function is used to estimate the number of rows that will be visited
 ** by scanning an index for a range of values. The range may have an upper
@@ -2105,6 +2163,18 @@ static int whereRangeScanEst(
   int nOut = pLoop->nOut;
   LogEst nNew;
 
+#ifdef DOLTLITE_PROLLY
+  rc = doltliteRangeScanEst(pParse, pLower, pUpper, pLoop);
+  if( rc!=SQLITE_NOTFOUND ){
+    if( rc!=SQLITE_OK ){
+      sqlite3ErrorMsg(pParse, "%s", sqlite3ErrStr(rc));
+      pParse->rc = rc;
+    }
+    return rc;
+  }
+  rc = SQLITE_OK;
+
+#endif
 #ifdef SQLITE_ENABLE_STAT4
   Index *p = pLoop->u.btree.pIndex;
   int nEq = pLoop->u.btree.nEq;
@@ -3654,7 +3724,12 @@ static int whereLoopAddBtreeIndex(
     if( pNew->wsFlags & WHERE_COLUMN_RANGE ){
       /* Adjust nOut using stat4 data. Or, if there is no stat4
       ** data, using some other estimate.  */
+#ifdef DOLTLITE_PROLLY
+      rc = whereRangeScanEst(pParse, pBuilder, pBtm, pTop, pNew);
+      if( rc!=SQLITE_OK ) break;
+#else
       whereRangeScanEst(pParse, pBuilder, pBtm, pTop, pNew);
+#endif
     }else{
       int nEq = ++pNew->u.btree.nEq;
       assert( eOp & (WO_ISNULL|WO_EQ|WO_IN|WO_IS) );
