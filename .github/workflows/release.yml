@@ -175,10 +175,7 @@ jobs:
       run: |
         mkdir -p build && cd build
         ../configure
-        # LTO measured 4-11% faster with Apple clang and no faster with GCC.
-        lto=
-        if [ "$(uname -s)" = Darwin ]; then lto=DOLTLITE_LTO=1; fi
-        make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu) $lto doltlite doltlite-remotesrv doltlite-lib
+        make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu) DOLTLITE_SINGLE_FILE=1 doltlite doltlite-remotesrv doltlite-lib
 
     - name: Build (Windows / MSYS2)
       if: runner.os == 'Windows'

@@ -369,32 +369,6 @@ T.cc += $(CFLAGS.core) $(CFLAGS.env)
 T.cc += $(OPT_FEATURE_FLAGS) $(OPTS)
 
 #
-# DOLTLITE_LTO=1 builds the deliverables (doltlite, doltlite-remotesrv,
-# libdoltlite) with link-time optimization. DoltLite is some 330 objects, so
-# without it nothing inlines across files; the stock amalgamation is one
-# translation unit and gets that for free.
-#
-# Every deliverable links one object, libdoltlite.lto.o, which is the whole
-# library optimized together and already compiled to machine code. That runs
-# the optimizer once rather than once per link, and it keeps compiler IR out
-# of the static archive: an archive of LTO objects only links with the exact
-# compiler release that produced it.
-#
-DOLTLITE_LTO ?= 0
-ifeq ($(DOLTLITE_LTO),1)
-DOLTLITE_LTO.clang := $(shell $(CC) --version 2>/dev/null | grep -c clang)
-ifeq ($(DOLTLITE_LTO.clang),0)
-DOLTLITE_LTO.flag = -flto=auto
-else
-DOLTLITE_LTO.flag = -flto
-endif
-T.cc += $(DOLTLITE_LTO.flag)
-LIBOBJS0.link = libdoltlite.lto.o
-else
-LIBOBJS0.link = $(LIBOBJS0)
-endif
-
-#
 # $(LDFLAGS.configure) represents any LDFLAGS=... the client passes to
 # the configure process.  The historical build enabled passing-on of
 # user-provided LDFLAGS at configure-time but not make-time. That
@@ -620,20 +594,21 @@ LIBOBJS0 = alter.o analyze.o attach.o auth.o \
 include $(TOP)/doltlite.mk
 
 #
-# DOLTLITE_SINGLE_FILE=1 builds everything that links the library objects
-# from the amalgamation instead: one translation unit, so the compiler
-# inlines across what are otherwise some 330 files. That is how the stock
-# SQLite the benchmarks compare against is built. BLAKE3's SIMD sources need
-# their own -m flags, so they stay separate objects and the amalgamation is
-# told to keep the runtime dispatch to them.
+# DOLTLITE_SINGLE_FILE=1 compiles the SQL core, the storage engine and the
+# version-control layer as one translation unit, so the compiler inlines
+# across what are otherwise some 250 files. That is how the stock SQLite the
+# benchmarks compare against is built.
 #
-# The amalgamation makes the engine's internal functions static and leaves
-# out the in-process remote server, so the C unit tests and doltlite-remotesrv
-# do not link in this mode.
+# The unit is doltlite_engine.c: the amalgamation without its remote client,
+# TLS and credential code. Those stay objects, along with the remote server
+# the amalgamation never has, and so do BLAKE3's SIMD sources, which need
+# their own -m flags. The engine's internals keep external linkage
+# (SQLITE_PRIVATE is empty) because those objects and the C unit tests call
+# them.
 #
 DOLTLITE_SINGLE_FILE ?= 0
 ifeq ($(DOLTLITE_SINGLE_FILE),1)
-LIBOBJS0 := libdoltlite.single.o $(BLAKE3_SIMD_OBJS)
+LIBOBJS0 := libdoltlite.single.o $(BLAKE3_SIMD_OBJS) $(DOLTLITE_REMOTE_OBJS)
 endif
 
 LIBOBJS = $(LIBOBJS0)
@@ -1923,8 +1898,13 @@ status.o:	$(TOP)/src/status.c $(DEPS_OBJ_COMMON)
 sqlite3.o:	sqlite3.h sqlite3.c
 	$(T.cc.sqlite) -c sqlite3.c
 
-libdoltlite.single.o:	sqlite3.h sqlite3.c
-	$(T.cc.sqlite) -DDOLTLITE_BLAKE3_SIMD_OBJECTS -c sqlite3.c -o $@
+doltlite_engine.c:	sqlite3.c
+	$(B.tclsh) $(TOP)/tool/mksqlite3c.tcl $(AMALGAMATION_GEN_FLAGS) \
+		--doltlite-external-remotes $(EXTRA_SRC)
+
+libdoltlite.single.o:	sqlite3.h doltlite_engine.c
+	$(T.cc.sqlite) -DSQLITE_PRIVATE= -DDOLTLITE_BLAKE3_SIMD_OBJECTS \
+		-c doltlite_engine.c -o $@
 
 table.o:	$(TOP)/src/table.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/table.c
@@ -2841,9 +2821,9 @@ sqlite3d$(T.exe):	shell.c $(LIBOBJS0)
 shell_renamed.c: shell.c
 	sed 's/^int SQLITE_CDECL main(/int SQLITE_CDECL sqlite3_shell_main(/' shell.c > $@
 
-doltlite$(T.exe):	shell_renamed.c $(TOP)/src/shell_wrapper.c $(LIBOBJS0.link)
+doltlite$(T.exe):	shell_renamed.c $(TOP)/src/shell_wrapper.c $(LIBOBJS0)
 	$(T.link) -o $@ \
-		shell_renamed.c $(TOP)/src/shell_wrapper.c $(LIBOBJS0.link) \
+		shell_renamed.c $(TOP)/src/shell_wrapper.c $(LIBOBJS0) \
 		$(CFLAGS.readline) $(SHELL_OPT) \
 		$(LDFLAGS.libsqlite3) $(LDFLAGS.readline)
 
@@ -3242,18 +3222,8 @@ c-tests: doltlite-c-tests-build
 # distribution channel) re-links anyway and an unversioned dylib is
 # what the formula expects.
 #
-libdoltlite$(T.lib):	$(LIBOBJS0.link)
-	$(AR) $(AR.flags) $@ $(LIBOBJS0.link)
-
-# GCC optimizes and emits machine code in the one relinking step. Clang's
-# relink only merges the bitcode, so the merged module is compiled after it.
-libdoltlite.lto.o:	$(LIBOBJS0)
-ifeq ($(DOLTLITE_LTO.clang),0)
-	$(T.cc) -r -nostdlib -flinker-output=nolto-rel -o $@ $(LIBOBJS0)
-else
-	$(T.cc) -r -nostdlib -o libdoltlite.lto.bc $(LIBOBJS0)
-	$(T.cc) -fno-lto -c -x ir libdoltlite.lto.bc -o $@
-endif
+libdoltlite$(T.lib):	$(LIBOBJS0)
+	$(AR) $(AR.flags) $@ $(LIBOBJS0)
 
 LDFLAGS.libdoltlite.os-specific = $(subst $(libsqlite3.DLL),libdoltlite$(T.dll),$(LDFLAGS.libsqlite3.os-specific))
 # On Linux (T.dll==.so), force a SONAME of libdoltlite.so.0 regardless
@@ -3300,8 +3270,8 @@ libdoltlite.def: $(LIBOBJS0)
 libdoltlite.deffile = $(if $(filter .dll,$(T.dll)),libdoltlite.def,)
 LDFLAGS.libdoltlite.runtime = $(if $(filter .dll,$(T.dll)),-static,)
 
-libdoltlite$(T.dll):	$(LIBOBJS0.link) $(libdoltlite.exports.file) $(libdoltlite.deffile)
-	$(T.link.shared) $(LDFLAGS.libdoltlite.runtime) -o $@ $(libdoltlite.deffile) $(LIBOBJS0.link) $(LDFLAGS.libsqlite3) \
+libdoltlite$(T.dll):	$(LIBOBJS0) $(libdoltlite.exports.file) $(libdoltlite.deffile)
+	$(T.link.shared) $(LDFLAGS.libdoltlite.runtime) -o $@ $(libdoltlite.deffile) $(LIBOBJS0) $(LDFLAGS.libsqlite3) \
 		$(LDFLAGS.libdoltlite.os-specific) $(LDFLAGS.libdoltlite.soname) \
 		$(LDFLAGS.libdoltlite.exports)
 	$(if $(filter .so,$(T.dll)),ln -sf libdoltlite$(T.dll) libdoltlite$(T.dll).0)
@@ -3313,8 +3283,8 @@ all: doltlite-lib
 # doltlite-remotesrv: standalone HTTP server for serving doltlite databases.
 #
 doltlite-remotesrv$(T.exe):	$(TOP)/src/remotesrv_main.c \
-		$(TOP)/src/doltlite_parse.h $(LIBOBJS0.link)
-	$(T.link) -o $@ $(TOP)/src/remotesrv_main.c $(LIBOBJS0.link) \
+		$(TOP)/src/doltlite_parse.h $(LIBOBJS0)
+	$(T.link) -o $@ $(TOP)/src/remotesrv_main.c $(LIBOBJS0) \
 		$(LDFLAGS.libsqlite3)
 all: doltlite-remotesrv$(T.exe)
 
