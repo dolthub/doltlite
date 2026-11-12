@@ -2154,12 +2154,19 @@ static int failCheckReservedLock(sqlite3_file *pFile, int *pResOut){
   return p->pReal->pMethods->xCheckReservedLock(p->pReal, pResOut);
 }
 
+#define FAIL_FCNTL_LOCK_EXCLUSIVE 0x444c5801
 static int failFileControl(sqlite3_file *pFile, int op, void *pArg){
   FailFile *p = (FailFile*)pFile;
   if( op==SQLITE_FCNTL_HAS_MOVED && gFailHasMovedOnce>0 ){
     gFailHasMovedOnce--;
     gFailHits++;
     return SQLITE_IOERR;
+  }
+  /* Injected lock contention must also refuse the one-call exclusive lock,
+  ** or the stepwise path that carries the injection is never reached. */
+  if( op==FAIL_FCNTL_LOCK_EXCLUSIVE && p->isMainDb
+   && (gFailSharedBusy || gFailExclusiveBusy>0) ){
+    return SQLITE_BUSY;
   }
   return p->pReal->pMethods->xFileControl(p->pReal, op, pArg);
 }
