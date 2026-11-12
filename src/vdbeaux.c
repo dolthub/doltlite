@@ -4039,7 +4039,12 @@ static int vdbeFinishPkMovetoDecoded(
   nPayload = sqlite3BtreePayloadSize(pIdx->uc.pCursor);
   sqlite3VdbeMemInit(&m, db, 0);
   rc = sqlite3VdbeMemFromBtreeZeroOffset(pIdx->uc.pCursor, nPayload, &m);
-  if( rc ) return rc;
+  /* The seek can flush the pending map this payload points into. */
+  if( rc==SQLITE_OK ) rc = sqlite3VdbeMemMakeWriteable(&m);
+  if( rc ){
+    sqlite3VdbeMemRelease(&m);
+    return rc;
+  }
   pIdxRec = (UnpackedRecord*)sqlite3DbMallocRaw(db, nIdx
       + ROUND8P(sizeof(UnpackedRecord)) + sizeof(Mem)*aMap[0]);
   if( !pIdxRec ){
