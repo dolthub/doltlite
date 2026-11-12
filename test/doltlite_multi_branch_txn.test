@@ -90,6 +90,51 @@ do_test multi-branch-stale-sibling {
 do_test multi-branch-stale-sibling-main {mb_disk main} {1:base,2:main ok}
 do_test multi-branch-stale-sibling-peer-kept {mb_disk feat} {1:base,50:peer ok}
 
+# A peer commits after this transaction read one branch and before its
+# first write to the other. That write locks without a refresh while the
+# reading view pins the store; COMMIT must not republish the pinned refs.
+proc mb_refs {} {
+  sqlite3 observer [file normalize test.db] -readonly 1
+  set r [observer eval {
+    SELECT group_concat(name) FROM (SELECT name FROM dolt_branches ORDER BY name);
+    SELECT group_concat(tag_name) FROM dolt_tags;
+  }]
+  observer close
+  return $r
+}
+foreach {name rd wr peerBranch main feat} {
+  read-attached-peer-attached f main feat
+    {1:base,2:w ok} {1:base,50:peer ok}
+  read-attached-peer-written f main main
+    {1:base,2:w,50:peer ok} {1:base ok}
+  read-main-peer-main main f main
+    {1:base,50:peer ok} {1:base,2:w ok}
+  read-main-peer-written main f feat
+    {1:base ok} {1:base,2:w,50:peer ok}
+} {
+  mb_reset
+  do_test multi-branch-pinned-sibling-$name {
+    db eval BEGIN
+    db eval "SELECT count(*) FROM $rd.t"
+    sqlite3 peer [file normalize test.db]/$peerBranch
+    peer eval {
+      INSERT INTO t VALUES(50,'peer');
+      SELECT dolt_commit('-Am','peer');
+      SELECT dolt_branch('nb');
+      SELECT dolt_tag('tg');
+    }
+    peer close
+    set r [db eval "SELECT group_concat(id) FROM $rd.t"]
+    db eval "INSERT INTO $wr.t VALUES(2,'w')"
+    lappend r [db eval "SELECT group_concat(id) FROM $rd.t"]
+    db eval COMMIT
+    set r
+  } {1 1}
+  do_test multi-branch-pinned-sibling-$name-main {mb_disk main} $main
+  do_test multi-branch-pinned-sibling-$name-feat {mb_disk feat} $feat
+  do_test multi-branch-pinned-sibling-$name-refs {mb_refs} {feat,main,nb tg}
+}
+
 # As in Dolt, version-control commands run while another branch has
 # writes in the transaction; only dolt_commit refuses.
 mb_reset

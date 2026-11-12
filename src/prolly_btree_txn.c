@@ -671,6 +671,19 @@ int pushSavepoint(Btree *pBtree, int bStatement){
 static void btreeUnpinSnapshot(BtShared *pBt);
 static void commitJoinedForget(Btree *p);
 
+static int btreeStoreSiblingReadOnly(BtShared *pBt){
+  sqlite3 *db = pBt->db;
+  int bRead = 0;
+  int i;
+  for(i=0; db && i<db->nDb; i++){
+    Btree *q = db->aDb[i].pBt;
+    if( !q || !q->pBt || q->pBt==pBt || q->pBt->pStore!=pBt->pStore ) continue;
+    if( q->inTrans==TRANS_WRITE ) return 0;
+    if( q->inTrans==TRANS_READ ) bRead = 1;
+  }
+  return bRead;
+}
+
 int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
   BtShared *pBt = p->pBt;
   int rc;
@@ -803,6 +816,20 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
         p->bForceCatalogReload = 1;
         return SQLITE_BUSY_SNAPSHOT;
       }
+    }
+
+    /* A sibling view reading this store pinned its snapshot, so the lock
+    ** did not refresh. Committing from here would republish the pinned refs
+    ** over a peer's root. This view has read nothing in the transaction, so
+    ** it adopts the peer's refs; the sibling's own write is still checked
+    ** against the working set it read. */
+    if( p->inTrans==TRANS_NONE && btreeStoreSiblingReadOnly(pBt) ){
+      rc = chunkStoreForceRefresh(pBt->pStore);
+      if( rc!=SQLITE_OK ){
+        chunkStoreUnlock(pBt->pStore);
+        return rc;
+      }
+      bStoreChanged = 1;
     }
 
     /* A refresh can adopt a peer tip and spend the change signal without
