@@ -204,8 +204,13 @@ static int nBatchRead;
 static int eReadFault;
 static i64 iReadAheadFault = -1;
 
+/* Reads at or past the logical end probe the zero tail for a peer's commit;
+** they fetch no chunk, which is what the cache checks count. */
+static i64 iReadContentEnd = LARGEST_INT64;
+
 static int countedRead(sqlite3_file *pFile, void *pData, int n, sqlite3_int64 off){
   int rc;
+  if( off>=iReadContentEnd ) return pReadMethods->xRead(pFile, pData, n, off);
   nRead++;
   nReadBytes += n;
   if( n>16384 ){
@@ -456,6 +461,7 @@ static void testLargeScans(sqlite3 *db){
   methods = *pReadMethods;
   methods.xRead = countedRead;
   pStore->file.pFile->pMethods = &methods;
+  iReadContentEnd = pStore->file.iFileSize;
 
   clearNodes(pCache);
   scan(db);
@@ -493,6 +499,7 @@ static void testLargeScans(sqlite3 *db){
   check("mixed scan accounting", cacheBytes(pCache)==pCache->nByte
       && budgetMatches(db, 2000*1024));
   pStore->file.pFile->pMethods = pReadMethods;
+  iReadContentEnd = LARGEST_INT64;
   execSql(db, "PRAGMA cache_size=-65536");
 }
 

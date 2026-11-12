@@ -210,6 +210,13 @@ static int csCommitResolveAppendPoint(
   }else{
     rc = cs->file.pFile->pMethods->xFileSize(cs->file.pFile, &fileSize);
     if( rc != SQLITE_OK ) return rc;
+    if( hadFile && cs->wal.iWalOffset>0 && fileSize>cs->file.iFileSize
+     && fileSize!=cs->iFailedTailEnd ){
+      int bRecord = 0;
+      rc = csTailHasRecord(cs, fileSize, &bRecord);
+      if( rc!=SQLITE_OK ) return rc;
+      if( !bRecord ) fileSize = cs->file.iFileSize;
+    }
   }
 
   if( hadFile && !lockHeld ){
@@ -506,9 +513,58 @@ static int csCommitToFile(
     rc = sqlite3OsFileSize(cs->file.pFile, &physFileSize);
     if( rc!=SQLITE_OK ) goto commit_done;
     if( physFileSize>fileSize ){
-      rc = sqlite3OsTruncate(cs->file.pFile, fileSize);
-      if( rc!=SQLITE_OK ) goto commit_done;
-      cs->iFailedTailEnd = 0;
+      /* Past the logical end is either a zero tail or the remains of a
+      ** failed append. Among live writers those remains start at the
+      ** logical end; a tail this handle has not seen before may hold
+      ** anything a crash left, so it is read in full before it is kept. */
+      int bRecord = 1;
+      if( sectorSize==1 && !crashWriteActive && !cs->isBuffer
+       && fileSize==cs->file.iFileSize ){
+        if( cs->bTailTrusted ){
+          rc = csTailHasRecord(cs, physFileSize, &bRecord);
+        }else{
+          int bZero = 0;
+          rc = csTailIsZero(cs, fileSize, physFileSize, &bZero);
+          bRecord = !bZero;
+        }
+        if( rc!=SQLITE_OK ) goto commit_done;
+      }
+      if( bRecord ){
+        rc = sqlite3OsTruncate(cs->file.pFile, fileSize);
+        if( rc!=SQLITE_OK ) goto commit_done;
+        cs->iFailedTailEnd = 0;
+        physFileSize = fileSize;
+      }
+    }
+    if( !cs->isBuffer ) cs->bTailTrusted = 1;
+    if( sectorSize==1 && !crashWriteActive && !cs->isBuffer && !cs->noSync
+     && !cs->bTailFull && fileSize>0 ){
+      i64 nNeed = 1 + CHUNK_MANIFEST_SIZE;
+      for( i = 0; i < cs->staging.nPending; i++ ){
+        nNeed += (i64)CS_WAL_CHUNK_HDR_SIZE + (i64)cs->staging.aPending[i].size;
+      }
+      if( nNeed>CS_ZERO_TAIL_MAX_COMMIT ){
+        cs->nTailStreak = 0;
+      }else if( physFileSize<batchStart+nNeed ){
+        if( cs->nTailStreak==0 ){
+          cs->nTailStreak = 1;
+        }else{
+          static const u8 aZeroTail[65536];
+          i64 iZero = physFileSize>batchStart ? physFileSize : batchStart;
+          i64 iZeroEnd = batchStart + CS_ZERO_TAIL_BYTES;
+          while( iZero<iZeroEnd && rc==SQLITE_OK ){
+            int n = (int)MIN(iZeroEnd-iZero, (i64)sizeof(aZeroTail));
+            rc = sqlite3OsWrite(cs->file.pFile, aZeroTail, n, iZero);
+            iZero += n;
+          }
+          if( rc==SQLITE_FULL ){
+            /* The commit itself may still fit. */
+            cs->bTailFull = 1;
+            rc = sqlite3OsTruncate(cs->file.pFile, physFileSize);
+          }
+          if( rc!=SQLITE_OK ) goto commit_done;
+        }
+      }
     }
   }
 

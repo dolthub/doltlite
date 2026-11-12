@@ -226,6 +226,70 @@ int csSyncFile(ChunkStore *cs){
                        cs->fullFsync ? SQLITE_SYNC_FULL : SQLITE_SYNC_NORMAL);
 }
 
+/* Every record starts with a nonzero tag at the logical end, or at the next
+** sector boundary for a writer that pads its batches. Zeros through that
+** boundary mean nothing was appended and the rest is an unused tail. */
+int csTailHasRecordAt(ChunkStore *cs, i64 iOff, i64 physSize, int *pHas){
+  u8 a[CS_ZERO_TAIL_PROBE+1];
+  i64 iEnd = iOff + (CS_ZERO_TAIL_PROBE-1);
+  int i, n, rc;
+  iEnd = iEnd - (iEnd % CS_ZERO_TAIL_PROBE) + 1;
+  *pHas = 0;
+  if( physSize<=iOff ) return SQLITE_OK;
+  if( iEnd>physSize ) iEnd = physSize;
+  n = (int)(iEnd - iOff);
+  rc = sqlite3OsRead(cs->file.pFile, a, n, iOff);
+  if( rc==SQLITE_IOERR_SHORT_READ ) rc = SQLITE_OK;
+  if( rc!=SQLITE_OK ) return rc;
+  for(i=0; i<n; i++){
+    if( a[i] ){
+      *pHas = 1;
+      break;
+    }
+  }
+  return SQLITE_OK;
+}
+
+int csTailHasRecord(ChunkStore *cs, i64 physSize, int *pHas){
+  return csTailHasRecordAt(cs, cs->file.iFileSize, physSize, pHas);
+}
+
+/* Whether [iFrom, iEnd) is all zeros. A tail longer than any this engine
+** writes is not vouched for. */
+int csTailIsZero(ChunkStore *cs, i64 iFrom, i64 iEnd, int *pZero){
+  u8 *a;
+  int rc = SQLITE_OK;
+  *pZero = 0;
+  if( iEnd-iFrom > 4*(i64)CS_ZERO_TAIL_BYTES ) return SQLITE_OK;
+  a = sqlite3_malloc(CS_SCAN_WINDOW);
+  if( !a ) return SQLITE_NOMEM;
+  while( iFrom<iEnd ){
+    int n = (int)MIN(iEnd-iFrom, (i64)CS_SCAN_WINDOW);
+    int i;
+    rc = sqlite3OsRead(cs->file.pFile, a, n, iFrom);
+    if( rc!=SQLITE_OK ) break;
+    for(i=0; i<n && a[i]==0; i++){}
+    if( i<n ) break;
+    iFrom += n;
+  }
+  sqlite3_free(a);
+  if( rc==SQLITE_OK && iFrom>=iEnd ) *pZero = 1;
+  return rc;
+}
+
+/* The size of the file with an unused zero tail discounted. */
+int csContentFileSize(ChunkStore *cs, i64 *pSize){
+  int bRecord = 0;
+  int rc = sqlite3OsFileSize(cs->file.pFile, pSize);
+  if( rc==SQLITE_OK && cs->wal.iWalOffset>0 && *pSize>cs->file.iFileSize ){
+    rc = csTailHasRecord(cs, *pSize, &bRecord);
+    if( rc==SQLITE_OK && !bRecord ){
+      *pSize = cs->wal.iWalOffset + cs->wal.nWalData;
+    }
+  }
+  return rc;
+}
+
 void csSerializeManifest(const ChunkStore *cs, u8 *aBuf){
   memset(aBuf, 0, CHUNK_MANIFEST_SIZE);
   CS_WRITE_U32(aBuf + CS_MANIFEST_MAGIC_OFF, CHUNK_STORE_MAGIC);
@@ -771,6 +835,26 @@ int chunkStoreOpenDeferred(ChunkStore *cs, sqlite3_vfs *pVfs,
   return csOpenUnlocked(cs, pVfs, zFilename, flags, 1);
 }
 
+/* Caller holds the commit lock and has checked that no peer appended.
+** Readers may be in the tail, so only an uncontended publish lock trims. */
+static void csTrimZeroTail(ChunkStore *cs){
+  i64 physSize = 0;
+  int bRecord = 1;
+  if( !cs->bTailTrusted ) return;
+  if( sqlite3OsFileSize(cs->file.pFile, &physSize)!=SQLITE_OK
+   || physSize<=cs->file.iFileSize
+   || csTailHasRecord(cs, physSize, &bRecord)!=SQLITE_OK
+   || bRecord ){
+    return;
+  }
+  if( sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_SHARED)==SQLITE_OK
+   && sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_RESERVED)==SQLITE_OK
+   && sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_EXCLUSIVE)==SQLITE_OK ){
+    (void)sqlite3OsTruncate(cs->file.pFile, cs->file.iFileSize);
+  }
+  sqlite3OsUnlock(cs->file.pFile, SQLITE_LOCK_NONE);
+}
+
 static void csWriteCleanCloseMarker(ChunkStore *cs){
   u8 rootRec[1 + CHUNK_MANIFEST_SIZE];
   i64 markerStart;
@@ -781,6 +865,7 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
   CsFileLock lockFd = CS_FILE_LOCK_INIT;
   char *lockName = 0;
   int lockHeld;
+  int bTrim = 0;
 
   if( cs->isMemory || cs->isBuffer || cs->isSharedMemory || cs->readOnly
    || cs->movedReadOnly || cs->corruptMidStream ){
@@ -808,10 +893,11 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
 
   if( !lockHeld ){
     i64 fileSize = 0;
-    rc = cs->file.pFile->pMethods->xFileSize(cs->file.pFile, &fileSize);
+    rc = csContentFileSize(cs, &fileSize);
     if( rc!=SQLITE_OK ) goto done;
     if( fileSize!=cs->file.iFileSize ) goto done;
   }
+  bTrim = 1;
 
   if( (sqlite3OsDeviceCharacteristics(cs->file.pFile)
        & (SQLITE_IOCAP_POWERSAFE_OVERWRITE|SQLITE_IOCAP_ATOMIC))==0 ){
@@ -861,6 +947,7 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
   }
 
 done:
+  if( bTrim ) csTrimZeroTail(cs);
   if( !lockHeld ) csFileUnlock(lockFd, &lockName);
 }
 

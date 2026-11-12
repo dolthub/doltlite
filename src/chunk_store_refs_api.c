@@ -60,7 +60,7 @@ int csDiskStateMatchesMemory(ChunkStore *cs){
     return 0;
   }
   contentEnd = cs->wal.iWalOffset + cs->wal.nWalData;
-  if( sqlite3OsFileSize(cs->file.pFile, &physSize)!=SQLITE_OK
+  if( csContentFileSize(cs, &physSize)!=SQLITE_OK
    || physSize!=contentEnd ){
     return 0;
   }
@@ -81,6 +81,38 @@ int csDiskStateMatchesMemory(ChunkStore *cs){
                 cs->refs.refsHash.data, PROLLY_HASH_SIZE)==0;
 }
 
+/* A peer's records followed by a zero tail: walk the record headers from
+** the logical end to find where its content stops. */
+static int csSkipZeroTail(ChunkStore *cs, i64 *pSize){
+  i64 iPos = cs->file.iFileSize;
+  i64 iEnd = *pSize;
+  u8 a[1 + CHUNK_MANIFEST_SIZE];
+  if( cs->wal.iWalOffset<=0 || iPos<=0 || iPos>=iEnd ) return SQLITE_OK;
+  if( sqlite3OsRead(cs->file.pFile, a, 1, iEnd-1)!=SQLITE_OK ) return SQLITE_IOERR;
+  if( a[0] ) return SQLITE_OK;
+  while( iPos<iEnd ){
+    i64 iNext;
+    int rc = sqlite3OsRead(cs->file.pFile, a, (int)sizeof(a), iPos);
+    if( rc==SQLITE_IOERR_SHORT_READ ) rc = SQLITE_OK;
+    if( rc!=SQLITE_OK ) return rc;
+    if( a[0]==CS_WAL_TAG_CHUNK ){
+      iNext = iPos + CS_WAL_CHUNK_HDR_SIZE
+            + (i64)CS_READ_U32(a + CS_WAL_CHUNK_LEN_OFF);
+    }else if( a[0]==CS_WAL_TAG_ROOT ){
+      iNext = iPos + (i64)sizeof(a);
+      *pSize = iNext;
+      if( CS_READ_I64(a + 1 + CS_MANIFEST_NEXT_OFF_OFF)>iNext ){
+        iNext = CS_READ_I64(a + 1 + CS_MANIFEST_NEXT_OFF_OFF);
+      }
+    }else{
+      break;
+    }
+    if( iNext<=iPos ) break;
+    iPos = iNext;
+  }
+  return SQLITE_OK;
+}
+
 /* Fresh refs hash from the sealed tail. committedRefsHash is a proxy
 ** (pre-merge restore can disagree). 0 means cannot prove disk unmoved. */
 int csReadDiskRefsHash(ChunkStore *cs, ProllyHash *pOut){
@@ -95,7 +127,8 @@ int csReadDiskRefsHash(ChunkStore *cs, ProllyHash *pOut){
   memset(pOut, 0, sizeof(*pOut));
   if( cs->file.pFile==0 ) return 0;
   /* Tail from the file, not WAL bookkeeping: a peer may have appended. */
-  if( sqlite3OsFileSize(cs->file.pFile, &physSize)!=SQLITE_OK ) return 0;
+  if( csContentFileSize(cs, &physSize)!=SQLITE_OK ) return 0;
+  if( csSkipZeroTail(cs, &physSize)!=SQLITE_OK ) return 0;
   if( physSize < (i64)sizeof(aRoot) ) return 0;
   if( sqlite3OsRead(cs->file.pFile, aRoot, (int)sizeof(aRoot),
                     physSize - (i64)sizeof(aRoot))!=SQLITE_OK ){
