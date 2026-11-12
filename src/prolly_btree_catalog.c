@@ -1452,6 +1452,23 @@ static void stageMasterRetargetIndex(
   if( hit>=0 ) aFinal[hit].iTable = newPg;
 }
 
+static int stageMasterRowNamesObject(
+  SchemaCatalogRow *pRow,
+  struct TableEntry *aFinal,
+  int nFinal
+){
+  if( !pRow->zType || !pRow->zName ) return 0;
+  if( strcmp(pRow->zType, "view")==0 ) return 1;
+  if( strcmp(pRow->zType, "table")==0 ){
+    return pRow->oldPg==0
+        || stageMasterNamedInFinal(aFinal, nFinal, pRow->zName);
+  }
+  if( strcmp(pRow->zType, "index")==0 ){
+    return stageMasterNamedInFinal(aFinal, nFinal, pRow->zTblName);
+  }
+  return 0;
+}
+
 /* Named staging master: touched objects from working, the rest from staged. */
 int doltliteBuildNamedStageMasterRoot(
   sqlite3 *db,
@@ -1639,6 +1656,28 @@ int doltliteBuildNamedStageMasterRoot(
       iPg = iNextPg++;
     }
     aPg[i] = iPg;
+  }
+  /* Tables, views and indexes share one namespace. Staging one side of a
+  ** name that moved between objects would write both. */
+  for(i=0; i<nWork && rc==SQLITE_OK; i++){
+    SchemaCatalogRow *pWork = &aWork[i];
+    if( !aKeep[i] || !stageMasterRowNamesObject(pWork, aFinal, nFinal) ){
+      continue;
+    }
+    for(t=nWork; t<nAll; t++){
+      SchemaCatalogRow *pOld = &aOld[t-nWork];
+      if( !aKeep[t] || !stageMasterRowNamesObject(pOld, aFinal, nFinal)
+       || sqlite3_stricmp(pWork->zName, pOld->zName)!=0 ) continue;
+      rc = SQLITE_CONSTRAINT;
+      if( pzErr ){
+        *pzErr = sqlite3_mprintf(
+            "cannot stage %s '%s': name conflicts with %s '%s' in staged "
+            "schema; stage both changes together",
+            pWork->zType, pWork->zName, pOld->zType, pOld->zName);
+        if( !*pzErr ) rc = SQLITE_NOMEM;
+      }
+      break;
+    }
   }
   for(i=0; i<nAll && rc==SQLITE_OK; i++){
     SchemaCatalogRow *pRow = stageMasterRowAt(aWork, nWork, aOld, i);

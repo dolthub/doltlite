@@ -135,7 +135,8 @@ static int resetStageNamedPaths(
   ChunkStore *cs,
   const char **azPaths,
   int nPaths,
-  int *pbChanged
+  int *pbChanged,
+  char **pzErr
 ){
   struct TableEntry *aHead = 0, *aStaged = 0;
   SchemaEntry *aHeadSchema = 0;
@@ -347,7 +348,8 @@ static int resetStageNamedPaths(
       rc = doltliteBuildNamedStageMasterRoot(db,
               &pHeadMaster->root, pHeadMaster->flags,
               &pStagedMaster->root, pStagedMaster->flags,
-              azReset, nReset, aStaged, nStaged, resetSchemas, &composedRoot, 0);
+              azReset, nReset, aStaged, nStaged, resetSchemas, &composedRoot,
+              pzErr);
       if( rc!=SQLITE_OK ) goto done;
       pStagedMaster->root = composedRoot;
     }
@@ -827,6 +829,7 @@ static void doltliteResetFunc(
 
   if( nPaths>0 ){
     int changed = 0;
+    char *zStageErr = 0;
     if( isHard || isSoft || zRef ){
       sqlite3_result_error(context,
         "table paths cannot be combined with --hard / --soft or a target ref", -1);
@@ -845,7 +848,7 @@ static void doltliteResetFunc(
       }
     }
     reloadWorking = db->autoCommit;
-    rc = resetStageNamedPaths(db, cs, azPaths, nPaths, &changed);
+    rc = resetStageNamedPaths(db, cs, azPaths, nPaths, &changed, &zStageErr);
     sqlite3_free(azPaths);
     azPaths = 0;
     if( rc==SQLITE_NOTFOUND ){
@@ -853,7 +856,9 @@ static void doltliteResetFunc(
       goto reset_cleanup;
     }
     if( rc!=SQLITE_OK ){
+      if( zStageErr ) sqlite3_result_error(context, zStageErr, -1);
       sqlite3_result_error_code(context, rc);
+      sqlite3_free(zStageErr);
       goto reset_cleanup;
     }
     rc = changed ? doltlitePersistWorkingSet(db) : SQLITE_OK;
