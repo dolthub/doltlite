@@ -835,24 +835,37 @@ int chunkStoreOpenDeferred(ChunkStore *cs, sqlite3_vfs *pVfs,
   return csOpenUnlocked(cs, pVfs, zFilename, flags, 1);
 }
 
-/* Caller holds the commit lock and has checked that no peer appended.
-** Readers may be in the tail, so only an uncontended publish lock trims. */
+/* Give the zero tail back on close. A peer's append under the commit lock
+** would land in it and readers may be probing it, so the trim needs that
+** lock, no record past the logical end, and an uncontended publish lock. */
 static void csTrimZeroTail(ChunkStore *cs){
+  CsFileLock lockFd = CS_FILE_LOCK_INIT;
+  char *lockName = 0;
   i64 physSize = 0;
   int bRecord = 1;
-  if( !cs->bTailTrusted ) return;
-  if( sqlite3OsFileSize(cs->file.pFile, &physSize)!=SQLITE_OK
-   || physSize<=cs->file.iFileSize
-   || csTailHasRecord(cs, physSize, &bRecord)!=SQLITE_OK
-   || bRecord ){
+  int lockHeld = cs->lockDepth>0;
+  if( !cs->bTailTrusted || cs->readOnly || cs->movedReadOnly
+   || cs->corruptMidStream || !cs->file.pFile || !cs->file.zFilename
+   || cs->staging.nPending>0 || cs->staging.nRecentUncommitted>0 ){
     return;
   }
-  if( sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_SHARED)==SQLITE_OK
-   && sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_RESERVED)==SQLITE_OK
-   && sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_EXCLUSIVE)==SQLITE_OK ){
-    (void)sqlite3OsTruncate(cs->file.pFile, cs->file.iFileSize);
+  if( !lockHeld
+   && csFileLock(cs->file.pVfs, cs->file.zFilename, 0, &lockFd, &lockName)
+        !=SQLITE_OK ){
+    return;
   }
-  sqlite3OsUnlock(cs->file.pFile, SQLITE_LOCK_NONE);
+  if( sqlite3OsFileSize(cs->file.pFile, &physSize)==SQLITE_OK
+   && physSize>cs->file.iFileSize
+   && csTailHasRecord(cs, physSize, &bRecord)==SQLITE_OK
+   && !bRecord ){
+    if( sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_SHARED)==SQLITE_OK
+     && sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_RESERVED)==SQLITE_OK
+     && sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_EXCLUSIVE)==SQLITE_OK ){
+      (void)sqlite3OsTruncate(cs->file.pFile, cs->file.iFileSize);
+    }
+    sqlite3OsUnlock(cs->file.pFile, SQLITE_LOCK_NONE);
+  }
+  if( !lockHeld ) csFileUnlock(lockFd, &lockName);
 }
 
 static void csWriteCleanCloseMarker(ChunkStore *cs){
@@ -865,7 +878,6 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
   CsFileLock lockFd = CS_FILE_LOCK_INIT;
   char *lockName = 0;
   int lockHeld;
-  int bTrim = 0;
 
   if( cs->isMemory || cs->isBuffer || cs->isSharedMemory || cs->readOnly
    || cs->movedReadOnly || cs->corruptMidStream ){
@@ -897,7 +909,6 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
     if( rc!=SQLITE_OK ) goto done;
     if( fileSize!=cs->file.iFileSize ) goto done;
   }
-  bTrim = 1;
 
   if( (sqlite3OsDeviceCharacteristics(cs->file.pFile)
        & (SQLITE_IOCAP_POWERSAFE_OVERWRITE|SQLITE_IOCAP_ATOMIC))==0 ){
@@ -947,7 +958,6 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
   }
 
 done:
-  if( bTrim ) csTrimZeroTail(cs);
   if( !lockHeld ) csFileUnlock(lockFd, &lockName);
 }
 
@@ -957,6 +967,7 @@ int chunkStoreClose(ChunkStore *cs){
   sqlite3BeginBenignMalloc();
   (void)csScrubFailedRoot(cs);
   csWriteCleanCloseMarker(cs);
+  csTrimZeroTail(cs);
   sqlite3EndBenignMalloc();
   chunkStoreUnlock(cs);
   csFileUnlock(CS_GRAPH_LOCK(cs), &cs->pGraphLockName);

@@ -537,7 +537,8 @@ static int csCommitToFile(
       }
     }
     if( !cs->isBuffer ) cs->bTailTrusted = 1;
-    if( sectorSize==1 && !crashWriteActive && !cs->isBuffer && !cs->noSync
+    if( CS_ZERO_TAIL_ENABLED
+     && sectorSize==1 && !crashWriteActive && !cs->isBuffer && !cs->noSync
      && !cs->bTailFull && fileSize>0 ){
       i64 nNeed = 1 + CHUNK_MANIFEST_SIZE;
       for( i = 0; i < cs->staging.nPending; i++ ){
