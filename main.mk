@@ -3221,7 +3221,10 @@ c-tests: doltlite-c-tests-build
 # distribution channel) re-links anyway and an unversioned dylib is
 # what the formula expects.
 #
+# ar adds members without dropping old ones, so an archive left by the other
+# value of DOLTLITE_SINGLE_FILE would end up holding the engine twice.
 libdoltlite$(T.lib):	$(LIBOBJS0)
+	rm -f $@
 	$(AR) $(AR.flags) $@ $(LIBOBJS0)
 
 LDFLAGS.libdoltlite.os-specific = $(subst $(libsqlite3.DLL),libdoltlite$(T.dll),$(LDFLAGS.libsqlite3.os-specific))
