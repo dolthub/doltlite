@@ -43,6 +43,17 @@ set useapicall 0
 set enable_recover 0
 set doltlite 0
 set doltlite_external_remotes 0
+# Engine internals the separately compiled remote objects call. With
+# --doltlite-external-remotes these keep external linkage; everything else
+# stays SQLITE_PRIVATE, which is where the single-file build gets its speed.
+# A remote source that starts calling another internal fails to link until
+# it is listed here.
+set doltlite_extern_names {
+  sqlite3BtreeIsDoltliteFormat sqlite3CtypeMap sqlite3DbNameToBtree
+  sqlite3ExpirePreparedStatements sqlite3InvokeBusyHandler
+  sqlite3OsAccess sqlite3OsCloseFree sqlite3OsFullPathname
+  sqlite3OsOpenMalloc sqlite3OsWrite
+}
 set skipstructs 0
 set skipfns [list]
 set srcdir tsrc
@@ -341,6 +352,7 @@ proc section_comment {text} {
 proc copy_file {filename} {
   global seen_hdr available_hdr available_hdr_path varonly_hdr cdecllist out
   global addstatic linemacros useapicall srcdir skipstructs skipfns
+  global doltlite_external_remotes doltlite_extern_names
   set ln 0
   set tail [file tail $filename]
   section_comment "Begin file $tail"
@@ -457,7 +469,10 @@ proc copy_file {filename} {
 
         # Add the SQLITE_PRIVATE or SQLITE_API keyword before functions.
         # so that linkage can be modified at compile-time.
-        if {[regexp {^sqlite3[a-z]*_} $funcname]} {
+        if {$doltlite_external_remotes
+            && $funcname in $doltlite_extern_names} {
+          puts $out $line
+        } elseif {[regexp {^sqlite3[a-z]*_} $funcname]} {
           set line SQLITE_API
           append line " " [string trim $rettype]
           if {[string index $rettype end] ne "*"} {
@@ -485,7 +500,10 @@ proc copy_file {filename} {
           # Add the SQLITE_PRIVATE before variable declarations or
           # definitions for internal use
           regsub {^SQLITE_API } $line {} line
-          if {![regexp {^sqlite3_} $varname]
+          if {$doltlite_external_remotes
+              && $varname in $doltlite_extern_names} {
+            puts $out $line
+          } elseif {![regexp {^sqlite3_} $varname]
               && ![regexp {^sqlite3Show[A-Z]} $varname]} {
             regsub {^extern } $line {} line
             puts $out "SQLITE_PRIVATE $line"
