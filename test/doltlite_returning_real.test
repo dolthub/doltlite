@@ -1,0 +1,80 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-returning-real
+
+set expressions {
+  c0, typeof(c0), max(c0,1), typeof(max(c0,1)),
+  coalesce(c0,NULL), typeof(coalesce(c0,NULL)),
+  CASE WHEN 1 THEN c0 END, typeof(CASE WHEN 1 THEN c0 END),
+  quote(c0), c0+0
+}
+
+foreach {shape schema suffix extra} {
+  plain {id INTEGER PRIMARY KEY, c0 REAL, c4 REAL} {} {}
+  check {id INTEGER PRIMARY KEY, c0 REAL,
+         c4 REAL CHECK(c4 IS NULL OR c4<>3)} {} {}
+  index {id INTEGER PRIMARY KEY, c0 REAL, c4 REAL} {} {
+    CREATE INDEX ti ON t(c4);
+  }
+  composite {id INT, c0 REAL, c4 REAL, tag INT DEFAULT 7,
+             PRIMARY KEY(id,tag)} {} {}
+  without-rowid {id INT, c0 REAL, c4 REAL, tag INT DEFAULT 7,
+                 PRIMARY KEY(id,tag)} {WITHOUT ROWID} {}
+  strict {id INTEGER PRIMARY KEY, c0 REAL, c4 REAL} STRICT {}
+  stored {id INTEGER PRIMARY KEY, c0 REAL,
+          c4 REAL AS (c0) STORED CHECK(c4 IS NULL OR c4<>3)} {} {}
+  virtual {id INTEGER PRIMARY KEY, pad REAL AS (c0) VIRTUAL,
+           c0 REAL, c4 REAL CHECK(c4 IS NULL OR c4<>3)} {} {}
+} {
+  reset_db
+  forcedelete returning-real-oracle.db
+  sqlite3 oracle {file:returning-real-oracle.db?doltlite_engine=sqlite} -uri 1
+  db eval "CREATE TABLE t($schema) $suffix; $extra"
+  set oracleSuffix $suffix
+  if {$shape eq "composite"} {
+    # Match DoltLite's clustered primary-key storage.
+    set oracleSuffix {WITHOUT ROWID}
+  }
+  oracle eval "CREATE TABLE t($schema) $oracleSuffix; $extra"
+  set id 0
+  foreach {kind value} {
+    integer 5
+    real 5.0
+    numeric-text '5'
+    fractional 5.25
+    fractional-text '5.25'
+    null NULL
+    negative -5
+    six-byte-limit 140737488355328
+    large-integer 9007199254740993
+    int64-min -9223372036854775808
+  } {
+    incr id
+    foreach {operation statement} [list \
+      insert "INSERT INTO t(id,c0) VALUES($id,$value) RETURNING $expressions" \
+      update "UPDATE t SET c0=$value WHERE id=$id RETURNING $expressions" \
+      upsert "INSERT INTO t(id,c0) VALUES($id,$value)
+              ON CONFLICT DO UPDATE SET c0=excluded.c0 RETURNING $expressions" \
+      stored "SELECT $expressions FROM t WHERE id=$id" \
+      delete "DELETE FROM t WHERE id=$id RETURNING $expressions" \
+    ] {
+      do_test $shape-$kind-$operation [list db eval $statement] \
+          [oracle eval $statement]
+    }
+  }
+  set statement "INSERT INTO t(id,c0) SELECT 100,5 UNION ALL SELECT 101,6.0
+                 RETURNING $expressions"
+  do_test $shape-insert-select [list db eval $statement] [oracle eval $statement]
+  set tablehash [db one {SELECT dolt_hashof_table('t')}]
+  execsql {
+    DELETE FROM t;
+    INSERT INTO t(id,c0) SELECT 100,5 UNION ALL SELECT 101,6.0;
+  }
+  do_execsql_test $shape-record-encoding {
+    SELECT dolt_hashof_table('t');
+  } [list $tablehash]
+  do_execsql_test $shape-integrity {PRAGMA integrity_check} {ok}
+  oracle close
+}
+
+finish_test
