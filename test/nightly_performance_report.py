@@ -359,7 +359,7 @@ def render_section_summary(suites, section, prefix, include_counts=True):
         (
             format_time(baseline),
             format_time(candidate),
-            f"{ratio:.1f}×",
+            f"{ratio:.2f}×",
             f"{statistics.median(workload_noise(*item) for item in results):.1f}%",
             f"**{result}**",
         )
