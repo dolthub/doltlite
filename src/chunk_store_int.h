@@ -51,6 +51,10 @@ int csDiskStateMatchesMemory(ChunkStore *cs);
 int csOpenFile(sqlite3_vfs *pVfs, const char *zPath, sqlite3_file **ppFile,
                int flags, int *pOutFlags);
 int csSyncFile(ChunkStore *cs);
+int csTailHasRecord(ChunkStore *cs, i64 physSize, int *pHas);
+int csTailHasRecordAt(ChunkStore *cs, i64 iOff, i64 physSize, int *pHas);
+int csTailIsZero(ChunkStore *cs, i64 iFrom, i64 iEnd, int *pZero);
+int csContentFileSize(ChunkStore *cs, i64 *pSize);
 int csScrubFailedRoot(ChunkStore *cs);
 int csVerifyStoredHits(ChunkStore *cs);
 void csFillChunkHdr(u8 *p, const ProllyHash *pHash, u32 size);

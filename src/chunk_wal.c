@@ -612,11 +612,11 @@ void csFreeReloadState(ChunkStoreReloadState *pSaved){
 /* Zero-tail probe cap; writer gaps are sector-bounded. */
 #define CS_WAL_SCAN_MAX (64*1024*1024)
 
-static int csWalTailIsZero(ChunkStore *cs, i64 pos, i64 walSize){
+static int csWalTailIsZero(ChunkStore *cs, i64 pos, i64 walSize, i64 nMax){
   u8 buf[4096];
   i64 off = cs->wal.iWalOffset + pos;
   i64 end = cs->wal.iWalOffset + walSize;
-  if( end - off > CS_WAL_SCAN_MAX ) end = off + CS_WAL_SCAN_MAX;
+  if( end - off > nMax ) end = off + nMax;
   while( off < end ){
     int n = (end - off) > (i64)sizeof(buf) ? (int)sizeof(buf) : (int)(end - off);
     int i;
@@ -955,7 +955,8 @@ static int csReplayWalFrom(
       nRootedPending = cs->staging.nPending;
       nRootRecordsSeen++;
 
-    } else if( tag == 0 && csWalTailIsZero(cs, recPos, walSize) ){
+    } else if( tag == 0 && csWalTailIsZero(cs, recPos, walSize,
+                 bTailMode ? CS_ZERO_TAIL_PROBE+1 : CS_WAL_SCAN_MAX) ){
       /* SIZE_HINT/prealloc zero-extends past commit; treat as absent. */
       break;
 

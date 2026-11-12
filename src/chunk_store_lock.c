@@ -601,7 +601,7 @@ static int csAdoptMatchingCloseMarker(
   *pAdopted = 0;
   if( iMarker<=0
    || iMarker>LARGEST_INT64-(i64)sizeof(aRoot)
-   || fileSize!=iMarker+(i64)sizeof(aRoot) ){
+   || fileSize<iMarker+(i64)sizeof(aRoot) ){
     return SQLITE_OK;
   }
   rc = sqlite3OsRead(cs->file.pFile, aRoot, (int)sizeof(aRoot), iMarker);
@@ -622,6 +622,14 @@ static int csAdoptMatchingCloseMarker(
   CS_WRITE_I64(aExpected+CS_MANIFEST_BATCH_START_OFF, iMarker);
   csManifestSeal(aExpected, iMarker);
   if( memcmp(aRoot+1, aExpected, sizeof(aExpected))!=0 ) return SQLITE_OK;
+  if( fileSize!=iMarker+(i64)sizeof(aRoot) ){
+    int bRecord = 1;
+    if( iNext<iMarker+(i64)sizeof(aRoot) ) return SQLITE_OK;
+    rc = csTailHasRecordAt(cs, iNext, fileSize, &bRecord);
+    if( rc!=SQLITE_OK ) return rc;
+    if( bRecord ) return SQLITE_OK;
+    fileSize = iMarker+(i64)sizeof(aRoot);
+  }
 
   cs->file.iFileSize = iNext;
   cs->wal.nWalData = fileSize - cs->wal.iWalOffset;
@@ -913,10 +921,15 @@ static int csDetectExternalChanges(
       if( rc!=SQLITE_OK ) return rc;
     }
     if( fileSize > cs->file.iFileSize && fileSize!=cs->iFailedTailEnd ){
-      int adopted = 0;
-      rc = csAdoptMatchingCloseMarker(cs, fileSize, &adopted);
+      int bRecord = 0;
+      rc = csTailHasRecord(cs, fileSize, &bRecord);
       if( rc!=SQLITE_OK ) return rc;
-      if( !adopted ) *pChanged = 1;
+      if( bRecord ){
+        int adopted = 0;
+        rc = csAdoptMatchingCloseMarker(cs, fileSize, &adopted);
+        if( rc!=SQLITE_OK ) return rc;
+        if( !adopted ) *pChanged = 1;
+      }
     }
     if( !*pChanged && csDamageFingerDiffers(cs) ) *pChanged = 1;
   }
@@ -931,8 +944,13 @@ static int csFileSnapshotUnchanged(ChunkStore *cs){
   state.iFileSize = -1;
   state.bMoved = 0;
   rc = sqlite3OsDoltliteFileState(cs->file.pFile, &state);
-  if( rc!=SQLITE_OK || state.bMoved || state.iFileSize<0
-   || state.iFileSize>cs->file.iFileSize ) return 0;
+  if( rc!=SQLITE_OK || state.bMoved || state.iFileSize<0 ) return 0;
+  if( state.iFileSize>cs->file.iFileSize ){
+    int bRecord = 1;
+    if( csTailHasRecord(cs, state.iFileSize, &bRecord)!=SQLITE_OK || bRecord ){
+      return 0;
+    }
+  }
   if( csDamageFingerDiffers(cs) ) return 0;
   cs->movedReadOnly = 0;
   return 1;
@@ -1248,6 +1266,8 @@ static int csReloadFromDisk(ChunkStore *cs){
   sqlite3_free(zOldFilename);
   chunkStoreClose(&tmp);
   cs->reloadGen++;
+  cs->bTailTrusted = 0;
+  cs->nTailStreak = 0;
 
   if( !cs->readOnly && !cs->corruptMidStream
    && cs->lockDepth>0 ){

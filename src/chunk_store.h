@@ -116,6 +116,22 @@
 # define CS_WAL_CHECKPOINT_CHUNKS 2048
 #endif
 
+/* A run of small commits zero-fills this much past the logical end, so the
+** commits that follow overwrite written blocks instead of growing the file:
+** syncing a file that grew costs a filesystem journal commit as well.
+** Larger batches gain nothing and append as before.
+** The inherited suites that testfixture runs measure the file and count
+** its writes, so that build appends as stock expects. */
+#ifdef SQLITE_TEST
+# define CS_ZERO_TAIL_ENABLED   0
+#else
+# define CS_ZERO_TAIL_ENABLED   1
+#endif
+#define CS_ZERO_TAIL_BYTES      (1024*1024)
+#define CS_ZERO_TAIL_MAX_COMMIT 65536
+/* Sector-padded batches start within this many bytes of the logical end. */
+#define CS_ZERO_TAIL_PROBE      4096
+
 /* Scan/replay read window. Heap-allocated by its users: a buffer this size
 ** exceeds the whole stack in small-stack builds (wasm defaults to 64K). */
 #define CS_SCAN_WINDOW 65536
@@ -347,6 +363,11 @@ struct ChunkStore {
                           ** truncate; zeroed before the tail is read again */
   i64 iFailedTailEnd;     /* Physical end of that failed append: growth to
                           ** exactly here is ours, not a peer's */
+  u8 bTailTrusted;        /* Under the publish lock this handle saw nothing
+                          ** past the logical end but zeros. Live writers
+                          ** keep that true; a reload forgets it. */
+  u8 nTailStreak;         /* Consecutive small commits that grew the file */
+  u8 bTailFull;           /* Zero-fill hit SQLITE_FULL: stop trying */
   u8 corruptHeader;       /* Header failed its seal or bounds: nothing was
                           ** served, so a reload must not adopt it as empty */
   u8 notADatabase;        /* Wrong/missing magic. Open succeeds; first use
