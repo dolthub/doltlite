@@ -618,6 +618,7 @@ void sqlite3AutoincrementBegin(Parse *pParse){
       sqlite3VdbeLoadString(v, memId-1, p->pTab->zName);
       sqlite3VdbeAddOp2(v, OP_Integer, 0, memId);
       sqlite3VdbeAddOp3(v, OP_DoltliteSeqMax, memId, memId-1, p->iDb);
+      if( pParse->nTab==0 ) pParse->nTab = 1;
       continue;
     }
 #endif
