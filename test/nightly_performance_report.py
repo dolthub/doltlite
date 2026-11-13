@@ -260,11 +260,11 @@ def escape_markdown(value):
 
 
 def individual_limit(result):
-    return 5.5 if result.section == "ac_writes" else 2.3
+    return 3.0 if result.section == "ac_writes" else 2.3
 
 
 def average_limit(section):
-    return 5.0 if section == "ac_writes" else 1.9
+    return 2.4 if section == "ac_writes" else 1.8
 
 
 def section_results(suites, section):
@@ -500,9 +500,9 @@ def render_report(suites, commit, run_url, generated_at, runner, remote=None, re
     lines.extend(render_sql_summary(sysbench_suites))
     lines.extend(
         [
-            "The absolute ceiling is 2.3× per ordinary workload and 1.9× "
-            "for a section average. Durable autocommit writes use 5.5× "
-            "and 5.0× ceilings respectively. A breach counts only when the "
+            "The absolute ceiling is 2.3× per ordinary workload and 1.8× "
+            "for a section average. Durable autocommit writes use 3.0× "
+            "and 2.4× ceilings respectively. A breach counts only when the "
             "median of the paired ratios exceeds the same ceiling.",
             "",
         ]

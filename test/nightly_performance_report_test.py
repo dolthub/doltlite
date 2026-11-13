@@ -191,7 +191,7 @@ class NightlyPerformanceReportTest(unittest.TestCase):
                 "file_reads\tpoint\t200\t100\n"
                 "file_writes\tinsert\t200\t250\n"
                 "ac_reads\tpoint\t200\t210\n"
-                "ac_writes\tinsert_ac\t100\t500\n"
+                "ac_writes\tinsert_ac\t100\t200\n"
             )
             samples = [
                 ("mem_reads", "point", 1, 100, 140),
@@ -209,9 +209,9 @@ class NightlyPerformanceReportTest(unittest.TestCase):
                 ("ac_reads", "point", 1, 200, 200),
                 ("ac_reads", "point", 2, 200, 210),
                 ("ac_reads", "point", 3, 200, 220),
-                ("ac_writes", "insert_ac", 1, 100, 480),
-                ("ac_writes", "insert_ac", 2, 100, 500),
-                ("ac_writes", "insert_ac", 3, 100, 520),
+                ("ac_writes", "insert_ac", 1, 100, 190),
+                ("ac_writes", "insert_ac", 2, 100, 200),
+                ("ac_writes", "insert_ac", 3, 100, 210),
             ]
         (directory / f"{name}.tsv").write_text(
             results, encoding="utf-8"
@@ -246,9 +246,16 @@ class NightlyPerformanceReportTest(unittest.TestCase):
             "ac_writes", "insert_ac", 100, 600
         )
         self.assertEqual(nightly_report.individual_limit(ordinary), 2.3)
-        self.assertEqual(nightly_report.individual_limit(autocommit), 5.5)
-        self.assertEqual(nightly_report.average_limit("mem_reads"), 1.9)
-        self.assertEqual(nightly_report.average_limit("ac_writes"), 5.0)
+        self.assertEqual(nightly_report.individual_limit(autocommit), 3.0)
+        self.assertEqual(nightly_report.average_limit("mem_reads"), 1.8)
+        self.assertEqual(nightly_report.average_limit("ac_writes"), 2.4)
+
+        limits = {
+            "BENCH_MAX_MULTIPLIER": "2.3",
+            "BENCH_AVG_MAX_MULTIPLIER": "1.8",
+            "BENCH_AC_WRITE_MAX_MULTIPLIER": "3.0",
+            "BENCH_AC_WRITE_AVG_MAX_MULTIPLIER": "2.4",
+        }
 
         repository = pathlib.Path(__file__).parent.parent
         for script in (
@@ -260,25 +267,45 @@ class NightlyPerformanceReportTest(unittest.TestCase):
             contents = (repository / "test" / script).read_text(
                 encoding="utf-8"
             )
-            self.assertIn(
-                "BENCH_AC_WRITE_MAX_MULTIPLIER="
-                "${BENCH_AC_WRITE_MAX_MULTIPLIER:-8}",
-                contents,
-            )
+            for variable, limit in limits.items():
+                self.assertIn(f"{variable}=${{{variable}:-{limit}}}", contents)
 
         workflow = (
             repository / ".github" / "workflows" /
             "nightly-performance.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn("BENCH_MAX_MULTIPLIER: 2.3", workflow)
-        self.assertIn("BENCH_AVG_MAX_MULTIPLIER: 1.9", workflow)
-        self.assertIn("BENCH_AC_WRITE_MAX_MULTIPLIER: 5.5", workflow)
-        self.assertIn("BENCH_AC_WRITE_AVG_MAX_MULTIPLIER: 5", workflow)
+        for variable, limit in limits.items():
+            self.assertIn(f"{variable}: {limit}", workflow)
         self.assertIn('title: "Nightly performance failure"', workflow)
         self.assertIn(
             "They do not establish a slowdown from a previous DoltLite revision.",
             workflow,
         )
+
+    def test_rejects_newly_over_limit_autocommit_workload(self):
+        result = nightly_report.Result("ac_writes", "insert_ac", 100, 320)
+        suite = nightly_report.Suite(
+            "int", (result,),
+            {("ac_writes", "insert_ac"): (nightly_report.Sample(1, 100, 320),)},
+            0, 0,
+        )
+        self.assertFalse(nightly_report.result_passes(suite, result))
+
+    def test_rejects_newly_over_limit_section_means(self):
+        for section, candidates in (("mem_writes", (160, 210)),
+                                    ("ac_writes", (200, 300))):
+            with self.subTest(section=section):
+                results = tuple(
+                    nightly_report.Result(section, str(i), 100, candidate)
+                    for i, candidate in enumerate(candidates)
+                )
+                samples = {
+                    (r.section, r.test): (nightly_report.Sample(1, 100, r.candidate_us),)
+                    for r in results
+                }
+                suite = nightly_report.Suite("int", results, samples, 0, 0)
+                self.assertTrue(all(nightly_report.result_passes(suite, r) for r in results))
+                self.assertFalse(nightly_report.section_passes((suite,), section))
 
     def test_generates_complete_pass_report(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -301,11 +328,11 @@ class NightlyPerformanceReportTest(unittest.TestCase):
         self.assertIn("| Reads | 400µs | 600µs | 1.50× |", report)
         self.assertIn("### File-backed", report)
         self.assertIn(
-            "| Autocommit writes | 400µs | 2.00ms | 5.00× |",
+            "| Autocommit writes | 400µs | 800µs | 2.00× |",
             report,
         )
         self.assertIn(
-            "Durable autocommit writes use 5.5× and 5.0× ceilings",
+            "Durable autocommit writes use 3.0× and 2.4× ceilings",
             report,
         )
         self.assertIn("Paired-ratio noise", report)
@@ -365,14 +392,14 @@ class NightlyPerformanceReportTest(unittest.TestCase):
             self.write_all_suites(directory)
             self.rewrite(
                 directory / "int.tsv",
-                "ac_writes\tinsert_ac\t100\t500",
+                "ac_writes\tinsert_ac\t100\t200",
                 "ac_writes\tinsert_ac\t100\t700",
             )
             self.rewrite(
                 directory / "int-samples.tsv",
-                "ac_writes\tinsert_ac\t1\t100\t480\n"
-                "ac_writes\tinsert_ac\t2\t100\t500\n"
-                "ac_writes\tinsert_ac\t3\t100\t520\n",
+                "ac_writes\tinsert_ac\t1\t100\t190\n"
+                "ac_writes\tinsert_ac\t2\t100\t200\n"
+                "ac_writes\tinsert_ac\t3\t100\t210\n",
                 "ac_writes\tinsert_ac\t1\t100\t680\n"
                 "ac_writes\tinsert_ac\t2\t100\t700\n"
                 "ac_writes\tinsert_ac\t3\t100\t720\n",
@@ -399,7 +426,7 @@ class NightlyPerformanceReportTest(unittest.TestCase):
             result = result_output.read_text(encoding="utf-8")
         self.assertEqual(rc, 0)
         self.assertIn("Nightly result: **FAIL**", report)
-        self.assertIn("| Autocommit writes | 400µs | 2.20ms |", report)
+        self.assertIn("| Autocommit writes | 400µs | 1.30ms |", report)
         self.assertEqual(result, "FAIL\n")
 
     def test_unpaired_median_breach_does_not_fail_the_report(self):
@@ -408,14 +435,14 @@ class NightlyPerformanceReportTest(unittest.TestCase):
             self.write_all_suites(directory)
             self.rewrite(
                 directory / "int.tsv",
-                "ac_writes\tinsert_ac\t100\t500",
+                "ac_writes\tinsert_ac\t100\t200",
                 "ac_writes\tinsert_ac\t100\t700",
             )
             self.rewrite(
                 directory / "int-samples.tsv",
-                "ac_writes\tinsert_ac\t1\t100\t480\n"
-                "ac_writes\tinsert_ac\t2\t100\t500\n"
-                "ac_writes\tinsert_ac\t3\t100\t520\n",
+                "ac_writes\tinsert_ac\t1\t100\t190\n"
+                "ac_writes\tinsert_ac\t2\t100\t200\n"
+                "ac_writes\tinsert_ac\t3\t100\t210\n",
                 "ac_writes\tinsert_ac\t1\t100\t700\n"
                 "ac_writes\tinsert_ac\t2\t700\t800\n"
                 "ac_writes\tinsert_ac\t3\t50\t100\n",
