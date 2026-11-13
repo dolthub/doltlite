@@ -279,4 +279,58 @@ do_test lock.released {
 } 2
 peer close
 
+# A command that publishes refs without ending the transaction must not
+# carry the working set of a branch the transaction checked out of. The
+# command's own change is durable either way; the rows follow the
+# transaction.
+proc checkout_txn_branch {branch sql} {
+  sqlite3 observer [file normalize test.db]/$branch -readonly 1
+  set r [observer eval $sql]
+  observer close
+  return $r
+}
+foreach {name pre cmd probe durable} {
+  tag {} {SELECT dolt_tag('tg')}
+    {SELECT count(*) FROM dolt_tags WHERE tag_name='tg'} 1
+  tag-delete {SELECT dolt_tag('tg')} {SELECT dolt_tag('-d','tg')}
+    {SELECT count(*) FROM dolt_tags WHERE tag_name='tg'} 0
+  remote {} {SELECT dolt_remote('add','origin','file:///nonexistent/remote')}
+    {SELECT count(*) FROM dolt_remotes WHERE name='origin'} 1
+} {
+  foreach roundtrip {0 1} {
+    foreach end {ROLLBACK COMMIT} {
+      checkout_txn_reset
+      db eval $pre
+      set prefix ref-writer.$name.$roundtrip.$end
+      do_test $prefix.run {
+        db eval {
+          BEGIN;
+          INSERT INTO t VALUES(1,'main');
+          SELECT dolt_checkout('f');
+          INSERT INTO t VALUES(2,'f');
+        }
+        if {$roundtrip} {db eval {SELECT dolt_checkout('main')}}
+        db eval $cmd
+        db eval $end
+        sqlite3_get_autocommit db
+      } 1
+      db close
+      set rows {
+        SELECT group_concat(id) FROM (SELECT id FROM t ORDER BY id);
+        SELECT count(*) FROM dolt_status;
+        PRAGMA integrity_check;
+      }
+      if {$end eq "ROLLBACK"} {
+        do_test $prefix.main {checkout_txn_branch main $rows} {{} 0 ok}
+        do_test $prefix.f {checkout_txn_branch f $rows} {{} 0 ok}
+      } else {
+        do_test $prefix.main {checkout_txn_branch main $rows} {1 1 ok}
+        do_test $prefix.f {checkout_txn_branch f $rows} {2 1 ok}
+      }
+      do_test $prefix.durable {checkout_txn_branch main $probe} $durable
+      sqlite3 db test.db
+    }
+  }
+}
+
 finish_test
