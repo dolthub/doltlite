@@ -118,4 +118,60 @@ run_test "failed_table_checkout_keeps_added_column" \
 id,a,b" "$DB6"
 rm -f "$DB6"
 
+# Tables, views and indexes share one namespace. When a name moves from one
+# kind of object to another, staging or unstaging only one side would commit
+# two objects with that name, a schema that cannot be loaded.
+collide() { # $1=case  $2=setup  $3=one-sided command  $4=refusal
+  local db=/tmp/test_schemas_collide_$1_$$.db
+  rm -f "$db"
+  printf '%s\n' "$2" | $DOLTLITE "$db" > /dev/null 2>&1
+  run_test "name_collision_${1}_refused" "$3" "Error near line 1: $4" "$db"
+  run_test "name_collision_${1}_staged_together" \
+    "SELECT dolt_add('.');
+     SELECT dolt_commit('-m','both') IS NOT NULL;
+     SELECT dolt_checkout('-b','b2');
+     SELECT count(*)>0 FROM sqlite_master;
+     PRAGMA integrity_check;" \
+    "0
+1
+0
+1
+ok" "$db"
+  run_test "name_collision_${1}_reopen" \
+    "SELECT dolt_reset('--hard'); SELECT count(*) FROM dolt_status;" \
+    "0
+0" "$db"
+  rm -f "$db"
+}
+TX="CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+CREATE TABLE x(id INTEGER PRIMARY KEY, a INT);
+SELECT dolt_commit('-Am','c0');"
+TV="CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+CREATE VIEW vv AS SELECT 1;
+SELECT dolt_commit('-Am','c0');"
+collide view_over_table "$TX
+DROP TABLE x; CREATE VIEW x AS SELECT a FROM t;" \
+  "SELECT dolt_add('dolt_schemas');" \
+  "cannot stage view 'x': name conflicts with table 'x' in staged schema; stage both changes together"
+collide index_over_view "$TV
+DROP VIEW vv; CREATE INDEX vv ON t(a);" \
+  "SELECT dolt_add('t');" \
+  "cannot stage index 'vv': name conflicts with view 'vv' in staged schema; stage both changes together"
+collide table_over_view "$TV
+DROP VIEW vv; CREATE TABLE vv(q);" \
+  "SELECT dolt_add('vv');" \
+  "cannot stage table 'vv': name conflicts with view 'vv' in staged schema; stage both changes together"
+collide view_over_renamed_table "$TX
+ALTER TABLE x RENAME TO y; CREATE VIEW x AS SELECT a FROM t;" \
+  "SELECT dolt_add('dolt_schemas');" \
+  "cannot stage view 'x': name conflicts with table 'x' in staged schema; stage both changes together"
+collide unstage_table_side "$TX
+DROP TABLE x; CREATE VIEW x AS SELECT a FROM t; SELECT dolt_add('.');" \
+  "SELECT dolt_reset('x');" \
+  "cannot stage table 'x': name conflicts with view 'x' in staged schema; stage both changes together"
+collide unstage_view_side "$TV
+DROP VIEW vv; CREATE TABLE vv(q); SELECT dolt_add('.');" \
+  "SELECT dolt_reset('dolt_schemas');" \
+  "cannot stage view 'vv': name conflicts with table 'vv' in staged schema; stage both changes together"
+
 dltest_finish
