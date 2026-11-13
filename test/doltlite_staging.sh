@@ -206,6 +206,57 @@ run_test "add_all_flag_with_dot_stages" \
   "SELECT count(*) FROM dolt_status WHERE staged=1;" \
   "1" "$DB11"
 
+# An AUTOINCREMENT table cannot take an insert without sqlite_sequence.
+# Staging the first one by name takes sqlite_sequence with it.
+DBA=/tmp/test_staging_autoinc_$$.db
+rm -f "$DBA"
+run_test "autoinc_named_add_stages_sqlite_sequence" \
+  "CREATE TABLE plain(id INTEGER PRIMARY KEY, v);
+   CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, a INT);
+   INSERT INTO t(a) VALUES(1),(2);
+   SELECT dolt_add('t');
+   SELECT table_name, staged, status FROM dolt_status ORDER BY table_name, staged;" \
+  "0
+plain|0|new table
+sqlite_sequence|1|new table
+t|1|new table" "$DBA"
+run_test "autoinc_named_add_commit_is_insertable_on_new_branch" \
+  "SELECT dolt_commit('-m','c1') IS NOT NULL;
+   SELECT dolt_checkout('-b','b2');
+   INSERT INTO t(a) VALUES(3);
+   SELECT count(*), max(id)>2 FROM t;
+   PRAGMA integrity_check;" \
+  "1
+0
+3|1
+ok" "$DBA"
+run_test "autoinc_named_add_insertable_from_fresh_connection" \
+  "INSERT INTO t(a) VALUES(4); SELECT count(*) FROM t;" \
+  "4" "$DBA/b2"
+run_test "autoinc_second_table_leaves_staged_sequence_alone" \
+  "CREATE TABLE t2(id INTEGER PRIMARY KEY AUTOINCREMENT, a INT);
+   INSERT INTO t2(a) VALUES(1);
+   SELECT dolt_add('t2');
+   SELECT table_name, staged, status FROM dolt_status ORDER BY table_name, staged;
+   SELECT dolt_commit('-m','c2') IS NOT NULL;
+   SELECT dolt_checkout('-b','b3');
+   INSERT INTO t2(a) VALUES(2);
+   SELECT count(*) FROM t2;" \
+  "0
+sqlite_sequence|0|modified
+t|0|modified
+t2|1|new table
+1
+0
+2" "$DBA/b2"
+run_test "plain_named_add_does_not_stage_sqlite_sequence" \
+  "INSERT INTO t(a) VALUES(9);
+   SELECT dolt_add('plain');
+   SELECT table_name, staged FROM dolt_status WHERE table_name='sqlite_sequence';" \
+  "0
+sqlite_sequence|0" "$DBA"
+rm -f "$DBA"
+
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB6B" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11"
 
 dltest_finish
