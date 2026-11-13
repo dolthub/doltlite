@@ -434,6 +434,17 @@ int chunkStoreUpdateBranch(ChunkStore *cs, const char *zName, const ProllyHash *
 int chunkStoreSerializeRefs(ChunkStore *cs);
 
 int chunkStoreGetBranchWorkingSet(ChunkStore *cs, const char *zBranch, ProllyHash *pHash);
+typedef struct CsWorkingSetMask CsWorkingSetMask;
+struct CsWorkingSetMask {
+  char *zBranch;
+  ProllyHash hash;
+  u8 bMasked;
+};
+int chunkStoreCaptureWorkingSets(ChunkStore *cs, CsWorkingSetMask **pa, int *pn);
+int chunkStoreMaskDeferredWorkingSets(ChunkStore *cs, CsWorkingSetMask *a,
+                                      int n, int *pnMasked);
+void chunkStoreUnmaskWorkingSets(ChunkStore *cs, CsWorkingSetMask *a, int n);
+void chunkStoreFreeWorkingSetMask(CsWorkingSetMask *a, int n);
 int chunkStoreSetBranchWorkingSet(ChunkStore *cs, const char *zBranch, const ProllyHash *pHash);
 void chunkStoreSetWorkingSetBasis(ChunkStore *cs, const char *zBranch,
                                   const ProllyHash *pHash);

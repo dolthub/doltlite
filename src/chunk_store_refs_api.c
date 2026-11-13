@@ -177,6 +177,87 @@ static int csReadDeferredBranch(
   return rc;
 }
 
+int chunkStoreCaptureWorkingSets(
+  ChunkStore *cs,
+  CsWorkingSetMask **pa,
+  int *pn
+){
+  CsWorkingSetMask *a;
+  int i;
+  *pa = 0;
+  *pn = 0;
+  if( cs->refs.nBranches<=0 ) return SQLITE_OK;
+  a = sqlite3_malloc64(cs->refs.nBranches*sizeof(CsWorkingSetMask));
+  if( !a ) return SQLITE_NOMEM;
+  memset(a, 0, cs->refs.nBranches*sizeof(CsWorkingSetMask));
+  for(i=0; i<cs->refs.nBranches; i++){
+    a[i].zBranch = sqlite3_mprintf("%s", cs->refs.aBranches[i].zName);
+    if( !a[i].zBranch ){
+      chunkStoreFreeWorkingSetMask(a, i);
+      return SQLITE_NOMEM;
+    }
+    a[i].hash = cs->refs.aBranches[i].workingSetHash;
+  }
+  *pa = a;
+  *pn = cs->refs.nBranches;
+  return SQLITE_OK;
+}
+
+/* A commit that publishes now would carry working sets this handle has only
+** deferred: another branch's uncommitted rows, which the transaction may
+** still roll back. Each captured working set the caller left untouched goes
+** out as the committed refs have it; chunkStoreUnmaskWorkingSets puts the
+** deferred value back afterwards. */
+int chunkStoreMaskDeferredWorkingSets(
+  ChunkStore *cs,
+  CsWorkingSetMask *a,
+  int n,
+  int *pnMasked
+){
+  ChunkStore view;
+  u8 *data = 0;
+  int nData = 0;
+  int i, rc;
+  *pnMasked = 0;
+  if( n<=0 || prollyHashIsEmpty(&cs->refs.committedRefsHash) ) return SQLITE_OK;
+  rc = chunkStoreGet(cs, &cs->refs.committedRefsHash, &data, &nData);
+  if( rc!=SQLITE_OK ) return rc;
+  memset(&view, 0, sizeof(view));
+  rc = csDeserializeRefsIntoTemp(&view, data, nData);
+  sqlite3_free(data);
+  for(i=0; rc==SQLITE_OK && i<n; i++){
+    ProllyHash committed;
+    int j = findBranchIdx(cs, a[i].zBranch);
+    if( j<0 || prollyHashCompare(&cs->refs.aBranches[j].workingSetHash,
+                                 &a[i].hash)!=0 ) continue;
+    if( chunkStoreGetBranchWorkingSet(&view, a[i].zBranch, &committed)
+          !=SQLITE_OK
+     || prollyHashCompare(&committed, &a[i].hash)==0 ) continue;
+    cs->refs.aBranches[j].workingSetHash = committed;
+    a[i].bMasked = 1;
+    (*pnMasked)++;
+  }
+  csFreeRefsState(&view);
+  return rc;
+}
+
+void chunkStoreUnmaskWorkingSets(ChunkStore *cs, CsWorkingSetMask *a, int n){
+  int i;
+  for(i=0; i<n; i++){
+    int j;
+    if( !a[i].bMasked ) continue;
+    j = findBranchIdx(cs, a[i].zBranch);
+    if( j>=0 ) cs->refs.aBranches[j].workingSetHash = a[i].hash;
+    a[i].bMasked = 0;
+  }
+}
+
+void chunkStoreFreeWorkingSetMask(CsWorkingSetMask *a, int n){
+  int i;
+  for(i=0; a && i<n; i++) sqlite3_free(a[i].zBranch);
+  sqlite3_free(a);
+}
+
 /* Read zName's disk tip without touching this handle. Skip the throwaway
 ** open when the tail root already matches. Caller holds the store lock. */
 int chunkStoreReadDiskBranchTip(ChunkStore *cs, const char *zName,

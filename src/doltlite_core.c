@@ -640,6 +640,10 @@ int doltliteMutateRefsExpected(
   ChunkStore *cs = doltliteGetChunkStore(db);
   ChunkStoreRefsSnapshot snapshot;
   const BranchRef *aBr = 0;
+  CsWorkingSetMask *aMask = 0;
+  int nMask = 0;
+  int nMasked = 0;
+  int bMask;
   int haveSnapshot = 0;
   int i;
   int nBr = 0;
@@ -696,6 +700,10 @@ int doltliteMutateRefsExpected(
     }
   }
 
+  bMask = !cs->bDeferPublish && doltliteTxnCheckoutOwnsGraphLock(db);
+  if( rc==SQLITE_OK && bMask ){
+    rc = chunkStoreCaptureWorkingSets(cs, &aMask, &nMask);
+  }
   if( rc==SQLITE_OK ) rc = xMutate(db, cs, pArg);
   /* PersistWorkingSet refuses a conflicted working set. Walk the refs about
   ** to land, not the session hash, so abort helpers can still finish. */
@@ -715,6 +723,9 @@ int doltliteMutateRefsExpected(
       }
     }
   }
+  if( rc==SQLITE_OK && bMask ){
+    rc = chunkStoreMaskDeferredWorkingSets(cs, aMask, nMask, &nMasked);
+  }
   if( rc==SQLITE_OK ){
     rc = chunkStoreSerializeRefs(cs);
     if( rc==SQLITE_OK && AtomicLoad(&db->u1.isInterrupted)
@@ -724,6 +735,12 @@ int doltliteMutateRefsExpected(
       if( rc==SQLITE_OK ) doltliteVcCommandInstalled(db);
     }
   }
+  /* The transaction still owns the working sets held back above. */
+  if( rc==SQLITE_OK && nMasked>0 ){
+    chunkStoreUnmaskWorkingSets(cs, aMask, nMask);
+    rc = chunkStoreSerializeRefs(cs);
+  }
+  chunkStoreFreeWorkingSetMask(aMask, nMask);
   if( haveSnapshot ){
     if( rc==SQLITE_OK ){
       chunkStoreDiscardRefsSnapshot(&snapshot);
