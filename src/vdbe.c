@@ -41,6 +41,14 @@ static int vdbeDoltliteCheckCommit(Vdbe *p){
   }
   return SQLITE_OK;
 }
+static int vdbeDoltliteNoOpenTxn(sqlite3 *db){
+  int i;
+  for(i=0; i<db->nDb; i++){
+    Btree *pBt = db->aDb[i].pBt;
+    if( pBt && sqlite3BtreeTxnState(pBt)!=SQLITE_TXN_NONE ) return 0;
+  }
+  return 1;
+}
 static ChunkStore *vdbeDoltliteSeqStore(sqlite3 *db, int iDb){
   if( iDb<0 || iDb>=db->nDb || iDb==1 ) return 0;
   return doltliteBtreeChunkStore(db->aDb[iDb].pBt);
@@ -4549,6 +4557,15 @@ case OP_Savepoint: {
           goto vdbe_return;
         }
         rc = p->rc;
+#ifdef DOLTLITE_PROLLY
+        /* A commit refused outright has already rolled every database back.
+        ** Leaving the connection in a transaction with its savepoint open
+        ** would make the next SAVEPOINT a nested one that RELEASE never
+        ** commits. */
+        if( rc==SQLITE_ERROR && vdbeDoltliteNoOpenTxn(db) ){
+          sqlite3CloseSavepoints(db);
+        }else
+#endif
         if( rc ){
           db->autoCommit = 0;
         }else{
