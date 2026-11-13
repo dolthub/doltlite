@@ -1,0 +1,103 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# One side rebuilds a table to add or remove a UNIQUE constraint; the other
+# makes an unrelated change. The constraint's autoindex has its own catalog
+# entry, and the merged schema must hold exactly the autoindexes the merged
+# table declares.
+proc uq_rebuild {cols} {
+  execsql "CREATE TABLE x(id INTEGER PRIMARY KEY, a INT, $cols)"
+  execsql {
+    INSERT INTO x SELECT * FROM t;
+    DROP TABLE t;
+    ALTER TABLE x RENAME TO t;
+  }
+}
+foreach {name from to bUnique cUnique} {
+  drop-only      {b TEXT UNIQUE, c TEXT}        {b TEXT, c TEXT}               0 0
+  add-only       {b TEXT, c TEXT}               {b TEXT UNIQUE, c TEXT}        1 0
+  drop-first     {b TEXT UNIQUE, c TEXT UNIQUE} {b TEXT, c TEXT UNIQUE}        0 1
+  drop-second    {b TEXT UNIQUE, c TEXT UNIQUE} {b TEXT UNIQUE, c TEXT}        1 0
+  drop-both      {b TEXT UNIQUE, c TEXT UNIQUE} {b TEXT, c TEXT}               0 0
+  add-second     {b TEXT UNIQUE, c TEXT}        {b TEXT UNIQUE, c TEXT UNIQUE} 1 1
+} {
+  foreach direction {forward reverse} {
+    foreach other {table rows} {
+      foreach op {merge cherry_pick} {
+        reset_db
+        execsql "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, $from)"
+        execsql {
+          INSERT INTO t VALUES(1,10,'x','p'),(2,20,'y','q');
+          CREATE TABLE u(id INTEGER PRIMARY KEY, v);
+          SELECT dolt_commit('-Am','base');
+          SELECT dolt_branch('br');
+        }
+        if {$other eq "table"} {
+          execsql {CREATE TABLE zz(q)}
+        } else {
+          execsql {INSERT INTO u VALUES(1,'other')}
+        }
+        execsql {
+          SELECT dolt_commit('-Am','other');
+          SELECT dolt_checkout('br');
+        }
+        uq_rebuild $to
+        execsql {SELECT dolt_commit('-Am','constraint')}
+        if {$direction eq "forward"} {
+          execsql {SELECT dolt_checkout('main')}
+          set target br
+          set reopen [file normalize test.db]
+        } else {
+          set target main
+          set reopen "[file normalize test.db]/br"
+        }
+        set prefix unique-constraint-$name-$direction-$other-$op
+        do_test $prefix.run {
+          lindex [catchsql "SELECT dolt_${op}('$target')"] 0
+        } 0
+        foreach stage {merged reopened} {
+          if {$stage eq "reopened"} {
+            db close
+            sqlite3 db $reopen
+          }
+          do_execsql_test $prefix.$stage.schema {
+            SELECT count(*) FROM sqlite_schema
+            WHERE tbl_name='t' AND name LIKE 'sqlite_autoindex_%';
+            SELECT group_concat(id) FROM (SELECT id FROM t ORDER BY id);
+            PRAGMA integrity_check;
+          } [list [expr {$bUnique+$cUnique}] 1,2 ok]
+        }
+        do_test $prefix.enforced {
+          set r [list [lindex [catchsql {INSERT INTO t VALUES(8,80,'x','new8')}] 0]]
+          lappend r [lindex [catchsql {INSERT INTO t VALUES(9,90,'new9','p')}] 0]
+          execsql {PRAGMA integrity_check}
+          set r
+        } [list $bUnique $cUnique]
+      }
+    }
+  }
+}
+
+# Reverting the commit that added the constraint, after a later commit.
+reset_db
+do_test unique-constraint-revert {
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b TEXT, c TEXT);
+    INSERT INTO t VALUES(1,10,'x','p'),(2,20,'y','q');
+    SELECT dolt_commit('-Am','base');
+  }
+  uq_rebuild {b TEXT UNIQUE, c TEXT}
+  execsql {
+    SELECT dolt_commit('-Am','add unique');
+    CREATE TABLE zz(q);
+    SELECT dolt_commit('-Am','later');
+  }
+  set r [list [lindex [catchsql {SELECT dolt_revert('HEAD~1')}] 0]]
+  lappend r [execsql {
+    SELECT count(*) FROM sqlite_schema WHERE name LIKE 'sqlite_autoindex_%';
+    PRAGMA integrity_check;
+  }]
+  lappend r [lindex [catchsql {INSERT INTO t VALUES(8,80,'x','z')}] 0]
+} {0 {0 ok} 0}
+
+finish_test

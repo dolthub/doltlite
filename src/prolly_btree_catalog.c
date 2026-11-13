@@ -1012,6 +1012,7 @@ static int appendMissingSchemaCatalogRows(
   int nRows = *pnRows;
   int nAlloc = nRows;
   i64 iNextRowid = 1;
+  int bClusteredAuto;
   int i, j, rc;
 
   for(i=0; i<nRows; i++){
@@ -1046,6 +1047,19 @@ static int appendMissingSchemaCatalogRows(
       }
       if( !parentHere ) continue;
     }
+    /* A clustered primary key's autoindex shares its table's root and has
+    ** no entry of its own, so it follows the table by name. A UNIQUE
+    ** constraint's autoindex has its own entry: without one, this catalog
+    ** dropped the constraint and the live schema must not put it back. */
+    bClusteredAuto = 0;
+    if( strcmp(aMeta[i].zType, "index")==0
+     && schemaNameIsInternalAutoindex(aMeta[i].zName) ){
+      for(j=0; j<nMeta && !bClusteredAuto; j++){
+        bClusteredAuto = aMeta[j].iTable==aMeta[i].iTable
+            && aMeta[j].zType && strcmp(aMeta[j].zType, "table")==0
+            && aMeta[j].zName && strcmp(aMeta[j].zName, aMeta[i].zTblName)==0;
+      }
+    }
     for(j=0; j<nTables; j++){
       if( aTables[j].iTable==aMeta[i].iTable ){
         wanted = 1;
@@ -1059,7 +1073,7 @@ static int appendMissingSchemaCatalogRows(
         }
       }else if( strcmp(aMeta[i].zType, "index")==0 ){
         if( strcmp(aTables[j].zName, aMeta[i].zName)==0
-         || (schemaNameIsInternalAutoindex(aMeta[i].zName)
+         || (bClusteredAuto
              && strcmp(aTables[j].zName, aMeta[i].zTblName)==0) ){
           wanted = 1;
           break;
