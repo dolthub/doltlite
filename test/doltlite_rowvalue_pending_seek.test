@@ -1,0 +1,61 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_rowvalue_pending_seek
+
+# A row-value lower bound that spans the primary key and a non-key column,
+# over a table with pending edits. The seek key stops at the primary key, so
+# a pending row with the bound's key that sorts below it on the non-key
+# column must not end the search of the pending rows. Each query is checked
+# against the bound spelled out column by column and hidden from the planner.
+proc rv_setup {} {
+  reset_db
+  execsql {
+    CREATE TABLE w(c0 TEXT, c1, c2 INT, PRIMARY KEY(c2)) WITHOUT ROWID;
+    CREATE TABLE r(c0 TEXT, c1, c2 TEXT, PRIMARY KEY(c2));
+    INSERT INTO w VALUES('k',0,1),('q',0,20);
+    INSERT INTO r VALUES('k',0,'k1'),('q',0,'k20');
+    BEGIN;
+    INSERT INTO w VALUES('b',0,5),('x',0,6),('y',0,7),('c',0,12),('d',0,13);
+    INSERT INTO r VALUES('b',0,'k5'),('x',0,'k6'),('y',0,'k7');
+    UPDATE w SET c0='a' WHERE c2=1;
+    DELETE FROM w WHERE c2=13;
+  }
+}
+set n 0
+foreach {tbl bounds} {
+  w {{5 'm'} {5 'a'} {5 'b'} {6 'z'} {1 'b'} {1 'a'} {7 'z'} {12 'd'} {13 'a'} {20 'r'} {4 'x'}}
+  r {{'k5' 'm'} {'k5' 'a'} {'k6' 'z'} {'k1' 'z'} {'k7' 'z'} {'k4' 'x'}}
+} {
+  foreach b $bounds {
+    lassign $b k v
+    foreach op {>= >} {
+      set rv "(c2,c0) $op ($k,$v)"
+      set plain "(+c2 > $k OR (+c2 = $k AND c0 $op $v))"
+      rv_setup
+      incr n
+      do_test 1.$n.select [list execsql "SELECT c2 FROM $tbl WHERE $rv ORDER BY +c2"] \
+        [execsql "SELECT c2 FROM $tbl WHERE $plain ORDER BY +c2"]
+      do_test 1.$n.count [list execsql "SELECT count(*) FROM $tbl WHERE $rv"] \
+        [execsql "SELECT count(*) FROM $tbl WHERE $plain"]
+      set expect [execsql "SELECT c2 FROM $tbl WHERE NOT $plain ORDER BY +c2"]
+      do_test 1.$n.delete {
+        execsql "DELETE FROM $tbl WHERE $rv"
+        execsql "SELECT c2 FROM $tbl ORDER BY +c2"
+      } $expect
+      execsql COMMIT
+      do_execsql_test 1.$n.committed "
+        SELECT c2 FROM $tbl ORDER BY +c2;
+      " $expect
+      do_execsql_test 1.$n.integrity {PRAGMA integrity_check} ok
+      rv_setup
+      set expect [execsql "SELECT c2 FROM $tbl WHERE $plain ORDER BY +c2"]
+      do_test 1.$n.update {
+        execsql "UPDATE $tbl SET c1=1 WHERE $rv"
+        execsql "SELECT c2 FROM $tbl WHERE c1=1 ORDER BY +c2"
+      } $expect
+      execsql ROLLBACK
+    }
+  }
+}
+
+finish_test

@@ -324,6 +324,13 @@ static int findMatchingMutMapEntry(
     pIdxKey->eqSeen = 0;
     cmp = sqlite3VdbeRecordCompare(nRec, pRec, pIdxKey);
     if( cmp<0 && !pIdxKey->eqSeen ){
+      /* The seek key stops at the primary key when the probe also bounds a
+      ** non-key column. This row has the probe's key and sorts below it on
+      ** that column; the rows after it can still land. */
+      if( prefixCmp==0 ){
+        lo++;
+        continue;
+      }
       break;
     }
     /* Prefix-equal but recCmp>0 (lossy numeric encoding): still a landing. */
