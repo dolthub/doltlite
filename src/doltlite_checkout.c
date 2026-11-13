@@ -1467,6 +1467,7 @@ static void doltCheckoutParsedFunc(
 
   memset(&m, 0, sizeof(m));
   memset(&branchCreate, 0, sizeof(branchCreate));
+  if( hadExplicitTxn && doltliteNoteTxnLeaving(db) ){ sqlite3_result_error_nomem(ctx); return; }
 
   if( doltliteIsDetached(db) ){
     ProllyHash probe;
@@ -1742,7 +1743,11 @@ checkout_done:
     }
     doltliteAdoptRollbackBaseline(db, &m.targetCatHash);
   }else if( hadExplicitTxn ){
-    doltliteMarkTxnCheckout(db);
+    if( doltliteMarkTxnCheckout(db, m.haveOldState ? &m.oldCatHash : 0,
+                                &m.targetCatHash)!=SQLITE_OK ){
+      sqlite3_result_error_nomem(ctx);
+      return;
+    }
   }
   sqlite3_result_int(ctx, 0);
 }

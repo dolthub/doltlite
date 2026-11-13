@@ -333,4 +333,82 @@ foreach {name pre cmd probe durable} {
   }
 }
 
+# As in Dolt, dolt_commit commits one branch: it is refused while the
+# transaction holds uncommitted writes on more than one branch, whether the
+# other branch was written before or after a checkout.
+set refused {1 {Cannot commit changes on more than one branch / database}}
+set nothing {1 {nothing to commit, working tree clean (use dolt_add to stage changes)}}
+foreach {name sql expected} {
+  both-dirty {
+    INSERT INTO t VALUES(1,'main');
+    SELECT dolt_checkout('f');
+    INSERT INTO t VALUES(2,'f');
+  } refused
+  left-dirty-only {
+    INSERT INTO t VALUES(1,'main');
+    SELECT dolt_checkout('f');
+  } nothing
+  round-trip-both-dirty {
+    INSERT INTO t VALUES(1,'main');
+    SELECT dolt_checkout('f');
+    INSERT INTO t VALUES(2,'f');
+    SELECT dolt_checkout('main');
+  } refused
+  round-trip-one-dirty {
+    INSERT INTO t VALUES(1,'main');
+    SELECT dolt_checkout('f');
+    SELECT dolt_checkout('main');
+  } ok
+  target-dirty-only {
+    SELECT dolt_checkout('f');
+    INSERT INTO t VALUES(2,'f');
+  } ok
+  two-left-dirty {
+    INSERT INTO t VALUES(1,'main');
+    SELECT dolt_checkout('f');
+    INSERT INTO t VALUES(2,'f');
+    SELECT dolt_checkout('g');
+  } refused
+} {
+  checkout_txn_reset
+  db eval {SELECT dolt_branch('g'); BEGIN}
+  db eval $sql
+  do_test commit-one-branch.$name {
+    set r [catchsql {SELECT dolt_commit('-am','c') IS NOT NULL}]
+    if {$expected eq "ok"} {
+      expr {$r eq {0 1}}
+    } else {
+      expr {$r eq [set $expected]}
+    }
+  } 1
+  # A refused commit leaves the transaction open and ROLLBACK undoes every
+  # branch. One that fails with nothing to commit has, as in Dolt, already
+  # ended the transaction: the write on the branch it left stays.
+  if {$expected eq "nothing"} {
+    do_test commit-one-branch.$name.rollback {
+      db eval ROLLBACK
+      db eval {SELECT dolt_checkout('main'); SELECT count(*) FROM t}
+    } {0 1}
+  }
+  if {$expected eq "refused"} {
+    do_test commit-one-branch.$name.rollback {
+      db eval ROLLBACK
+      set r {}
+      foreach b {main f g} {
+        db eval "SELECT dolt_checkout('$b')"
+        lappend r [db eval {SELECT count(*) FROM t}]
+      }
+      set r
+    } {0 0 0}
+    do_test commit-one-branch.$name.reusable {
+      db eval {
+        SELECT dolt_checkout('main');
+        BEGIN;
+        INSERT INTO t VALUES(9,'again');
+        SELECT dolt_commit('-am','again') IS NOT NULL;
+      }
+    } {0 1}
+  }
+}
+
 finish_test

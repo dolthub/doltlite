@@ -1681,6 +1681,8 @@ int prollyBtreeClose(Btree *p){
   }
 
   sqlite3_free(p->zBranch);
+  sqlite3_free(p->zTxnLeftDirty);
+  sqlite3_free(p->zTxnLeaving);
   sqlite3_free(p->zCommandBranch);
   sqlite3_free(p->zCommandParkedBranch);
   sqlite3_free(p->zAuthorName);
