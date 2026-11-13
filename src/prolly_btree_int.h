@@ -587,7 +587,6 @@ int cacheCursorPayloadCopy(BtCursor *pCur, const u8 *pData, int nData);
 int serializeUnpackedRecordBuffer(
   UnpackedRecord *pRec, u8 **ppBuf, int *pnAlloc, int *pnOut
 );
-u32 btreeSerialType(Mem *pMem, u32 *pLen);
 int mutMapShouldDrain(BtCursor *pCur);
 int cacheCursorPayloadZeroTail(BtCursor *pCur, const u8 *pData,
                                int nData, i64 nZeroTail);

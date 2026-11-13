@@ -207,33 +207,6 @@ int sqlite3BtreeTableMoveto(
   return btreeReadResult(pCur->pBtree,
       pCur->pCurOps->xTableMoveto(pCur, intKey, bias, pRes));
 }
-u32 btreeSerialType(Mem *pMem, u32 *pLen){
-  int flags = pMem->flags;
-  if( flags & MEM_Null ){ *pLen = 0; return SERIAL_TYPE_NULL; }
-  if( flags & MEM_Int ){
-    i64 v = pMem->u.i;
-    if( v==0 ){ *pLen = 0; return SERIAL_TYPE_ZERO; }
-    if( v==1 ){ *pLen = 0; return SERIAL_TYPE_ONE; }
-    if( v>=-128 && v<=127 ){ *pLen = 1; return SERIAL_TYPE_INT8; }
-    if( v>=-32768 && v<=32767 ){ *pLen = 2; return SERIAL_TYPE_INT16; }
-    if( v>=-8388608 && v<=8388607 ){ *pLen = 3; return SERIAL_TYPE_INT24; }
-    if( v>=-2147483648LL && v<=2147483647LL ){ *pLen = 4; return SERIAL_TYPE_INT32; }
-    if( v>=-140737488355328LL && v<=140737488355327LL ){ *pLen = 6; return SERIAL_TYPE_INT48; }
-    *pLen = 8; return SERIAL_TYPE_INT64;
-  }
-  if( flags & MEM_Real ){ *pLen = 8; return SERIAL_TYPE_FLOAT64; }
-  if( flags & MEM_Str ){
-    u32 n = (u32)pMem->n;
-    *pLen = n;
-    return n*2 + SERIAL_TYPE_TEXT_BASE;
-  }
-  if( flags & MEM_Blob ){
-    u32 n = (u32)pMem->n;
-    *pLen = n;
-    return n*2 + SERIAL_TYPE_BLOB_BASE;
-  }
-  *pLen = 0; return SERIAL_TYPE_NULL;
-}
 static int findMatchingMutMapEntry(
   ProllyMutMap *pMap,
   KeyInfo *pKeyInfo,
