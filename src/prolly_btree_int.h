@@ -424,6 +424,11 @@ struct Btree {
     char *zRebaseOrigBranch;
     char *zRebaseReturnBranch;
     u32 aMeta[16];
+    /* The branch this state belongs to, and every other branch's refs as
+    ** they stood when a checkout first left it. */
+    char *zBranch;
+    ChunkStoreRefsSnapshot refs;
+    u8 bRefs;
   } *aSavepointTables;
 
   ProllyHash committedCatalogHash;

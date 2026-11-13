@@ -409,6 +409,8 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
     return db->autoCommit ? SQLITE_BUSY : SQLITE_BUSY_SNAPSHOT;
   }
 
+  rc = doltliteSavepointsNoteCheckout(db);
+  if( rc!=SQLITE_OK ) return rc;
   rc = checkoutLoadAndApply(db, cs, p->zTargetBranch,
                             &p->targetCommit, &p->targetCatHash);
   if( rc!=SQLITE_OK ) return rc;
