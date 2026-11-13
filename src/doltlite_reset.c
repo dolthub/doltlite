@@ -628,7 +628,18 @@ static int doltlitePreserveUntrackedOnHardReset(
       u8 *buf = 0;
       int nBuf = 0;
       ProllyHash mergedHash;
-      rc = doltliteSerializeCatalogEntriesForeignDomain(
+      /* An untracked virtual table survives with its shadow tables; one the
+      ** staged set or the target knows is restored from the target. */
+      for(k=0; k<nWorkSchema; k++){
+        SchemaEntry *p = &aWorkSchema[k];
+        if( p->zName && p->zType && strcmp(p->zType, "table")==0
+         && p->iRootpage==0
+         && (findSchemaEntry(aStagedSchema, nStagedSchema, p->zName)
+          || findSchemaEntry(aTargetSchema, nTargetSchema, p->zName)) ){
+          clearSchemaEntry(p);
+        }
+      }
+      rc = doltliteSerializeCatalogEntriesKeepVirtual(
           db, aTarget, nTarget, aWorkSchema, nWorkSchema, &buf, &nBuf);
       if( rc==SQLITE_OK ){
         rc = chunkStorePut(cs, buf, nBuf, &mergedHash);
