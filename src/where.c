@@ -1123,7 +1123,13 @@ static SQLITE_NOINLINE void constructAutomaticIndex(
         extraCols |= MASKBIT(BMS-1);
         break;
       }
+#ifdef DOLTLITE_PROLLY
+      /* A key column is compared under the join's collation. Two rows whose
+      ** primary keys differ only under BINARY would be one index entry, so
+      ** the column is carried a second time as itself. */
+#else
       if( idxCols & MASKBIT(i) ) continue;
+#endif
       extraCols |= MASKBIT(i);
     }
   }

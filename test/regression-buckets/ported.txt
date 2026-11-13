@@ -119,6 +119,7 @@ doltlite_detached_ephemeral
 doltlite_attached_vc
 doltlite_lazy_system_schema
 doltlite_open_head
+doltlite_autoindex_pk_collation
 doltlite_deferred_branch_open
 doltlite_deferred_pk_seek_flush
 doltlite_commit_peer_refresh
