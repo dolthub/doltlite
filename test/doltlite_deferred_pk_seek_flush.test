@@ -1,0 +1,26 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_deferred_pk_seek_flush
+
+# The outer side's rows are skipped tombstones often enough for the table
+# seek to flush the pending map the index entry was read from.
+do_execsql_test 1.0 {
+  CREATE TABLE t0(c0 TEXT, c3 INTEGER, c4 TEXT, c5, PRIMARY KEY(c3,c0));
+  INSERT INTO t0 VALUES ('01',1,'xx','B'),('abc',2,'yy','');
+  CREATE TABLE t1(k INTEGER PRIMARY KEY, c2);
+  WITH RECURSIVE s(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM s WHERE x<32)
+    INSERT INTO t1 SELECT x, 'zz' FROM s;
+}
+do_execsql_test 1.1 {
+  BEGIN;
+  UPDATE t0 SET c3=9223372036854775807;
+  SELECT count(a.c2), count(b.c5), count(*)
+    FROM t1 a FULL JOIN t0 b ON a.c2 < b.c5;
+} {32 2 34}
+do_execsql_test 1.2 {
+  COMMIT;
+  SELECT c0, c3 FROM t0 ORDER BY c0;
+  PRAGMA integrity_check;
+} {01 9223372036854775807 abc 9223372036854775807 ok}
+
+finish_test
