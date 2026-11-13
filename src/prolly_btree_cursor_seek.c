@@ -1715,6 +1715,12 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
    && unpackedRecordHasNocaseNul(pCur->pKeyInfo, pIdxKey) ){
     return SQLITE_NOTFOUND;
   }
+  /* A table root's key holds only the primary key. A probe that also bounds
+  ** a non-key column compares past it, against the record. */
+  if( pCur->isTableRoot
+   && (int)pIdxKey->nField>(int)pCur->pKeyInfo->nKeyField ){
+    return SQLITE_NOTFOUND;
+  }
 
   if( pCur->mmActive
    && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
