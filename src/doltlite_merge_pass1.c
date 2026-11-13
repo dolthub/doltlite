@@ -362,9 +362,11 @@ static int mergePass1AddedSchemaMatches(
   return strcmp(ourSE->zSql, theirSE->zSql)==0;
 }
 
-/* An index kept from ours was built over ours' rows. Their row changes
-** reach it only through index patches computed against the ancestor's
-** definition, so an index that has none must be rebuilt. */
+/* An index kept from ours was built over ours' rows and ours' column
+** semantics. Their row changes reach it only through index patches computed
+** against the ancestor's definition, and their change to a column's
+** affinity, collation or generated expression reaches it not at all, so an
+** index that has no patches must be rebuilt. */
 static int mergePass1ReindexIfTheirRowsMoved(
   MergePass1Ctx *c,
   const char *zIndex,
@@ -376,7 +378,9 @@ static int mergePass1ReindexIfTheirRowsMoved(
   pAncTable = doltliteFindTableByName(c->aAnc, c->nAnc, zTable);
   pTheirTable = doltliteFindTableByName(c->aTheirs, c->nTheirs, zTable);
   if( !pTheirTable || (pAncTable
-   && prollyHashCompare(&pTheirTable->root, &pAncTable->root)==0) ){
+   && prollyHashCompare(&pTheirTable->root, &pAncTable->root)==0
+   && !schemaEntryChangedByName(c->aAncSchema, c->nAncSchema,
+                                c->aTheirsSchema, c->nTheirsSchema, zTable)) ){
     return SQLITE_OK;
   }
   return mergeAppendReindexName(c->pazReindex, c->pnReindex, zIndex);
@@ -1161,6 +1165,28 @@ static int mergePass1BothSides(
         ancEntry, theirsEntry, &oursAdj.root, &ancNormRoot, &bRelaid);
     if( rc!=SQLITE_OK ) return rc;
     if( bRelaid ) pMergeOurs = &oursAdj;
+  }
+
+  /* Both index roots moved though at most one side changed the table's
+  ** rows: the other side rebuilt the index under different column
+  ** semantics, and the two trees do not share an encoding to merge in. */
+  if( bNamedSchemaObject && oursChanged && theirsChanged
+   && zSchemaConflictTable && zSchemaConflictTable[0] ){
+    struct TableEntry *pAncTable = doltliteFindTableByName(
+        c->aAnc, c->nAnc, zSchemaConflictTable);
+    struct TableEntry *pOurTable = doltliteFindTableByName(
+        c->aOurs, c->nOurs, zSchemaConflictTable);
+    struct TableEntry *pTheirTable = doltliteFindTableByName(
+        c->aTheirs, c->nTheirs, zSchemaConflictTable);
+    if( pAncTable && pOurTable && pTheirTable
+     && (prollyHashCompare(&pOurTable->root, &pAncTable->root)==0
+      || prollyHashCompare(&pTheirTable->root, &pAncTable->root)==0) ){
+      rc = mergeAppendReindexName(
+          c->pazReindex, c->pnReindex, zSchemaMergeName);
+      if( rc!=SQLITE_OK ) return rc;
+      c->aMerged[(*c->pnMerged)++] = c->aOurs[iOurs];
+      return SQLITE_OK;
+    }
   }
 
   /* Identical schemas still merge when a NULL add left the data root unchanged. */
