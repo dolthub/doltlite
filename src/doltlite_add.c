@@ -812,7 +812,7 @@ static void addRemoveShadowEntriesOfDroppedVtab(
   }
 }
 
-int doltliteStageNamedTables(
+static int addStageNamedTables(
   sqlite3 *db,
   sqlite3_context *context,
   ChunkStore *cs,
@@ -1223,6 +1223,67 @@ int doltliteStageNamedTables(
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
   }
+  return rc;
+}
+
+/* An AUTOINCREMENT table cannot be opened for insert without
+** sqlite_sequence. Staging the first such table by name takes
+** sqlite_sequence with it, or the commit holds a schema stock SQLite can
+** never produce. */
+int doltliteStageNamedTables(
+  sqlite3 *db,
+  sqlite3_context *context,
+  ChunkStore *cs,
+  const ProllyHash *pWorkingHash,
+  int argc,
+  sqlite3_value **argv,
+  int bForce,
+  int bStageDrop
+){
+  struct TableEntry *aWorking = 0, *aStaged = 0;
+  int nWorking = 0, nStaged = 0;
+  sqlite3_value **aArg;
+  sqlite3_value *pSeq;
+  int bAutoinc = 0;
+  int i, rc;
+
+  for(i=0; i<argc && !bAutoinc; i++){
+    const char *zTable = (const char*)sqlite3_value_text(argv[i]);
+    Table *pTab = zTable ? sqlite3FindTable(db, zTable, "main") : 0;
+    if( pTab && (pTab->tabFlags & TF_Autoincrement)!=0 ) bAutoinc = 1;
+  }
+  if( bAutoinc ){
+    rc = addLoadWorkingAndStagedCatalogs(db, pWorkingHash, &aWorking,
+                                         &nWorking, &aStaged, &nStaged);
+    if( rc!=SQLITE_OK ){
+      doltliteVcResultErrorCode(context, db, "failed to load staged catalog",
+                                rc);
+      return rc;
+    }
+    bAutoinc = doltliteFindTableByName(aWorking, nWorking, "sqlite_sequence")
+            && !doltliteFindTableByName(aStaged, nStaged, "sqlite_sequence");
+    doltliteFreeCatalog(aWorking, nWorking);
+    doltliteFreeCatalog(aStaged, nStaged);
+  }
+  if( !bAutoinc ){
+    return addStageNamedTables(db, context, cs, pWorkingHash, argc, argv,
+                               bForce, bStageDrop);
+  }
+  aArg = sqlite3_malloc64((argc+1)*sizeof(sqlite3_value*));
+  pSeq = sqlite3ValueNew(db);
+  if( !aArg || !pSeq ){
+    sqlite3_free(aArg);
+    sqlite3ValueFree(pSeq);
+    sqlite3_result_error_nomem(context);
+    return SQLITE_NOMEM;
+  }
+  sqlite3ValueSetStr(pSeq, -1, "sqlite_sequence", SQLITE_UTF8, SQLITE_STATIC);
+  memcpy(aArg, argv, argc*sizeof(sqlite3_value*));
+  aArg[argc] = pSeq;
+  rc = addStageNamedTables(db, context, cs, pWorkingHash, argc+1, aArg,
+                           bForce, bStageDrop);
+  sqlite3_free(aArg);
+  sqlite3ValueFree(pSeq);
   return rc;
 }
 
