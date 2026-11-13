@@ -2048,7 +2048,11 @@ int doltlitePersistWorkingSet(sqlite3 *db);
 int doltlitePersistWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHash);
 int doltliteCommitWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHash);
 void doltliteAdoptRollbackBaseline(sqlite3 *db, const ProllyHash *pCatalogHash);
-void doltliteMarkTxnCheckout(sqlite3 *db);
+int doltliteNoteTxnLeaving(sqlite3 *db);
+int doltliteMarkTxnCheckout(sqlite3 *db,
+                            const ProllyHash *pLeftCatalog,
+                            const ProllyHash *pArrival);
+int doltliteTxnCheckoutSplitsCommit(sqlite3 *db);
 int doltliteSavepointsNoteCheckout(sqlite3 *db);
 int doltliteTxnCheckoutOwnsGraphLock(sqlite3 *db);
 int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch);

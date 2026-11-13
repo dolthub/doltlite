@@ -1861,10 +1861,89 @@ int doltliteCommitWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatH
   return doltlitePersistWorkingSetWithHash(db, pWorkingCatHash);
 }
 
-void doltliteMarkTxnCheckout(sqlite3 *db){
-  if( db && db->nDb>0 && db->aDb[0].pBt ){
-    db->aDb[0].pBt->bTxnCheckout = 1;
+/* The session's branch name does not outlive the checkout that leaves it,
+** and the checkout itself writes. */
+int doltliteNoteTxnLeaving(sqlite3 *db){
+  Btree *p = db && db->nDb>0 ? db->aDb[0].pBt : 0;
+  if( !p ) return SQLITE_OK;
+  sqlite3_free(p->zTxnLeaving);
+  p->bTxnLeavingWrote = (u8)doltliteBtreeTxnWrote(p);
+  p->zTxnLeaving = sqlite3_mprintf("%s", p->zBranch ? p->zBranch : "main");
+  return p->zTxnLeaving ? SQLITE_OK : SQLITE_NOMEM;
+}
+
+int doltliteMarkTxnCheckout(
+  sqlite3 *db,
+  const ProllyHash *pLeftCatalog,
+  const ProllyHash *pArrival
+){
+  Btree *p = db && db->nDb>0 ? db->aDb[0].pBt : 0;
+  const char *zLeft;
+  int bDirty;
+  if( !p ) return SQLITE_OK;
+  zLeft = p->zTxnLeaving;
+  bDirty = p->bTxnCheckout
+      ? (pLeftCatalog
+         && prollyHashCompare(pLeftCatalog, &p->txnArrivalCatalog)!=0)
+      : p->bTxnLeavingWrote;
+  if( bDirty && zLeft ){
+    char *zKey = sqlite3_mprintf("\n%s\n", zLeft);
+    if( !zKey ) return SQLITE_NOMEM;
+    if( !p->zTxnLeftDirty || !strstr(p->zTxnLeftDirty, zKey) ){
+      char *zNew = sqlite3_mprintf("%s%s",
+          p->zTxnLeftDirty ? p->zTxnLeftDirty : "\n", zKey+1);
+      if( !zNew ){
+        sqlite3_free(zKey);
+        return SQLITE_NOMEM;
+      }
+      sqlite3_free(p->zTxnLeftDirty);
+      p->zTxnLeftDirty = zNew;
+    }
+    sqlite3_free(zKey);
   }
+  p->txnArrivalCatalog = *pArrival;
+  p->bTxnCheckout = 1;
+  return SQLITE_OK;
+}
+
+/* As in Dolt, dolt_commit commits one branch. True when the transaction
+** checked out and holds uncommitted writes on more than one branch, counting
+** those it left and the one it is on. */
+int doltliteTxnCheckoutSplitsCommit(sqlite3 *db){
+  Btree *p = db && db->nDb>0 ? db->aDb[0].pBt : 0;
+  const char *zCur;
+  const char *z;
+  char *zKey;
+  ProllyHash live;
+  int nOther = 0;
+  int bCurrent;
+  if( !p || !p->bTxnCheckout || !p->zTxnLeftDirty ) return 0;
+  zCur = p->zBranch ? p->zBranch : "main";
+  zKey = sqlite3_mprintf("\n%s\n", zCur);
+  if( !zKey ) return 0;
+  bCurrent = strstr(p->zTxnLeftDirty, zKey)!=0;
+  sqlite3_free(zKey);
+  for(z=p->zTxnLeftDirty+1; *z; ){
+    const char *zEnd = strchr(z, '\n');
+    if( !zEnd ) break;
+    if( (size_t)(zEnd-z)!=strlen(zCur) || memcmp(z, zCur, zEnd-z)!=0 ){
+      nOther++;
+    }
+    z = zEnd+1;
+  }
+  if( nOther==0 ) return 0;
+  if( bCurrent || nOther>1 ) return 1;
+  {
+    u8 *data = 0;
+    int nData = 0;
+    int rc = doltliteFlushAndSerializeBtreeCatalog(p, &data, &nData);
+    if( rc==SQLITE_OK ){
+      rc = chunkStorePut(p->pBt->pStore, data, nData, &live);
+    }
+    sqlite3_free(data);
+    if( rc!=SQLITE_OK ) return 0;
+  }
+  return prollyHashCompare(&live, &p->txnArrivalCatalog)!=0;
 }
 
 int doltliteTxnCheckoutOwnsGraphLock(sqlite3 *db){

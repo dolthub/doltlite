@@ -1517,6 +1517,8 @@ static void commitPhaseTwoEndWriteTxn(Btree *p){
   p->bSchemaChangedTxn = 0;
   p->bMasterRootChangedTxn = 0;
   p->bTxnCheckout = 0;
+  sqlite3_free(p->zTxnLeftDirty);
+  p->zTxnLeftDirty = 0;
 }
 
 static int commitPhaseTwoFailRestore(
@@ -2253,6 +2255,8 @@ static int restoreFromCommitted(Btree *p){
     rc = btreeReloadBranchWorkingStateInto(p, 1, &catalog);
     if( rc==SQLITE_OK ) btreeStoreCommittedFromCurrent(p, &catalog);
     p->bTxnCheckout = 0;
+    sqlite3_free(p->zTxnLeftDirty);
+    p->zTxnLeftDirty = 0;
     return rc;
   }
   if( prollyHashIsEmpty(&p->committedCatalogHash) ){

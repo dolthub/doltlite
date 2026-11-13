@@ -344,6 +344,12 @@ struct Btree {
   u8 bMasterRootChangedTxn;
   u8 bTxnWrote;
   u8 bTxnCheckout;
+  /* Branches an in-transaction checkout left with uncommitted writes, each
+  ** name between newlines, and the catalog the session arrived on. */
+  char *zTxnLeftDirty;
+  char *zTxnLeaving;
+  u8 bTxnLeavingWrote;
+  ProllyHash txnArrivalCatalog;
   u8 bFilterSchemaPlaceholders;
   u8 bCatalogDropped;     /* OOM drop: empty committedCatalogHash is not a new db */
   u8 bForceCatalogReload; /* Invalidated: live catalog may lag committedCatalogHash */
@@ -856,6 +862,7 @@ void freeSavepointTables(struct SavepointTableState*);
 int snapshotPendingForFlush(Btree*, Pgno, ProllyMutMap**, ProllyMutMap**, int*);
 int serializeCatalog(Btree*, u8**, int*);
 int doltliteFlushAndSerializeBtreeCatalog(Btree*, u8**, int*);
+int doltliteBtreeTxnWrote(Btree*);
 int doltliteVcScanSwapCheck(sqlite3*, const ProllyHash*);
 int serializeCatalogForCommit(Btree*, u8**, int*);
 int deserializeCatalog(Btree*, const u8*, int);
