@@ -93,5 +93,52 @@ foreach begin {BEGIN {BEGIN IMMEDIATE} {BEGIN EXCLUSIVE} {SAVEPOINT outer}} {
     list [lindex $result 0] [db one {SELECT a FROM mem.x}] [guards_rows feat] [guards_rows more]
   } {0 9 1,2 1,3}
 }
+
+# A RELEASE refused for writing two files has rolled everything back. The
+# connection must be out of the transaction afterwards, or the next
+# SAVEPOINT nests inside it and its RELEASE commits nothing.
+foreach engine {sqlite doltlite} {
+  foreach form {savepoint begin} {
+    catch {db close}
+    forcedelete test.db guards-extra.db
+    sqlite3 db test.db -uri 1
+    db eval {CREATE TABLE m(id INTEGER PRIMARY KEY, v TEXT)}
+    set path [file normalize guards-extra.db]
+    if {$engine eq "sqlite"} {set path file:$path?doltlite_engine=sqlite}
+    sqlite3 extra $path -uri 1
+    extra eval {CREATE TABLE o(id INTEGER PRIMARY KEY, v TEXT)}
+    extra close
+    db eval {ATTACH $path AS ot}
+    set prefix refused-release-$engine-$form
+    if {$form eq "savepoint"} {
+      set open {SAVEPOINT a}
+      set close {RELEASE a}
+    } else {
+      set open {BEGIN}
+      set close {COMMIT}
+    }
+    do_test $prefix.refused {
+      db eval $open
+      db eval {INSERT INTO m VALUES(1,'m1'); INSERT INTO ot.o VALUES(1,'o1')}
+      list [catchsql $close] [sqlite3_get_autocommit db] \
+           [db eval {SELECT count(*) FROM m; SELECT count(*) FROM ot.o}]
+    } {{1 {atomic commit across multiple file-backed databases is not supported}} 1 {0 0}}
+    do_test $prefix.savepoint-gone {
+      catchsql {ROLLBACK TO a}
+    } {1 {no such savepoint: a}}
+    do_test $prefix.next-unit {
+      db eval $open
+      db eval {INSERT INTO m VALUES(2,'second')}
+      db eval $close
+      sqlite3_get_autocommit db
+    } 1
+    do_test $prefix.durable {
+      sqlite3 observer test.db -readonly 1
+      set r [observer eval {SELECT id, v FROM m}]
+      observer close
+      set r
+    } {2 second}
+  }
+}
 catch {db close}
 finish_test
