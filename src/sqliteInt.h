@@ -5617,6 +5617,7 @@ int doltliteBtreeRunDeferredWork(sqlite3*);
 void doltliteBtreeRegistrationDone(sqlite3*);
 Module *doltliteHistoricalModuleRegister(sqlite3*,const char*);
 int doltliteHistoricalModuleStale(sqlite3*,Module*);
+int doltliteBlameModuleStale(sqlite3*,Module*);
 void doltliteHistoricalModulesReset(sqlite3*);
 void doltliteDiffShadowPrepare(sqlite3*,Module*);
 #endif

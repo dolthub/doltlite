@@ -1224,6 +1224,39 @@ const sqlite3_module *doltliteBlameTableModule(void){
   return &doltliteBlameModule;
 }
 
+/* The eponymous table keeps the key columns from its first xConnect. A
+** merge, a reset or a peer's commit can put a table with another primary
+** key under the same name without re-registering the module. */
+int doltliteBlameModuleStale(sqlite3 *db, Module *pMod){
+  VTable *pVt = pMod->pEpoTab->u.vtab.p;
+  BlameVtab *v;
+  Table *pTab;
+  Index *pPk = 0;
+  int n, i;
+
+  if( !pVt || !pVt->pVtab ) return 1;
+  v = (BlameVtab*)pVt->pVtab;
+  pTab = sqlite3FindTable(db, v->zTableName, "main");
+  if( !pTab || IsVirtual(pTab) || IsView(pTab) ) return 1;
+  if( (HasRowid(pTab)!=0)!=(v->bHasRowid!=0) ) return 1;
+  if( (pTab->iPKey>=0)!=(v->intPkCid>=0) ) return 1;
+  if( pTab->iPKey>=0 ){
+    n = 1;
+  }else{
+    pPk = sqlite3PrimaryKeyIndex(pTab);
+    n = pPk ? pPk->nKeyCol : 0;
+  }
+  if( n!=v->nPkCols ) return 1;
+  for(i=0; i<n; i++){
+    int iCol = pPk ? pPk->aiColumn[i] : pTab->iPKey;
+    if( iCol<0 || iCol>=pTab->nCol
+     || sqlite3_stricmp(pTab->aCol[iCol].zCnName, v->azPkNames[i])!=0 ){
+      return 1;
+    }
+  }
+  return 0;
+}
+
 int doltliteRegisterBlameTables(sqlite3 *db){
   return doltliteForEachUserTable(db, "dolt_blame_", &doltliteBlameModule);
 }

@@ -1,0 +1,89 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_blame_stale_layout
+
+# dolt_blame_<table> keeps the key columns it read when first used. A
+# merge, a reset or another connection's commit can put a table with a
+# different primary key under the same name; blame has to notice.
+proc blame_setup {} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+    INSERT INTO t VALUES(1,10),(2,20);
+    SELECT dolt_commit('-Am','c1');
+    SELECT dolt_checkout('-b','other');
+    DROP TABLE t;
+    CREATE TABLE t(k TEXT, j INT, v, PRIMARY KEY(k,j)) WITHOUT ROWID;
+    INSERT INTO t VALUES('a',1,'x'),('b',2,'y');
+    SELECT dolt_commit('-Am','c2');
+    SELECT dolt_checkout('main');
+  }
+}
+set old {1 c1 2 c1}
+set new {a 1 c2 b 2 c2}
+
+foreach {name sql} {
+  merge       {SELECT dolt_merge('other')}
+  reset-hard  {SELECT dolt_reset('--hard','other')}
+} {
+  blame_setup
+  do_execsql_test $name.before {SELECT id, message FROM dolt_blame_t ORDER BY 1} $old
+  execsql $sql
+  do_execsql_test $name.after {SELECT k, j, message FROM dolt_blame_t ORDER BY 1} $new
+  do_execsql_test $name.again {SELECT k, j, message FROM dolt_blame_t ORDER BY 1} $new
+  do_execsql_test $name.integrity {PRAGMA integrity_check} ok
+}
+
+blame_setup
+do_execsql_test peer.before {SELECT id, message FROM dolt_blame_t ORDER BY 1} $old
+do_test peer.commit {
+  sqlite3 peer test.db
+  peer eval {SELECT dolt_merge('other')}
+  peer close
+  execsql {SELECT k, j, v FROM t ORDER BY 1}
+} {a 1 x b 2 y}
+do_execsql_test peer.after {SELECT k, j, message FROM dolt_blame_t ORDER BY 1} $new
+
+# The same key shape keeps working across a change that does not touch it.
+blame_setup
+do_execsql_test same.before {SELECT id, message FROM dolt_blame_t ORDER BY 1} $old
+execsql {
+  ALTER TABLE t ADD COLUMN b INT;
+  INSERT INTO t VALUES(3,30,3);
+  SELECT dolt_commit('-Am','c3');
+}
+do_execsql_test same.rows {SELECT id, message FROM dolt_blame_t ORDER BY 1} {1 c1 2 c1 3 c3}
+
+# A prepared blame statement is re-planned against the new table.
+blame_setup
+do_test prepared.reuse {
+  set r [execsql {SELECT count(*) FROM dolt_blame_t}]
+  execsql {SELECT dolt_merge('other')}
+  lappend r [execsql {SELECT count(*) FROM dolt_blame_t}]
+  lappend r [execsql {SELECT group_concat(k) FROM dolt_blame_t}]
+} {2 2 a,b}
+
+# Once the table is gone, blame says so instead of reporting corruption.
+foreach {name sql msg} {
+  drop        {DROP TABLE t} {no such table: dolt_blame_t}
+  reset-gone  {SELECT dolt_reset('--hard','HEAD~1')} {no such table: dolt_blame_t}
+  view        {DROP TABLE t; CREATE VIEW t AS SELECT 1 AS id}
+              {dolt_blame_t: table has no primary key}
+} {
+  reset_db
+  execsql {
+    CREATE TABLE u(x INTEGER PRIMARY KEY);
+    SELECT dolt_commit('-Am','c0');
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+    INSERT INTO t VALUES(1,10),(2,20);
+    SELECT dolt_commit('-Am','c1');
+    SELECT count(*) FROM dolt_blame_t;
+  }
+  execsql $sql
+  do_test gone.$name {
+    catchsql {SELECT count(*) FROM dolt_blame_t}
+  } [list 1 $msg]
+  do_execsql_test gone.$name.integrity {PRAGMA integrity_check} ok
+}
+
+finish_test
