@@ -68,7 +68,90 @@ do_execsql_test savepoint.before {
   SELECT count(*) FROM t;
   SELECT dolt_checkout('f');
   SELECT count(*) FROM t;
-} {0 f 1 0 1 2 0 0 0}
+} {0 f 0 1 0 0 0}
+
+# ROLLBACK TO puts every branch's working set back to the savepoint and
+# leaves the session on its current branch; COMMIT then persists that.
+proc checkout_txn_rows {branch} {
+  sqlite3 observer [file normalize test.db]/$branch -readonly 1
+  set r [observer eval {
+    SELECT group_concat(id) FROM (SELECT id FROM t ORDER BY id);
+    SELECT count(*) FROM dolt_status;
+    PRAGMA integrity_check;
+  }]
+  observer close
+  return $r
+}
+foreach {name setup sql main f} {
+  savepoint-on-target {INSERT INTO t VALUES(10,'dirty')} {
+    BEGIN;
+    SELECT dolt_checkout('f');
+    SAVEPOINT s;
+    SELECT dolt_checkout('main');
+    ROLLBACK TO s;
+    COMMIT;
+  } {10 1 ok} {{} 0 ok}
+  savepoint-on-source {} {
+    BEGIN;
+    INSERT INTO t VALUES(1,'before');
+    SAVEPOINT s;
+    INSERT INTO t VALUES(2,'after');
+    SELECT dolt_checkout('f');
+    INSERT INTO t VALUES(3,'target');
+    ROLLBACK TO s;
+    COMMIT;
+  } {1 1 ok} {{} 0 ok}
+  round-trip {} {
+    BEGIN;
+    INSERT INTO t VALUES(1,'before');
+    SAVEPOINT s;
+    SELECT dolt_checkout('f');
+    INSERT INTO t VALUES(2,'target');
+    SELECT dolt_checkout('main');
+    INSERT INTO t VALUES(3,'after');
+    ROLLBACK TO s;
+    COMMIT;
+  } {1 1 ok} {{} 0 ok}
+  nested {} {
+    BEGIN;
+    INSERT INTO t VALUES(1,'before');
+    SAVEPOINT a;
+    SELECT dolt_checkout('f');
+    INSERT INTO t VALUES(2,'target');
+    SAVEPOINT b;
+    INSERT INTO t VALUES(3,'target');
+    SELECT dolt_checkout('main');
+    INSERT INTO t VALUES(4,'after');
+    ROLLBACK TO b;
+    RELEASE a;
+    COMMIT;
+  } {1 1 ok} {2 1 ok}
+  rollback-twice {} {
+    BEGIN;
+    SAVEPOINT s;
+    INSERT INTO t VALUES(1,'source');
+    SELECT dolt_checkout('f');
+    INSERT INTO t VALUES(2,'target');
+    ROLLBACK TO s;
+    INSERT INTO t VALUES(3,'target');
+    SELECT dolt_checkout('main');
+    INSERT INTO t VALUES(4,'source');
+    ROLLBACK TO s;
+    INSERT INTO t VALUES(5,'source');
+    COMMIT;
+  } {5 1 ok} {{} 0 ok}
+} {
+  checkout_txn_reset
+  db eval $setup
+  do_test savepoint.commit.$name.run {
+    catchsql $sql
+    sqlite3_get_autocommit db
+  } 1
+  db close
+  do_test savepoint.commit.$name.main {checkout_txn_rows main} $main
+  do_test savepoint.commit.$name.f {checkout_txn_rows f} $f
+  sqlite3 db test.db
+}
 
 checkout_txn_reset
 do_execsql_test savepoint.after {

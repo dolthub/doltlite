@@ -20,6 +20,12 @@ static int restoreFromCommitted(Btree *p);
 static void btreeDiscardAllSavepoints(Btree *p);
 
 void freeSavepointTables(struct SavepointTableState *pState){
+  sqlite3_free(pState->zBranch);
+  pState->zBranch = 0;
+  if( pState->bRefs ){
+    chunkStoreDiscardRefsSnapshot(&pState->refs);
+    pState->bRefs = 0;
+  }
   csFreeSequenceArray(pState->aSequences, pState->nSequences);
   pState->aSequences = 0;
   pState->nSequences = 0;
@@ -648,6 +654,10 @@ int pushSavepoint(Btree *pBtree, int bStatement){
   memset(&pState->rebaseOntoCommit, 0, sizeof(pState->rebaseOntoCommit));
   pState->zRebaseOrigBranch = 0;
   pState->zRebaseReturnBranch = 0;
+  pState->bRefs = 0;
+  pState->zBranch = sqlite3_mprintf("%s",
+      pBtree->zBranch ? pBtree->zBranch : "main");
+  if( !pState->zBranch ) return SQLITE_NOMEM;
   rc = captureSavepointSessionState(pBtree, pState);
   if( rc!=SQLITE_OK ){
     freeSavepointTables(pState);
@@ -2728,6 +2738,78 @@ static int rollbackAllSavepoints(Btree *p, BtShared *pBt){
   return SQLITE_OK;
 }
 
+/* A checkout is about to move the session off its branch. Each open
+** savepoint keeps the refs as they stand, so a rollback to it can put the
+** other branches' working sets back as well as its own tables. */
+int doltliteSavepointsNoteCheckout(sqlite3 *db){
+  Btree *p = db && db->nDb>0 ? db->aDb[0].pBt : 0;
+  int i;
+  if( !p || p->pOps!=&prollyBtreeOps || p->inTrans!=TRANS_WRITE ){
+    return SQLITE_OK;
+  }
+  for(i=0; i<p->nSavepoint; i++){
+    struct SavepointTableState *pState = &p->aSavepointTables[i];
+    int rc;
+    if( pState->bStatement || pState->bRefs ) continue;
+    rc = chunkStoreSnapshotRefs(p->pBt->pStore, &pState->refs);
+    if( rc!=SQLITE_OK ) return rc;
+    pState->bRefs = 1;
+  }
+  return SQLITE_OK;
+}
+
+/* The tables just restored are those of the savepoint's branch. When the
+** session has since moved to another branch, hand them to that branch's
+** working set and load the session's branch as the savepoint knew it. */
+static int rollbackSavepointBranches(
+  Btree *p,
+  struct SavepointTableState *pState,
+  int *pbReload
+){
+  ChunkStore *cs = p->pBt->pStore;
+  const char *zCur = p->zBranch ? p->zBranch : "main";
+  ProllyHash catHash, head;
+  u8 *catData = 0;
+  int nCatData = 0;
+  int rc;
+
+  chunkStoreRestoreRefsSnapshot(cs, &pState->refs);
+  pState->bRefs = 0;
+  if( strcmp(zCur, pState->zBranch)==0 ){
+    chunkStoreAdoptWorkingSetBasis(cs, zCur);
+    memset(&p->loadedWorkingSet, 0, sizeof(p->loadedWorkingSet));
+    chunkStoreGetBranchWorkingSet(cs, zCur, &p->loadedWorkingSet);
+    return SQLITE_OK;
+  }
+
+  rc = chunkStoreFindBranch(cs, pState->zBranch, &head);
+  if( rc==SQLITE_OK ){
+    rc = doltliteFlushAndSerializeBtreeCatalog(p, &catData, &nCatData);
+    if( rc==SQLITE_OK ){
+      rc = chunkStorePut(cs, catData, nCatData, &catHash);
+    }
+    sqlite3_free(catData);
+    if( rc==SQLITE_OK ){
+      rc = btreeStoreWorkingSetBlob(cs, pState->zBranch, &catHash, &head,
+                                    &p->vc.stagedCatalog, p->vc.isMerging,
+                                    &p->vc.mergeCommitHash,
+                                    &p->vc.conflictsCatalogHash,
+                                    p->isRebasing,
+                                    &p->preRebaseWorkingCat,
+                                    &p->rebaseOntoCommit,
+                                    p->zRebaseOrigBranch,
+                                    p->zRebaseReturnBranch,
+                                    &p->vc.constraintViolationsHash);
+    }
+  }else if( rc==SQLITE_NOTFOUND ){
+    rc = SQLITE_OK;
+  }
+  if( rc!=SQLITE_OK ) return rc;
+  p->bForceCatalogReload = 1;
+  *pbReload = 1;
+  return btreeReloadBranchWorkingStateInto(p, 1, &catHash);
+}
+
 static int rollbackNamedSavepoint(Btree *p, BtShared *pBt, int iSavepoint){
   struct SavepointTableState *pState = &p->aSavepointTables[iSavepoint];
   BtCursor *pC;
@@ -2763,6 +2845,10 @@ static int rollbackNamedSavepoint(Btree *p, BtShared *pBt, int iSavepoint){
   p->bSchemaChangedTxn = pState->bSchemaChangedTxn;
   p->bMasterRootChangedTxn = pState->bMasterRootChangedTxn;
   p->bTxnWrote = pState->bTxnWrote;
+  if( pState->bRefs ){
+    rc = rollbackSavepointBranches(p, pState, &bSchemaChangedRollback);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   freeSavepointTables(pState);
   for(j=iSavepoint+1; j<p->nSavepoint; j++){
     freeSavepointTables(&p->aSavepointTables[j]);

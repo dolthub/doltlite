@@ -898,6 +898,57 @@ SELECT dolt_checkout('main');
 ROLLBACK;
 "
 
+oracle "txn_checkout_rollback_to_source_savepoint_commits" "
+$SEED
+SELECT dolt_branch('side');
+BEGIN;
+INSERT INTO t VALUES(2,'before');
+SAVEPOINT caller;
+INSERT INTO t VALUES(3,'after');
+SELECT dolt_checkout('side');
+INSERT INTO t VALUES(4,'target');
+ROLLBACK TO caller;
+SELECT active_branch();
+SELECT id FROM t ORDER BY id;
+COMMIT;
+SELECT id FROM t ORDER BY id;
+SELECT dolt_checkout('main');
+SELECT id FROM t ORDER BY id;
+"
+
+oracle "txn_checkout_rollback_to_target_savepoint_commits" "
+$SEED
+SELECT dolt_branch('side');
+INSERT INTO t VALUES(10,'dirty');
+BEGIN;
+SELECT dolt_checkout('side');
+SAVEPOINT caller;
+SELECT dolt_checkout('main');
+ROLLBACK TO caller;
+COMMIT;
+SELECT active_branch();
+SELECT id FROM t ORDER BY id;
+SELECT dolt_checkout('side');
+SELECT id FROM t ORDER BY id;
+"
+
+oracle "txn_checkout_round_trip_rollback_to_savepoint_commits" "
+$SEED
+SELECT dolt_branch('side');
+BEGIN;
+INSERT INTO t VALUES(2,'before');
+SAVEPOINT caller;
+SELECT dolt_checkout('side');
+INSERT INTO t VALUES(3,'target');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(4,'after');
+ROLLBACK TO caller;
+COMMIT;
+SELECT id FROM t ORDER BY id;
+SELECT dolt_checkout('side');
+SELECT id FROM t ORDER BY id;
+"
+
 echo "--- savepoint parity ---"
 
 oracle_savepoint_poststate "savepoint_checkout_existing_branch_reopens_on_original_branch" "
