@@ -182,6 +182,7 @@ doltlite_dml_scan_cost
 doltlite_range_estimate
 doltlite_index_cost_tie
 doltlite_correlated_in
+doltlite_rowid_in_minmax
 doltlite_numeric_desc_compat
 doltlite_group_metadata
 doltlite_column_metadata

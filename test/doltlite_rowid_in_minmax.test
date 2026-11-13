@@ -1,0 +1,53 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_rowid_in_minmax
+
+# A rowid IN list of integer literals is driven from a RowSet. The min/max
+# early-out and the ORDER BY LIMIT skip must move to the next IN value,
+# not leave the loop. Each query is checked against the same query with the
+# IN term hidden from the planner.
+do_execsql_test 1.0 {
+  CREATE TABLE t(a INTEGER PRIMARY KEY, b, c);
+  INSERT INTO t VALUES(1,5,'x'),(2,9,'y'),(3,1,'x'),(4,7,'y'),(5,NULL,'x');
+  CREATE TABLE u(k INTEGER PRIMARY KEY, a INT);
+  INSERT INTO u VALUES(1,1),(2,2),(3,3),(4,4);
+}
+set n 0
+foreach state {committed pending} {
+  if {$state eq "pending"} {
+    execsql {
+      BEGIN;
+      UPDATE t SET b=b+10 WHERE a=3;
+      DELETE FROM t WHERE a=2;
+      INSERT INTO t VALUES(6,40,'y');
+    }
+  }
+  foreach q {
+    {SELECT max(b) FROM t WHERE %s}
+    {SELECT min(b) FROM t WHERE %s}
+    {SELECT max(b+0), min(b+0) FROM t WHERE %s}
+    {SELECT max(b) FROM t WHERE %s AND b>0}
+    {SELECT min(b), c FROM t WHERE %s}
+    {SELECT c, max(b) FROM t WHERE %s GROUP BY c ORDER BY c}
+    {SELECT max(t.b) FROM u JOIN t ON t.a=u.a WHERE %s}
+    {SELECT u.k, (SELECT max(b) FROM t WHERE %s AND t.a>=u.a) FROM u ORDER BY 1}
+    {SELECT b FROM t WHERE %s ORDER BY a LIMIT 2}
+    {SELECT b FROM t WHERE %s ORDER BY a DESC LIMIT 2}
+    {SELECT count(*), sum(b) FROM t WHERE %s}
+  } {
+    foreach list {{1,2,3} {3,2,1} {6,5,4,3,2,1} {2} {9,1} {4,4,2}} {
+      incr n
+      set fast [format $q "t.a IN ($list)"]
+      set slow [format $q "+t.a IN ($list)"]
+      do_test 1.$state.$n [list execsql $fast] [execsql $slow]
+    }
+  }
+  if {$state eq "pending"} {execsql COMMIT}
+}
+
+do_execsql_test 2.0 {
+  SELECT max(b) FROM t WHERE a IN (1,3,4);
+  SELECT min(b) FROM t WHERE a IN (1,3,4);
+} {11 5}
+
+finish_test

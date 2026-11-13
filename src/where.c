@@ -75,6 +75,18 @@ int sqlite3WhereIsOrdered(WhereInfo *pWInfo){
   return pWInfo->nOBSat<0 ? 0 : pWInfo->nOBSat;
 }
 
+#ifdef DOLTLITE_PROLLY
+/* The rowid IN-list loop that reads its values from a RowSet has no IN
+** cursor and leaves addrNxt at addrBrk. Its next value is its continue
+** label, which loops back to the RowSet read. */
+static int whereLevelNextInValue(WhereLevel *pLevel){
+  if( (pLevel->pWLoop->wsFlags & WHERE_COLUMN_IN)!=0
+   && pLevel->addrNxt==pLevel->addrBrk ){
+    return pLevel->addrCont;
+  }
+  return pLevel->addrNxt;
+}
+#endif
 /*
 ** In the ORDER BY LIMIT optimization, if the inner-most loop is known
 ** to emit rows in increasing order, and if the last row emitted by the
@@ -107,6 +119,9 @@ int sqlite3WhereOrderByLimitOptLabel(WhereInfo *pWInfo){
   }
   pInner = &pWInfo->a[pWInfo->nLevel-1];
   assert( pInner->addrNxt!=0 );
+#ifdef DOLTLITE_PROLLY
+  if( !pInner->pRJ ) return whereLevelNextInValue(pInner);
+#endif
   return pInner->pRJ ? pWInfo->iContinue : pInner->addrNxt;
 }
 
@@ -129,7 +144,11 @@ void sqlite3WhereMinMaxOptEarlyOut(Vdbe *v, WhereInfo *pWInfo){
   for(i=pWInfo->nLevel-1; i>=0; i--){
     pInner = &pWInfo->a[i];
     if( (pInner->pWLoop->wsFlags & WHERE_COLUMN_IN)!=0 ){
+#ifdef DOLTLITE_PROLLY
+      sqlite3VdbeGoto(v, whereLevelNextInValue(pInner));
+#else
       sqlite3VdbeGoto(v, pInner->addrNxt);
+#endif
       return;
     }
   }
