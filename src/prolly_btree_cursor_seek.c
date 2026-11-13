@@ -1700,6 +1700,26 @@ int sqlite3BtreeSqlRowidMoveto(BtCursor *pCur, i64 rowid, int *pRes){
   return btreeReadResult(pCur->pBtree, rc);
 }
 
+static int cachedSortKeyCompare(
+  const u8 *pKey, int nKey,
+  const u8 *pProbe, int nProbe,
+  UnpackedRecord *pIdxKey,
+  int *pRes
+){
+  int cmp = memcmp(pKey, pProbe, nKey<nProbe ? nKey : nProbe);
+  if( cmp!=0 ){
+    *pRes = cmp<0 ? -1 : 1;
+  }else if( nKey<nProbe ){
+    *pRes = -1;
+  }else if( nKey>nProbe && !sortKeyByteStartsField(pKey[nProbe]) ){
+    return SQLITE_NOTFOUND;  /* probe ended mid-field */
+  }else{
+    pIdxKey->eqSeen = 1;
+    *pRes = pIdxKey->default_rc;
+  }
+  return SQLITE_OK;
+}
+
 int sqlite3BtreeProllyCachedIndexKeyCompare(
   BtCursor *pCur,
   UnpackedRecord *pIdxKey,
@@ -1708,8 +1728,6 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
 ){
   const u8 *pKey = 0;
   int nKey = 0;
-  int nCmp;
-  int cmp;
 
   if( !pCur || pCur->pCurOps!=&prollyCursorOps || pCur->curIntKey ){
     return SQLITE_NOTFOUND;
@@ -1746,22 +1764,8 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
   if( prollyBtCursorCursorHasHint(pCur, BTREE_SEEK_EQ)
    && pCur->nSeekSortKey>0
    && pCur->nSeekKeyField==(int)pIdxKey->nField ){
-    nCmp = nKey < pCur->nSeekSortKey ? nKey : pCur->nSeekSortKey;
-    cmp = memcmp(pKey, pCur->pSeekSortKey, nCmp);
-    if( cmp<0 ){
-      *pRes = -1;
-    }else if( cmp>0 ){
-      *pRes = 1;
-    }else if( nKey < pCur->nSeekSortKey ){
-      *pRes = -1;
-    }else if( nKey > pCur->nSeekSortKey
-           && !sortKeyByteStartsField(pKey[pCur->nSeekSortKey]) ){
-      return SQLITE_NOTFOUND;  /* seek key ended mid-field */
-    }else{
-      pIdxKey->eqSeen = 1;
-      *pRes = pIdxKey->default_rc;
-    }
-    return SQLITE_OK;
+    return cachedSortKeyCompare(pKey, nKey, pCur->pSeekSortKey,
+                                pCur->nSeekSortKey, pIdxKey, pRes);
   }
 
   {
@@ -1777,22 +1781,8 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
       }
       pCur->nCompareKeyField = (int)pIdxKey->nField;
     }
-    nCmp = nKey < pCur->nCompareSortKey ? nKey : pCur->nCompareSortKey;
-    cmp = memcmp(pKey, pCur->pCompareSortKey, nCmp);
-    if( cmp<0 ){
-      *pRes = -1;
-    }else if( cmp>0 ){
-      *pRes = 1;
-    }else if( nKey < pCur->nCompareSortKey ){
-      *pRes = -1;
-    }else if( nKey > pCur->nCompareSortKey
-           && !sortKeyByteStartsField(pKey[pCur->nCompareSortKey]) ){
-      return SQLITE_NOTFOUND;
-    }else{
-      pIdxKey->eqSeen = 1;
-      *pRes = pIdxKey->default_rc;
-    }
-    return SQLITE_OK;
+    return cachedSortKeyCompare(pKey, nKey, pCur->pCompareSortKey,
+                                pCur->nCompareSortKey, pIdxKey, pRes);
   }
 }
 
