@@ -700,8 +700,13 @@ static int mergePureRenamePairs(
   }
   if( nAnc!=nSide ) goto pure_done;
   for(i=0; i<nAnc; i++){
-    if( !parsedColumnDefinitionsMatch(&aSide[i], &aAnc[i]) ) goto pure_done;
-    if( sqlite3_stricmp(aAnc[i].zName, aSide[i].zName)==0 ) continue;
+    /* A renamed column's own constraints name it, so its definition text
+    ** moves with the rename. The whole-text comparison below holds it to
+    ** the same definition. */
+    if( sqlite3_stricmp(aAnc[i].zName, aSide[i].zName)==0 ){
+      if( !parsedColumnDefinitionsMatch(&aSide[i], &aAnc[i]) ) goto pure_done;
+      continue;
+    }
     /* A swap keeps the old name at another position. The definition
     ** still matches this slot, so the value did not move with the name. */
     {

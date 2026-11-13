@@ -1,0 +1,59 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# A column constraint that names its own column changes text when the
+# column is renamed. The rename is still only a rename: the other branch's
+# rows keep their values in that column.
+foreach {layout key suffix} {
+  rowid {INTEGER PRIMARY KEY} {}
+  clustered {INT PRIMARY KEY} {}
+  without-rowid {INT PRIMARY KEY} {WITHOUT ROWID}
+} {
+  foreach {cname coldef} {
+    check    {c INT DEFAULT 5 CHECK(c<>-1)}
+    nodflt   {c INT CHECK(c IS NULL OR c>0)}
+    selfref  {c INT UNIQUE REFERENCES t(c)}
+    collate  {c INT CHECK(c<>-1) COLLATE BINARY}
+  } {
+    foreach direction {forward reverse} {
+      foreach op {merge cherry_pick} {
+        reset_db
+        execsql "CREATE TABLE t(id $key, a INT, $coldef) $suffix"
+        execsql {
+          INSERT INTO t VALUES(1,10,100),(2,20,200),(3,30,NULL);
+          SELECT dolt_commit('-Am','base');
+          SELECT dolt_branch('br');
+          INSERT INTO t(id,a,c) VALUES(9,9,900);
+          UPDATE t SET a=11 WHERE id=1;
+          SELECT dolt_commit('-Am','rows');
+          SELECT dolt_checkout('br');
+          ALTER TABLE t RENAME COLUMN c TO cc;
+          SELECT dolt_commit('-Am','rename');
+        }
+        if {$direction eq "forward"} {
+          execsql {SELECT dolt_checkout('main')}
+          set target br
+          set reopen [file normalize test.db]
+        } else {
+          set target main
+          set reopen "[file normalize test.db]/br"
+        }
+        set prefix rename-column-constraint-$layout-$cname-$direction-$op
+        do_test $prefix.run {
+          lindex [catchsql "SELECT dolt_${op}('$target')"] 0
+        } 0
+        set query {
+          SELECT id, a, quote(cc) FROM t ORDER BY id;
+          PRAGMA integrity_check;
+        }
+        set expected {1 11 100 2 20 200 3 30 NULL 9 9 900 ok}
+        do_execsql_test $prefix.rows $query $expected
+        db close
+        sqlite3 db $reopen
+        do_execsql_test $prefix.reopen $query $expected
+      }
+    }
+  }
+}
+
+finish_test
