@@ -248,6 +248,15 @@ void sqlite3BeginTrigger(
     }
   }
 #endif
+#ifdef DOLTLITE_PROLLY
+  /* An unqualified name never resolves into a nonlocal schema, so while
+  ** that schema loads, this lookup would fail for want of a same-named
+  ** table in main or temp. The qualified lookup below finds the table. */
+  if( db->init.busy && iDb>1
+   && doltliteNonlocalIsSchema(db->aDb[iDb].zDbSName) ){
+    pTab = 0;
+  }else
+#endif
   pTab = sqlite3SrcListLookup(pParse, pTableName);
   if( db->init.busy==0 && pName2->n==0 && pTab
         && pTab->pSchema==db->aDb[1].pSchema ){

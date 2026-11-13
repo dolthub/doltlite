@@ -1173,4 +1173,75 @@ do_test nonlocal-drop-alias.remote-preserved {
   nl_disk main {SELECT count(*) FROM users}
 } 1
 
+# A trigger on the target table is part of the hidden schema a rule loads.
+# Its table name is unqualified while that schema initialises, and an
+# unqualified name never resolves into a nonlocal schema.
+foreach {name local} {no-local-table 0 local-table-dropped 1} {
+  catch {db close}
+  forcedelete test.db
+  sqlite3 db test.db
+  if {$local} {
+    db eval {
+      CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT);
+      CREATE TABLE log(msg);
+      CREATE TRIGGER users_ai AFTER INSERT ON users BEGIN
+        INSERT INTO log VALUES('ins '||new.id);
+      END;
+      CREATE TRIGGER users_bd BEFORE DELETE ON users BEGIN
+        SELECT raise(ABORT,'no deletes') WHERE old.id=1;
+      END;
+      INSERT INTO users VALUES(1,'m');
+      SELECT dolt_commit('-Am','init');
+      SELECT dolt_checkout('-b','exp');
+      INSERT INTO dolt_nonlocal_tables VALUES('users','main',NULL,'immediate');
+      SELECT count(*) FROM users;
+      DROP TABLE users;
+    }
+  } else {
+    db eval {
+      CREATE TABLE t(x);
+      SELECT dolt_commit('-Am','init');
+      SELECT dolt_branch('exp');
+      CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT);
+      CREATE TABLE log(msg);
+      CREATE TRIGGER users_ai AFTER INSERT ON users BEGIN
+        INSERT INTO log VALUES('ins '||new.id);
+      END;
+      CREATE TRIGGER users_bd BEFORE DELETE ON users BEGIN
+        SELECT raise(ABORT,'no deletes') WHERE old.id=1;
+      END;
+      INSERT INTO users VALUES(1,'m');
+      SELECT dolt_commit('-Am','users on main only');
+      SELECT dolt_checkout('exp');
+      INSERT INTO dolt_nonlocal_tables VALUES('users','main',NULL,'immediate');
+    }
+  }
+  set prefix nonlocal-target-trigger-$name
+  do_execsql_test $prefix.read {SELECT id, name FROM users} {1 m}
+  do_execsql_test $prefix.other {SELECT count(*) FROM sqlite_schema WHERE name='users_ai'} 0
+  do_execsql_test $prefix.write {
+    INSERT INTO users VALUES(2,'n');
+    SELECT group_concat(id) FROM users;
+  } {1,2}
+  do_execsql_test $prefix.commit {
+    SELECT dolt_commit('-Am','rule') IS NOT NULL;
+    PRAGMA integrity_check;
+  } {1 ok}
+  db close
+  sqlite3 db [file normalize test.db]/exp
+  do_execsql_test $prefix.reopen {SELECT id, name FROM users ORDER BY id} {1 m 2 n}
+  do_test $prefix.target {
+    nl_disk main {SELECT group_concat(id) FROM users; SELECT group_concat(msg) FROM log}
+  } {1,2 {ins 1}}
+  do_test $prefix.target-trigger-intact {
+    sqlite3 mainconn test.db
+    set r [catchsql {DELETE FROM users WHERE id=1} mainconn]
+    lappend r [mainconn eval {INSERT INTO users VALUES(3,'o'); SELECT group_concat(msg) FROM log}]
+    mainconn close
+    set r
+  } {1 {no deletes} {{ins 1,ins 3}}}
+  db close
+  sqlite3 db test.db
+}
+
 finish_test
