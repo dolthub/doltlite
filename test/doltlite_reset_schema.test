@@ -148,4 +148,66 @@ foreach {name target} {head {} ref c1} {
   do_execsql_test $prefix-reset-again {SELECT dolt_reset('--hard')} {0}
 }
 
+# A virtual table is a master row with no catalog entry. An untracked one
+# survives a hard reset together with its shadow tables, as untracked
+# ordinary tables do; a tracked one is restored from the target.
+foreach {name create insert more probe expect} {
+  fts5 {CREATE VIRTUAL TABLE ft USING fts5(body)}
+       {INSERT INTO ft VALUES('hello world'),('goodbye moon')}
+       {INSERT INTO ft VALUES('third row')}
+       {SELECT body FROM ft WHERE ft MATCH 'moon'} {{goodbye moon}}
+  rtree {CREATE VIRTUAL TABLE ft USING rtree(id, x0, x1)}
+       {INSERT INTO ft VALUES(1,0,10),(2,20,30)}
+       {INSERT INTO ft VALUES(3,40,50)}
+       {SELECT id FROM ft WHERE x0>=15} 2
+} {
+  foreach target {head ref} {
+    reset_db
+    execsql {
+      CREATE TABLE base(id INTEGER PRIMARY KEY, v);
+      INSERT INTO base VALUES(1,'a');
+      SELECT dolt_commit('-Am','c0');
+      INSERT INTO base VALUES(2,'b');
+      SELECT dolt_commit('-Am','c1');
+    }
+    execsql $create
+    execsql $insert
+    execsql {
+      CREATE TABLE plain(id INTEGER PRIMARY KEY);
+      UPDATE base SET v='dirty';
+    }
+    set prefix reset-hard-untracked-vtab-$name-$target
+    do_test $prefix.reset {
+      if {$target eq "head"} {
+        catchsql {SELECT dolt_reset('--hard')}
+      } else {
+        catchsql {SELECT dolt_reset('--hard','HEAD~1')}
+      }
+    } {0 0}
+    set rows [expr {$target eq "head" ? "a b" : "a"}]
+    foreach stage {after reopened} {
+      if {$stage eq "reopened"} {
+        db close
+        sqlite3 db test.db
+      }
+      do_execsql_test $prefix.$stage.vtab $probe $expect
+      do_execsql_test $prefix.$stage.rest {
+        SELECT group_concat(v, ' ') FROM (SELECT v FROM base ORDER BY id);
+        SELECT count(*) FROM sqlite_schema WHERE name IN ('ft','plain');
+        PRAGMA integrity_check;
+      } [list $rows 2 ok]
+    }
+    do_test $prefix.writable {
+      execsql $more
+      execsql {SELECT count(*) FROM ft}
+    } 3
+    do_execsql_test $prefix.tracked {
+      SELECT dolt_commit('-Am','track') IS NOT NULL;
+      DROP TABLE ft;
+      SELECT dolt_reset('--hard');
+      SELECT count(*) FROM ft;
+    } {1 0 3}
+  }
+}
+
 finish_test

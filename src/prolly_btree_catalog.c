@@ -1124,7 +1124,8 @@ static int appendFallbackSchemaCatalogRows(
   struct TableEntry *aTables,
   int nTables,
   SchemaEntry *aFallback,
-  int nFallback
+  int nFallback,
+  int bVirtualTables
 ){
   SchemaCatalogRow *aRows = *paRows;
   int nRows = *pnRows;
@@ -1193,7 +1194,10 @@ static int appendFallbackSchemaCatalogRows(
     SchemaCatalogRow *pRow;
     int exists = 0;
     if( !pSe->zName || !pSe->zType ) continue;
-    if( strcmp(pSe->zType, "table")==0 || strcmp(pSe->zType, "index")==0 ){
+    if( strcmp(pSe->zType, "index")==0 ) continue;
+    /* A virtual table is a master row with no catalog entry. */
+    if( strcmp(pSe->zType, "table")==0
+     && !(bVirtualTables && pSe->iRootpage==0) ){
       continue;
     }
     for(j=0; j<nRows; j++){
@@ -1760,7 +1764,8 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
   }
   if( rc==SQLITE_OK ){
     rc = appendFallbackSchemaCatalogRows(&aRows, &nRows, aTables, nTables,
-                                         aFallbackSchema, nFallbackSchema);
+                                         aFallbackSchema, nFallbackSchema,
+                                         (bForeignDomain & 2)!=0);
   }
   if( rc!=SQLITE_OK ){
     freeCatalogEntryMeta(aMeta, nMeta);
@@ -2208,6 +2213,23 @@ int doltliteSerializeCatalogEntriesForeignDomain(
   return doltliteSerializeCatalogEntriesForBtreeImpl(
       db->aDb[0].pBt, aTables, nTables,
       aFallbackSchema, nFallbackSchema, 1, 0, ppOut, pnOut);
+}
+
+/* As above, and every virtual table row of the fallback schema is kept. */
+int doltliteSerializeCatalogEntriesKeepVirtual(
+  sqlite3 *db,
+  struct TableEntry *aTables,
+  int nTables,
+  SchemaEntry *aFallbackSchema,
+  int nFallbackSchema,
+  u8 **ppOut,
+  int *pnOut
+){
+  if( !db ) return SQLITE_MISUSE;
+  if( db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
+  return doltliteSerializeCatalogEntriesForBtreeImpl(
+      db->aDb[0].pBt, aTables, nTables,
+      aFallbackSchema, nFallbackSchema, 3, 0, ppOut, pnOut);
 }
 
 int doltliteSerializeCatalogEntriesFromCatalog(
