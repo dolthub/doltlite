@@ -1,0 +1,59 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_rowvalue_pk_nonkey
+
+# A row-value bound that spans the primary key and a non-key column. The
+# table tree's key holds only the primary key, so the scan's end test has to
+# compare the non-key column against the record. Each query is checked
+# against the bound spelled out column by column and hidden from the planner.
+do_execsql_test 1.0 {
+  CREATE TABLE w(c0 TEXT, c1, c2 INT, PRIMARY KEY(c2)) WITHOUT ROWID;
+  CREATE TABLE r(c0 TEXT, c1, c2 TEXT, PRIMARY KEY(c2));
+  CREATE TABLE m(c0 TEXT, c1 INT, c2 INT, c3 INT, PRIMARY KEY(c2,c3)) WITHOUT ROWID;
+  INSERT INTO w VALUES('m',0,1),('a',0,3),('k',0,5),('z',0,6),(NULL,0,7),('b',0,9);
+  INSERT INTO r SELECT c0, c1, 'k'||c2 FROM w;
+  INSERT INTO m VALUES('m',0,1,1),('a',0,1,2),('k',0,3,1),('z',0,3,2),('b',0,5,1);
+}
+set n 0
+foreach {tbl bounds} {
+  w {{1 'a'} {1 'm'} {1 'n'} {3 'a'} {5 'a'} {5 'k'} {5 'z'} {9 'a'} {9 'c'} {4 'x'}}
+  r {{'k1' 'a'} {'k1' 'm'} {'k3' 'b'} {'k5' 'k'} {'k9' 'a'} {'k9' 'c'} {'k4' 'x'}}
+} {
+  foreach b $bounds {
+    lassign $b k v
+    foreach {op strict} {>= >= > > <= <= < <} {
+      set gl [string index $op 0]
+      set rv "(c2,c0) $op ($k,$v)"
+      set plain "(+c2 $gl $k OR (+c2 = $k AND c0 $op $v))"
+      foreach order {{} {ORDER BY c2} {ORDER BY c2 DESC}} {
+        incr n
+        set q "SELECT c2 FROM $tbl WHERE %s $order"
+        if {$order eq ""} {set q "SELECT c2 FROM $tbl WHERE %s ORDER BY +c2"}
+        do_test 1.$n [list execsql [format $q $rv]] [execsql [format $q $plain]]
+      }
+      incr n
+      do_test 1.$n [list execsql "SELECT count(*), max(c2), min(c2) FROM $tbl WHERE $rv"] \
+        [execsql "SELECT count(*), max(c2), min(c2) FROM $tbl WHERE $plain"]
+    }
+  }
+}
+foreach b {{1 1 'a'} {1 1 'm'} {1 2 'a'} {3 1 'k'} {3 2 'a'} {5 1 'c'} {2 9 'x'}} {
+  lassign $b k1 k2 v
+  foreach op {>= > <= <} {
+    set gl [string index $op 0]
+    set rv "(c2,c3,c0) $op ($k1,$k2,$v)"
+    set plain "(+c2 $gl $k1 OR (+c2 = $k1 AND (+c3 $gl $k2 OR (+c3 = $k2 AND c0 $op $v))))"
+    foreach order {{ORDER BY c2, c3} {ORDER BY c2 DESC, c3 DESC}} {
+      incr n
+      set q "SELECT c2, c3 FROM m WHERE %s $order"
+      do_test 1.$n [list execsql [format $q $rv]] [execsql [format $q $plain]]
+    }
+  }
+}
+
+do_execsql_test 2.0 {
+  SELECT group_concat(c2) FROM (SELECT c2 FROM w WHERE (c2,c0) >= (1,'a') ORDER BY c2 DESC);
+  SELECT group_concat(c2) FROM (SELECT c2 FROM r WHERE (c2,c0) >= ('k1','a') ORDER BY c2 DESC);
+} {9,7,6,5,3,1 k9,k7,k6,k5,k3,k1}
+
+finish_test
