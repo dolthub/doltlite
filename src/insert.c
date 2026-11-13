@@ -2948,6 +2948,13 @@ void sqlite3GenerateConstraintChecks(
         if( pTab->zColAff==0 ) sqlite3OomFault(db);
       }
       doltliteRealAffinityOnly(v, pTab->zColAff, pTab, 0);
+      if( pParse->bReturning && pTab->zColAff ){
+        for(i=0; pTab->zColAff[i]; i++){
+          if( pTab->zColAff[i]==SQLITE_AFF_REAL ){
+            sqlite3VdbeAddOp1(v, OP_RealAffinity, regNewData+1+i);
+          }
+        }
+      }
     }
 #endif
   }

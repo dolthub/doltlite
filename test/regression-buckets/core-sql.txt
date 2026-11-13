@@ -275,6 +275,7 @@ regexp2
 reindex
 resolver01
 returning1
+doltlite_returning_real
 round1
 rowallock
 rowhash
