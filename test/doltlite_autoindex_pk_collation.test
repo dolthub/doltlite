@@ -1,0 +1,50 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_autoindex_pk_collation
+
+# An automatic index on a table clustered by its primary key holds the key
+# columns under the join's collation. Rows whose primary keys differ only
+# under BINARY must stay separate entries. Each join is run with automatic
+# indexes on and off; the results must agree.
+foreach {layout suffix} {clustered {} without-rowid {WITHOUT ROWID}} {
+  reset_db
+  execsql "
+    CREATE TABLE t1(c0 INT, c1 TEXT, c2 TEXT COLLATE NOCASE,
+                    PRIMARY KEY(c0,c1)) $suffix;
+    CREATE TABLE t2(k TEXT PRIMARY KEY, v TEXT COLLATE RTRIM, n INT) $suffix;
+    CREATE TABLE p(x TEXT COLLATE NOCASE, y TEXT COLLATE RTRIM);
+  "
+  execsql {
+    INSERT INTO t1 VALUES(1,'a','x'),(1,'A','y'),(0,'z','A'),(2,'b','B'),(2,'B','b');
+    INSERT INTO t2 VALUES('a','p',1),('A','p ',2),('a ','q',3),('b','P',4);
+    INSERT INTO p VALUES('A','a'),('b','a '),('Z','b');
+  }
+  set n 0
+  foreach q {
+    {SELECT a.c1, b.c0, b.c1 FROM t1 a JOIN t1 b ON a.c2 = b.c1 ORDER BY 1,2,3}
+    {SELECT a.c1, b.c0, b.c1 FROM t1 a LEFT JOIN t1 b ON a.c2 = b.c1 ORDER BY 1,2,3}
+    {SELECT a.c1, count(b.c1) FROM t1 a JOIN t1 b ON a.c2 = b.c1 GROUP BY 1 ORDER BY 1}
+    {SELECT p.x, b.c0, b.c1 FROM p JOIN t1 b ON p.x = b.c1 ORDER BY 1,2,3}
+    {SELECT p.x, b.c0, b.c1, b.c2 FROM p JOIN t1 b ON b.c1 = p.x ORDER BY 1,2,3}
+    {SELECT p.y, b.k, b.n FROM p JOIN t2 b ON p.y = b.k ORDER BY 1,2}
+    {SELECT p.x, b.k, b.n FROM p JOIN t2 b ON p.x = b.k ORDER BY 1,2}
+    {SELECT p.x, b.k FROM p JOIN t2 b ON b.k = p.x COLLATE NOCASE ORDER BY 1,2}
+    {SELECT a.k, b.k FROM t2 a JOIN t2 b ON a.v = b.k ORDER BY 1,2}
+    {SELECT a.k, b.c0, b.c1 FROM t2 a JOIN t1 b ON a.k = b.c1 COLLATE NOCASE AND b.c0>0 ORDER BY 1,2,3}
+  } {
+    incr n
+    execsql {PRAGMA automatic_index=OFF}
+    set expected [execsql $q]
+    execsql {PRAGMA automatic_index=ON}
+    do_execsql_test $layout.$n $q $expected
+  }
+}
+
+reset_db
+do_execsql_test fixed.1 {
+  CREATE TABLE t1(c0 INT, c1 TEXT, c2 TEXT COLLATE NOCASE, PRIMARY KEY(c0,c1));
+  INSERT INTO t1 VALUES (1,'a','x'),(1,'A','y'),(0,'z','A');
+  SELECT a.c1, b.c0, b.c1 FROM t1 a JOIN t1 b ON a.c2 = b.c1 ORDER BY 3;
+} {z 1 A z 1 a}
+
+finish_test
