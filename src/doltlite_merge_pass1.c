@@ -362,6 +362,26 @@ static int mergePass1AddedSchemaMatches(
   return strcmp(ourSE->zSql, theirSE->zSql)==0;
 }
 
+/* An index kept from ours was built over ours' rows. Their row changes
+** reach it only through index patches computed against the ancestor's
+** definition, so an index that has none must be rebuilt. */
+static int mergePass1ReindexIfTheirRowsMoved(
+  MergePass1Ctx *c,
+  const char *zIndex,
+  const char *zTable
+){
+  struct TableEntry *pAncTable;
+  struct TableEntry *pTheirTable;
+  if( !zIndex || !zIndex[0] || !zTable || !zTable[0] ) return SQLITE_OK;
+  pAncTable = doltliteFindTableByName(c->aAnc, c->nAnc, zTable);
+  pTheirTable = doltliteFindTableByName(c->aTheirs, c->nTheirs, zTable);
+  if( !pTheirTable || (pAncTable
+   && prollyHashCompare(&pTheirTable->root, &pAncTable->root)==0) ){
+    return SQLITE_OK;
+  }
+  return mergeAppendReindexName(c->pazReindex, c->pnReindex, zIndex);
+}
+
 static int mergePass1OursAdded(
   MergePass1Ctx *c,
   int iOurs,
@@ -438,18 +458,10 @@ static int mergePass1OursAdded(
     rc = mergePass1NoteSchemaConflict(c, zSchemaConflictTable, zSchemaMergeName);
     if( rc!=SQLITE_OK ) return rc;
   }
-  if( !theirsEntry && !zName && zSchemaMergeName && zSchemaMergeName[0]
-   && zSchemaConflictTable && zSchemaConflictTable[0] ){
-    struct TableEntry *pAncTable = doltliteFindTableByName(
-        c->aAnc, c->nAnc, zSchemaConflictTable);
-    struct TableEntry *pTheirTable = doltliteFindTableByName(
-        c->aTheirs, c->nTheirs, zSchemaConflictTable);
-    if( pTheirTable && (!pAncTable
-     || prollyHashCompare(&pTheirTable->root, &pAncTable->root)!=0) ){
-      rc = mergeAppendReindexName(
-          c->pazReindex, c->pnReindex, zSchemaMergeName);
-      if( rc!=SQLITE_OK ) return rc;
-    }
+  if( !theirsEntry && !zName ){
+    rc = mergePass1ReindexIfTheirRowsMoved(
+        c, zSchemaMergeName, zSchemaConflictTable);
+    if( rc!=SQLITE_OK ) return rc;
   }
   c->aMerged[(*c->pnMerged)++] = c->aOurs[iOurs];
   return SQLITE_OK;
@@ -491,6 +503,9 @@ static int mergePass1OursModifyTheirsDelete(
                                   zSchemaMergeName, 0, 0);
       if( rc!=SQLITE_OK ) return rc;
     }
+    rc = mergePass1ReindexIfTheirRowsMoved(
+        c, zSchemaMergeName, zSchemaConflictTable);
+    if( rc!=SQLITE_OK ) return rc;
     c->aMerged[(*c->pnMerged)++] = c->aOurs[iOurs];
     return SQLITE_OK;
   }
@@ -1004,6 +1019,11 @@ static int mergePass1BothSides(
         c->aMerged[(*c->pnMerged)++] = c->aOurs[iOurs];
       }
     }else if( !bSchemaConflict && skipRowMerge ){
+      if( bNamedSchemaObject ){
+        rc = mergePass1ReindexIfTheirRowsMoved(
+            c, zSchemaMergeName, zSchemaConflictTable);
+        if( rc!=SQLITE_OK ) return rc;
+      }
       c->aMerged[(*c->pnMerged)++] = c->aOurs[iOurs];
     }
   }

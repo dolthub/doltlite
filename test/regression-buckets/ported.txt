@@ -92,6 +92,7 @@ doltlite_merge_shared_columns
 doltlite_merge_local_changes
 doltlite_merge_index_domains
 doltlite_merge_reused_index
+doltlite_merge_recreated_index
 doltlite_merge_added_unique
 doltlite_merge_ignored
 doltlite_merge_analyzed_ignore
