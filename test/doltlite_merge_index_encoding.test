@@ -157,4 +157,84 @@ foreach resolution {ours theirs} {
   } [list 1 1 [expr {$resolution eq "ours" ? 20 : 30}] text ok]
 }
 
+# One side rebuilds the table under new column semantics without changing a
+# row, so its table root still equals the ancestor's; the other side only
+# edits rows. Both index roots moved, in different encodings.
+foreach {kind old new col values edit probe} {
+  collation {a TEXT, b INT} {a TEXT COLLATE NOCASE, b INT} a
+    {(1,'apple',1),(2,'Banana',2),(3,'cherry',3),(4,'APPLE',4)}
+    {INSERT INTO t VALUES(7,'Apple',7); DELETE FROM t WHERE id=3}
+    {a='apple'}
+  affinity {a INT, b INT} {a TEXT, b INT} a
+    {(1,1,1),(2,2,2),(3,3,3),(4,4,4)}
+    {INSERT INTO t VALUES(7,7,7); DELETE FROM t WHERE id=3}
+    {a='7'}
+  generated {a INT, b INT, g AS (a*2) VIRTUAL} {a INT, b INT, g AS (a*3) VIRTUAL} g
+    {(1,11,1),(2,20,2),(3,30,3),(4,40,4)}
+    {INSERT INTO t(id,a,b) VALUES(7,70,7); DELETE FROM t WHERE id=3}
+    {g>0}
+} {
+  foreach direction {forward reverse} {
+    foreach newindex {0 1} {
+      foreach op {merge cherry_pick} {
+        reset_db
+        execsql "CREATE TABLE t(id INTEGER PRIMARY KEY, $old)"
+        execsql "CREATE INDEX ix ON t($col)"
+        execsql "INSERT INTO t(id,a,b) VALUES $values"
+        execsql {
+          SELECT dolt_commit('-Am','base');
+          SELECT dolt_branch('side');
+        }
+        execsql $edit
+        if {$newindex} {execsql "CREATE INDEX inew ON t($col, b)"}
+        execsql {
+          SELECT dolt_commit('-Am','rows');
+          SELECT dolt_checkout('side');
+        }
+        execsql "CREATE TABLE t2(id INTEGER PRIMARY KEY, $new)"
+        execsql {
+          INSERT INTO t2(id,a,b) SELECT id,a,b FROM t;
+          DROP TABLE t;
+          ALTER TABLE t2 RENAME TO t;
+        }
+        execsql "CREATE INDEX ix ON t($col)"
+        execsql {SELECT dolt_commit('-Am','schema')}
+        if {$direction eq "forward"} {
+          execsql {SELECT dolt_checkout('main')}
+          set target side
+          set reopen [file normalize test.db]
+        } else {
+          set target main
+          set reopen "[file normalize test.db]/side"
+        }
+        set name index-encoding-schema-only-$kind-$direction-$newindex-$op
+        do_test $name-run {
+          lindex [catchsql "SELECT dolt_${op}('$target')"] 0
+        } 0
+        foreach stage {merged reopened} {
+          if {$stage eq "reopened"} {
+            db close
+            sqlite3 db $reopen
+          }
+          set scan [execsql "SELECT id FROM t NOT INDEXED WHERE $probe ORDER BY id"]
+          set indexes [execsql {
+            SELECT name FROM sqlite_schema
+            WHERE type='index' AND tbl_name='t' ORDER BY name
+          }]
+          do_test $name-$stage-indexes {set indexes} \
+            [expr {$newindex ? {inew ix} : {ix}}]
+          foreach index $indexes {
+            do_execsql_test $name-$stage-$index \
+              "SELECT id FROM t INDEXED BY $index WHERE $probe ORDER BY id" $scan
+          }
+          do_execsql_test $name-$stage-rows {
+            SELECT group_concat(id) FROM (SELECT id FROM t NOT INDEXED ORDER BY id);
+            PRAGMA integrity_check;
+          } {1,2,4,7 ok}
+        }
+      }
+    }
+  }
+}
+
 finish_test
