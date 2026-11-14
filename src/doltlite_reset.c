@@ -336,9 +336,9 @@ static int resetStageNamedPaths(
 
   /* The entries above now carry HEAD content, but the staged master still
   ** spells the staged definition of each reset table: its CREATE TABLE text
-  ** and its index rows. Fallback rows only fill gaps, so compose the master
-  ** the way a named add does, with the reset tables' rows from HEAD and every
-  ** other row, views and triggers included, left as staged. */
+  ** and its index rows. Compose the master the way a named add does, with
+  ** the reset tables' rows from HEAD and every other row, views and triggers
+  ** included, left as staged. */
   if( rc==SQLITE_OK && (nReset>0 || resetSchemas) ){
     struct TableEntry *pHeadMaster = doltliteFindTableByNumber(aHead, nHead, 1);
     struct TableEntry *pStagedMaster =
@@ -359,8 +359,8 @@ static int resetStageNamedPaths(
     u8 *buf = 0;
     int nBuf = 0;
     ProllyHash newStagedHash;
-    rc = doltliteSerializeCatalogEntriesWithFallbackSchema(
-        db, aStaged, nStaged, aHeadSchema, nHeadSchema,
+    rc = doltliteSerializeCatalogEntriesFromCatalog(
+        db, aStaged, nStaged,
         resetDatabase ? &headCatHash : &stagedHash, &buf, &nBuf);
     if( rc==SQLITE_OK ){
       rc = chunkStorePut(cs, buf, nBuf, &newStagedHash);

@@ -210,4 +210,136 @@ foreach {name create insert more probe expect} {
   }
 }
 
+foreach kind {view trigger} {
+  foreach change {add drop modify} {
+    foreach tableChange {rows index added dropped} {
+      foreach txn {autocommit explicit} {
+        reset_db
+        execsql {
+          CREATE TABLE host(id INTEGER PRIMARY KEY);
+          CREATE TABLE audit(id INTEGER PRIMARY KEY);
+        }
+        if {$tableChange ne "added"} {
+          execsql {
+            CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+            INSERT INTO t VALUES(1,10);
+          }
+        }
+        if {$kind eq "view"} {
+          set definition {CREATE VIEW v1 AS SELECT 1 AS a}
+          set replacement {CREATE VIEW v1 AS SELECT 2 AS a}
+          set drop {DROP VIEW v1}
+        } else {
+          set definition {
+            CREATE TRIGGER tr AFTER INSERT ON host BEGIN
+              INSERT INTO audit VALUES(NEW.id);
+            END;
+          }
+          set replacement {
+            CREATE TRIGGER tr AFTER INSERT ON host BEGIN
+              INSERT INTO audit VALUES(NEW.id*10);
+            END;
+          }
+          set drop {DROP TRIGGER tr}
+        }
+        if {$change ne "add"} {execsql $definition}
+        execsql {SELECT dolt_commit('-Am','base')}
+        if {$change ne "add"} {execsql $drop}
+        if {$change ne "drop"} {execsql $replacement}
+        switch $tableChange {
+          rows {execsql {UPDATE t SET a=20}}
+          index {execsql {CREATE INDEX ta ON t(a)}}
+          added {execsql {CREATE TABLE t(id INTEGER PRIMARY KEY, a INT)}}
+          dropped {execsql {DROP TABLE t}}
+        }
+        execsql {SELECT dolt_add('.')}
+        set before [execsql {
+          SELECT dolt_hashof('HEAD'), dolt_hashof_catalog('WORKING');
+        }]
+        if {$txn eq "explicit"} {execsql {BEGIN}}
+        set prefix reset-table-keeps-schemas-$kind-$change-$tableChange-$txn
+        do_execsql_test $prefix-reset {SELECT dolt_reset('t')} {0}
+        set schemaStatus [dict get {add {new table} drop deleted modify modified} $change]
+        set tableStatus [dict get {rows modified index modified added {new table} dropped deleted} $tableChange]
+        set expected [list dolt_schemas 1 $schemaStatus t 0 $tableStatus]
+        set query {
+          SELECT table_name, staged, status FROM dolt_status ORDER BY table_name, staged;
+        }
+        do_execsql_test $prefix-status $query $expected
+        do_execsql_test $prefix-working {
+          SELECT dolt_hashof('HEAD'), dolt_hashof_catalog('WORKING');
+        } $before
+        if {$txn eq "explicit"} {execsql {COMMIT}}
+        db close
+        sqlite3 db test.db
+        do_execsql_test $prefix-reopen $query $expected
+        do_execsql_test $prefix-commit {
+          SELECT dolt_commit('-m','schemas only') IS NOT NULL;
+          SELECT dolt_branch('verify');
+        } {1 0}
+        sqlite3 verify test.db/verify
+        do_test $prefix-committed-schemas {
+          verify eval {SELECT count(*) FROM sqlite_master WHERE type IN ('view','trigger')}
+        } [expr {$change eq "drop" ? 0 : 1}]
+        do_test $prefix-committed-table {
+          verify eval {
+            SELECT count(*) FROM sqlite_master WHERE name='t';
+            SELECT count(*) FROM sqlite_master WHERE name='ta';
+            PRAGMA integrity_check;
+          }
+        } [list [expr {$tableChange eq "added" ? 0 : 1}] 0 ok]
+        if {$tableChange ne "added"} {
+          do_test $prefix-committed-rows {verify eval {SELECT * FROM t}} {1 10}
+        }
+        if {$change ne "drop"} {
+          do_test $prefix-committed-behavior {
+            if {$kind eq "view"} {
+              verify eval {SELECT a FROM v1}
+            } else {
+              verify eval {INSERT INTO host VALUES(7); SELECT id FROM audit}
+            }
+          } [expr {$kind eq "view" ? 2 : 70}]
+        }
+        verify close
+      }
+    }
+  }
+}
+
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+  CREATE VIEW v1 AS SELECT 1;
+  SELECT dolt_commit('-Am','base');
+  DROP VIEW v1;
+  CREATE INDEX ta ON t(a);
+  PRAGMA user_version=5;
+  PRAGMA application_id=7;
+  SELECT dolt_add('.');
+  CREATE VIEW v1 AS SELECT 2;
+  PRAGMA user_version=10;
+  PRAGMA application_id=14;
+}
+do_execsql_test reset-table-keeps-distinct-staged-schema {
+  SELECT dolt_reset('t');
+  SELECT table_name, staged, status FROM dolt_status ORDER BY table_name, staged;
+  SELECT * FROM v1;
+  PRAGMA user_version;
+  PRAGMA application_id;
+} {0 dolt_database 0 modified dolt_database 1 modified dolt_schemas 0 {new table} dolt_schemas 1 deleted t 0 modified 2 10 14}
+do_execsql_test reset-table-commit-distinct-staged-schema {
+  SELECT dolt_commit('-m','staged snapshot') IS NOT NULL;
+  SELECT dolt_branch('verify');
+} {1 0}
+sqlite3 verify test.db/verify
+do_test reset-table-distinct-committed-snapshot {
+  verify eval {
+    SELECT count(*) FROM sqlite_master WHERE type='view' OR name='ta';
+    PRAGMA user_version;
+    PRAGMA application_id;
+    PRAGMA integrity_check;
+  }
+} {0 5 7 ok}
+verify close
+
 finish_test

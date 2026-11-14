@@ -464,6 +464,43 @@ SELECT dolt_add('-A');
 SELECT dolt_reset('a');
 "
 
+for kind in view trigger; do
+  if [ "$kind" = view ]; then
+    dl_definition="CREATE VIEW v1 AS SELECT 1;"
+    dt_definition="$dl_definition"
+    schema_drop="DROP VIEW v1;"
+  else
+    dl_definition="CREATE TRIGGER tr AFTER INSERT ON host BEGIN INSERT INTO audit VALUES(NEW.id); END;"
+    dt_definition="CREATE TRIGGER tr AFTER INSERT ON host FOR EACH ROW INSERT INTO audit VALUES(NEW.id);"
+    schema_drop="DROP TRIGGER tr;"
+  fi
+  for mutation in "UPDATE t SET a=2;" "CREATE INDEX ta ON t(a);" "DROP TABLE t;"; do
+    oracle_same_session "reset_table_keeps_staged_${kind}_${mutation%% *}" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+CREATE TABLE host(id INTEGER PRIMARY KEY);
+CREATE TABLE audit(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1,1);
+$dl_definition
+SELECT dolt_commit('-Am','base');
+$schema_drop
+$mutation
+SELECT dolt_add('.');
+SELECT dolt_reset('t');
+" "SELECT 'Q|' || table_name || '|' || staged || '|' || status FROM dolt_status ORDER BY table_name, staged;" \
+"CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+CREATE TABLE host(id INTEGER PRIMARY KEY);
+CREATE TABLE audit(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1,1);
+$dt_definition
+CALL dolt_commit('-Am','base');
+$schema_drop
+$mutation
+CALL dolt_add('.');
+CALL dolt_reset('t');
+" "SELECT concat('Q|',table_name,'|',staged,'|',status) FROM dolt_status ORDER BY table_name, staged;"
+  done
+done
+
 oracle "reset_multiple_paths_unstages_all" "
 CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
 CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
