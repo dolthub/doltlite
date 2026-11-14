@@ -1255,6 +1255,17 @@ static int patchTableUnchanged(
                              aToSchema,nToSchema);
 }
 
+/* Replaying a DROP deletes the object's statistics rows, even when the
+** patch re-creates the object and both ends hold the same statistics. */
+static int patchDropsObject(PatchCursor *pCur){
+  int i;
+  for(i=0; i<pCur->nRow; i++){
+    if( strcmp(pCur->aRow[i].zType,"schema")==0
+     && sqlite3_strnicmp(pCur->aRow[i].zSql,"DROP ",5)==0 ) return 1;
+  }
+  return 0;
+}
+
 /* SQLite's own bookkeeping tables are versioned but cannot be created by
 ** name, so a change replaces the whole content of the one the replaying
 ** database already has. */
@@ -1276,7 +1287,8 @@ static int patchAppendSystemTable(
   char *zSql;
   int rc = SQLITE_OK;
   if( !pFrom && !pTo ) return SQLITE_OK;
-  if( pFrom && pTo && prollyHashCompare(&pFrom->root,&pTo->root)==0 ){
+  if( pFrom && pTo && prollyHashCompare(&pFrom->root,&pTo->root)==0
+   && !(bStat && patchDropsObject(pCur)) ){
     return SQLITE_OK;
   }
   if( !pTo ){
