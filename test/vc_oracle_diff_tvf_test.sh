@@ -382,6 +382,20 @@ oracle "namemap_from_side_after_col_drop" "$SETUP_NAMEMAP" \
 oracle "namemap_to_side_at_old_commit" "$SETUP_NAMEMAP" \
   "SELECT CONCAT('R|', IFNULL(to_a,''), '|', IFNULL(to_c,''), '|', IFNULL(from_a,''), '|', IFNULL(from_c,''), '|', diff_type) FROM dolt_diff_t('HEAD~2','HEAD~1');"
 
+SETUP_DROP_NULLS="
+CREATE TABLE t(id INT PRIMARY KEY, a INT, b VARCHAR(20));
+INSERT INTO t VALUES(1,75,'x'),(2,NULL,'y'),(3,NULL,'z'),(4,NULL,NULL);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','base');
+ALTER TABLE t DROP COLUMN a;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m','drop_a');
+"
+
+oracle "drop_column_forward_rows" "$SETUP_DROP_NULLS" \
+  "SELECT CONCAT('R|', IFNULL(to_id,''), '|', IFNULL(from_id,''), '|', diff_type) FROM dolt_diff_t('HEAD~1','HEAD') ORDER BY 1;"
+
+oracle "drop_column_reverse_rows" "$SETUP_DROP_NULLS" \
+  "SELECT CONCAT('R|', IFNULL(to_id,''), '|', IFNULL(from_id,''), '|', diff_type) FROM dolt_diff_t('HEAD','HEAD~1') ORDER BY 1;"
+
 SETUP_READD="
 CREATE TABLE t(a INT PRIMARY KEY, b VARCHAR(32), c VARCHAR(32));
 INSERT INTO t VALUES(1,'BEE','CEE');

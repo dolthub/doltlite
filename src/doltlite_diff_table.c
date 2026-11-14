@@ -739,9 +739,10 @@ static int changeIsSchemaOnly(
       if( strcmp(pFromCi->azName[fromIdx], pToCi->azName[i])==0 ) break;
     }
     if( fromIdx>=pFromCi->nCol ){
-      /* A new VIRTUAL column is not stored. */
-      if( toRec<0 ) continue;
-      if( toRec<toRi.nField && toRi.aType[toRec]!=0 ) return 0;
+      /* A new VIRTUAL column is not stored, and neither is a trailing
+      ** NULL. A NULL stored ahead of a later value is a real field, as
+      ** for a column only the from side has. */
+      if( toRec>=0 && toRec<toRi.nField ) return 0;
       continue;
     }
     fromRec = pFromCi->aColToRec ? pFromCi->aColToRec[fromIdx] : fromIdx;

@@ -461,6 +461,34 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 " "HEAD~1" "HEAD"
 
+# The reverse range sees the dropped column as added; a NULL stored ahead
+# of a later value is still a rewritten row.
+n=0
+for shape in "1, 10, NULL, 7), (2, 10, 5, 7), (3, 10, NULL, 8" \
+             "1, 10, NULL, 7), (2, 20, NULL, 8" \
+             "1, 10, 5, NULL), (2, 20, NULL, NULL"; do
+  n=$((n+1))
+  oracle_both "reverse_drop_middle_column_$n" "
+CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT, c INT);
+INSERT INTO t VALUES($shape);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE t DROP COLUMN b;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD" "HEAD~1"
+done
+
+oracle_both "reverse_drop_trailing_null_column" "
+CREATE TABLE t(id INT PRIMARY KEY, v INT, gone INT);
+INSERT INTO t VALUES(1, 10, NULL), (2, 20, 7);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE t DROP COLUMN gone;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD" "HEAD~1"
+
 oracle_both "drop_null_column_no_data_change" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT, gone INT);
 INSERT INTO t VALUES(1, 10, NULL), (2, 20, NULL);
