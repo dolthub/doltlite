@@ -1114,10 +1114,7 @@ static int checkoutTablesInTxn(
         char *zSql = 0;
         rc = checkoutLoadSourceTableSql(db, aSource, nSource, zName,
                                         &hasVtab, &zSql);
-        if( rc==SQLITE_OK && hasVtab && zSql
-         && sqlite3_strnicmp(zSql, "CREATE VIRTUAL", 14)!=0 ){
-          hasVtab = 0;
-        }
+        if( rc==SQLITE_OK && !doltliteCheckoutSqlIsVtab(zSql) ) hasVtab = 0;
         sqlite3_free(zSql);
         if( rc!=SQLITE_OK ){
           doltliteFreeCatalog(aSource, nSource);
@@ -1179,10 +1176,16 @@ static int checkoutTablesInTxn(
   }
 
   rc = doltliteSuspendForeignKeys(db, &fkeys);
-  for(i=0; rc==SQLITE_OK && i<nNames; i++){
-    const char *zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
+  /* Virtual tables go first: they create and drop their own shadow tables,
+  ** which the rebuild of a named shadow then leaves alone. */
+  for(j=0; rc==SQLITE_OK && j<2*nNames; j++){
+    const char *zName;
     int bSchemaChanged;
+    i = j % nNames;
+    zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
     if( !zName || aSchema[i].isDatabase ) continue;
+    if( (j<nNames)!=(doltliteCheckoutSqlIsVtab(aSchema[i].zSourceSql)
+                  || doltliteCheckoutSqlIsVtab(aSchema[i].zCurrentSql)) ) continue;
     if( aSchema[i].isSchemas ){
       rc = doltliteRevertViewsAndTriggers(db, aSourceSchema, nSourceSchema);
       if( rc!=SQLITE_OK ){
@@ -1263,12 +1266,8 @@ static int checkoutTablesInTxn(
       if( (aSchema[i].rebuilt || bDropIfAbsent) && !aSchema[i].hasSource ){
         continue;
       }
-      if( (aSchema[i].hasSource && aSchema[i].zSourceSql
-           && sqlite3_strnicmp(aSchema[i].zSourceSql, "CREATE VIRTUAL", 14)==0)
-       || (aSchema[i].hasCurrent && aSchema[i].zCurrentSql
-           && sqlite3_strnicmp(aSchema[i].zCurrentSql, "CREATE VIRTUAL", 14)==0) ){
-        continue;
-      }
+      if( doltliteCheckoutSqlIsVtab(aSchema[i].zSourceSql)
+       || doltliteCheckoutSqlIsVtab(aSchema[i].zCurrentSql) ) continue;
       if( pzMissing ) *pzMissing = zName;
       freeSchemaEntries(aSourceSchema, nSourceSchema);
       checkoutSchemaInfoClear(aSchema, nNames);
