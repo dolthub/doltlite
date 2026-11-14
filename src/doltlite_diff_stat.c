@@ -255,9 +255,8 @@ static int dsInPlaceColumnChange(
   return renamed;
 }
 
-/* *pnDiffer is rows_modified. An added column counts when the new cell is
-** non-NULL. A dropped column counts when its cell was stored, including a
-** NULL that sat ahead of a later value. A trailing NULL is omitted from
+/* *pnDiffer is rows_modified. An added or dropped column counts when its
+** cell is stored, including a NULL that sits ahead of a later value. A trailing NULL is omitted from
 ** the record and is not a row change. *pnModified is cells_modified:
 ** added columns count, dropped ones do not (already in cells_deleted). */
 static void dsCountChangedCells(
@@ -286,9 +285,8 @@ static void dsCountChangedCells(
     if( toRec==-2 && fromRec==-2 ) continue;
     if( toRec==-2 ) continue;
     if( fromRec<0 ){
-      /* Trailing NULLs are omitted from the record even when the to-column exists. */
       nModified++;
-      if( toRec>=0 && toRec<toRi.nField && toRi.aType[toRec]!=0 ) nDiffer++;
+      if( toRec>=0 && toRec<toRi.nField ) nDiffer++;
       continue;
     }
     if( toRec<0 ) continue;
