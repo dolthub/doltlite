@@ -696,7 +696,6 @@ static void doltliteResetFunc(
   int nNullArgs = 0;
   int bResetAllTables = 0;
   int graphLocked = 0;
-  u8 isMerging = 0;
   int bSucceeded = 0;
   int haveSaved = 0;
   int reloadWorking = 0;
@@ -792,8 +791,7 @@ static void doltliteResetFunc(
     goto reset_cleanup;
   }
 
-  doltliteGetSessionMergeState(db, &isMerging, 0, 0);
-  if( (isMerging || doltliteSessionHasUnresolvedConflicts(db)) && !isHard ){
+  if( doltliteSessionHasUnresolvedConflicts(db) && !isHard ){
     sqlite3_free(azPaths);
     azPaths = 0;
     sqlite3_result_error(context,
