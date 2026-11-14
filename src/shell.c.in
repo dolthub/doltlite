@@ -11367,6 +11367,29 @@ static int do_meta_command(const char *zLine, ShellState *p){
 
     open_db(p, 0);
 
+#ifdef DOLTLITE_PROLLY
+    {
+      /* A flat dump cannot carry the branch a nonlocal rule points at, so
+      ** its replay would leave the bound names unreadable. */
+      sqlite3_stmt *pRule = 0;
+      int bRule = 0;
+      if( sqlite3_prepare_v2(p->db,
+            "SELECT 1 FROM main.dolt_nonlocal_tables LIMIT 1",
+            -1, &pRule, 0)==SQLITE_OK ){
+        bRule = sqlite3_step(pRule)==SQLITE_ROW;
+      }
+      sqlite3_finalize(pRule);
+      if( bRule ){
+        dotCmdError(p, 0, "unable",
+            "dolt_nonlocal_tables binds tables to another branch, which a"
+            " dump cannot replay; use dolt_clone or VACUUM INTO instead");
+        rc = 1;
+        sqlite3_free(zLike);
+        goto meta_command_exit;
+      }
+    }
+#endif
+
     modeDup(&saved_mode, &p->mode);
     outputDumpWarning(p, zLike);
     if( (p->shellFlgs & SHFLG_DumpDataOnly)==0 ){

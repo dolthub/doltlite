@@ -9,3 +9,4 @@ shell9
 shellA
 shellB
 doltlite_shell_open
+doltlite_shell_dump

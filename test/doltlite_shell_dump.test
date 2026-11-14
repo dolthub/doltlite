@@ -1,0 +1,64 @@
+# .dump of a database holding a nonlocal table rule is refused: the dump is
+# flat, so its replay would bind the name to a branch that does not exist.
+# Needs the CLI next to the testfixture; tester.tcl skips otherwise.
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_shell_dump
+set CLI [test_find_cli]
+db close
+
+forcedelete bound.db replay.db
+sqlite3 dbd bound.db
+dbd eval {
+  CREATE TABLE shared(id INTEGER PRIMARY KEY, v);
+  INSERT INTO shared VALUES(1,'main-shared');
+  CREATE TABLE loc(id INTEGER PRIMARY KEY, v);
+  INSERT INTO loc VALUES(1,'main-loc');
+  SELECT dolt_commit('-Am','c1');
+  SELECT dolt_checkout('-b','other');
+  INSERT INTO shared VALUES(2,'other-shared');
+  SELECT dolt_commit('-Am','c2');
+  SELECT dolt_checkout('main');
+}
+dbd close
+
+do_test 1.1 {
+  set res [catchcmd "bound.db" {.dump}]
+  list [lindex $res 0] [regexp {INSERT INTO shared VALUES\(1,'main-shared'\)} [lindex $res 1]]
+} {0 1}
+
+sqlite3 dbd bound.db
+dbd eval {
+  INSERT INTO dolt_nonlocal_tables(table_name,target_ref,options)
+    VALUES('shared','other','immediate');
+  SELECT dolt_commit('-Am','bind shared to other');
+}
+dbd close
+
+do_test 1.2 {
+  set res [catchcmd "bound.db" {.dump}]
+  list [lindex $res 0] \
+       [regexp {dolt_nonlocal_tables binds tables to another branch} [lindex $res 1]] \
+       [regexp {CREATE TABLE} [lindex $res 1]]
+} {1 1 0}
+do_test 1.3 {
+  set res [catchcmd "bound.db" {.dump loc}]
+  list [lindex $res 0] [regexp {CREATE TABLE} [lindex $res 1]]
+} {1 0}
+
+sqlite3 dbd bound.db
+dbd eval { DELETE FROM dolt_nonlocal_tables }
+dbd close
+do_test 1.4 {
+  set fd [open dump.sql w]
+  puts $fd [lindex [catchcmd "bound.db" {.dump}] 1]
+  close $fd
+  catchcmd "replay.db" {.read dump.sql
+SELECT id, v FROM shared ORDER BY id;
+SELECT id, v FROM loc;}
+} {0 {1|main-shared
+1|main-loc}}
+
+sqlite3 db test.db
+finish_test
