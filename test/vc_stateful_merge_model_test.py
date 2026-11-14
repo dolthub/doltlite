@@ -111,7 +111,7 @@ class MergePredictionTest(unittest.TestCase):
                     CREATE VIEW v_main AS SELECT * FROM kv;
                     CREATE TRIGGER tr_main AFTER INSERT ON kv BEGIN SELECT 1; END;
                 """)
-            statements.append("SELECT dolt_commit('-am','left%d');"
+            statements.append("SELECT dolt_commit('-Am','left%d');"
                      "SELECT dolt_tag('left%d');"
                      "SELECT dolt_checkout('side');"
                      "UPDATE kv SET v='right%d' WHERE id=2;" % (level, level, level))
@@ -120,7 +120,7 @@ class MergePredictionTest(unittest.TestCase):
                     CREATE VIEW v_side AS SELECT * FROM kv;
                     CREATE TRIGGER tr_side AFTER INSERT ON kv BEGIN SELECT 1; END;
                 """)
-            statements.append("SELECT dolt_commit('-am','right%d');"
+            statements.append("SELECT dolt_commit('-Am','right%d');"
                      "SELECT dolt_checkout('main');"
                      "SELECT dolt_merge('side','--no-ff');"
                      "SELECT dolt_checkout('side');"

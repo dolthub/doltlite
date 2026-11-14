@@ -326,7 +326,8 @@ PRAGMA integrity_check;"   "0
 0
 ok" "$DB10"
 
-# Named add must not adopt unstaged views/triggers; -A and -am may.
+# Named add must not adopt unstaged views/triggers, and neither does -am
+# until dolt_schemas is tracked; -A does.
 DB11=/tmp/test_dolt_viewstage_$$.db; rm -f "$DB11"
 
 run_test_match "view_stage_setup"   "CREATE TABLE t(a INTEGER PRIMARY KEY);
@@ -356,13 +357,27 @@ SELECT count(*) FROM pragma_table_info('t');"   "2
 2
 2" "$DB11"
 
-run_test_match "view_rides_with_am"   "CREATE VIEW v2 AS SELECT a FROM t; INSERT INTO t(a) VALUES(1);
+run_test_match "untracked_view_stays_out_of_am"   "CREATE VIEW v2 AS SELECT a FROM t; INSERT INTO t(a) VALUES(1);
 SELECT dolt_commit('-am','am');"   "^[0-9a-f]{40}$" "$DB11"
 
-run_test "view_in_am_commit"   "SELECT dolt_checkout('-b','am_head');
+run_test "view_not_in_am_commit"   "SELECT dolt_checkout('-b','am_head');
+SELECT count(*) FROM sqlite_master WHERE type IN ('view','trigger');
+SELECT dolt_checkout('main');
+SELECT count(*) FROM sqlite_master WHERE type IN ('view','trigger');"   "0
+0
+0
+3" "$DB11"
+
+run_test_match "tracked_view_rides_with_am"   "SELECT dolt_add('dolt_schemas');
+SELECT dolt_commit('-m','track schemas');
+CREATE VIEW v3 AS SELECT a FROM t; INSERT INTO t(a) VALUES(2);
+SELECT dolt_commit('-am','am tracked');"   "^[0-9a-f]{40}$" "$DB11"
+
+run_test "view_in_am_commit"   "SELECT dolt_checkout('-b','am_tracked_head');
 SELECT name FROM sqlite_master WHERE type='view' ORDER BY name;
 SELECT count(*) FROM sqlite_master WHERE type='trigger';"   "0
 v2
+v3
 vv
 1" "$DB11"
 
