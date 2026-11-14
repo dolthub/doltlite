@@ -382,6 +382,44 @@ SELECT dolt_commit('-m', 'first', '--author', 'Alice Author <>');
 
 echo "--- --amend ---"
 
+# -a covers every tracked table. One staged as new is tracked, so edits made
+# to it after dolt_add are committed; a table never added is not.
+oracle "commit_am_includes_staged_new_table" "
+CREATE TABLE base(id INT PRIMARY KEY, v INT);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+CREATE TABLE t(id INT PRIMARY KEY, a INT);
+SELECT dolt_add('.');
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_commit('-am', 'staged new');
+"
+
+oracle "commit_am_staged_new_table_with_indexes" "
+CREATE TABLE base(id INT PRIMARY KEY, v INT);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+CREATE TABLE t(id INT PRIMARY KEY, a INT, b VARCHAR(10) UNIQUE);
+CREATE INDEX ta ON t(a);
+CREATE TABLE never_added(id INT PRIMARY KEY);
+SELECT dolt_add('t');
+INSERT INTO t VALUES (1, 1, 'x'), (2, 2, 'y');
+INSERT INTO base VALUES (1, 1);
+INSERT INTO never_added VALUES (1);
+SELECT dolt_commit('-am', 'staged new with indexes');
+"
+
+oracle "commit_am_staged_new_table_then_schema_change" "
+CREATE TABLE base(id INT PRIMARY KEY, v INT);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+CREATE TABLE t(id INT PRIMARY KEY, a INT);
+SELECT dolt_add('t');
+ALTER TABLE t ADD COLUMN c INT;
+CREATE INDEX tc ON t(c);
+INSERT INTO t VALUES (1, 1, 1);
+SELECT dolt_commit('-am', 'staged new then altered');
+"
+
 oracle "commit_amend_message_only" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);

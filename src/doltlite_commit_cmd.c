@@ -211,6 +211,14 @@ static int commitStageAnalyzedStats(
 
 /* Rebuild the staged catalog for dolt_commit -a: overlay working-tree
 ** changes for tables that already exist in HEAD. */
+static int amNameListed(const char **az, int n, const char *zName){
+  int i;
+  for(i=0; zName && i<n; i++){
+    if( az[i] && strcmp(az[i], zName)==0 ) return 1;
+  }
+  return 0;
+}
+
 static int doltliteCommitStageModifiedOnly(
   sqlite3 *db,
   sqlite3_context *context,
@@ -231,6 +239,7 @@ static int doltliteCommitStageModifiedOnly(
   u8 *aRemoveStaged = 0;
   const char **azTouched = 0;
   int nTouched = 0;
+  int nFromWorking = 0;
   Pgno stagedOffset = 0;
 
   memset(&workingIdx, 0, sizeof(workingIdx));
@@ -352,7 +361,10 @@ static int doltliteCommitStageModifiedOnly(
     char *zDup;
     struct TableEntry *pStaged;
     if( aWorking[j].iTable==1 ) continue;
-    if( !addNameIndexFind(&headIdx, zName) ) continue;
+    /* As in Dolt, -a covers every tracked table: one in HEAD, or one
+    ** already staged as new. */
+    if( !addNameIndexFind(&headIdx, zName)
+     && !addNameIndexFind(&stagedIdx, zName) ) continue;
 
     azTouched[nTouched++] = zName;
     pStaged = addNameIndexFind(&stagedIdx, zName);
@@ -381,6 +393,8 @@ static int doltliteCommitStageModifiedOnly(
       nStaged++;
     }
   }
+
+  nFromWorking = nTouched;
 
   for(k=0; k<nHead; k++){
     const char *zName = aHead[k].zName;
@@ -465,8 +479,7 @@ static int doltliteCommitStageModifiedOnly(
       }
       if( zParent
        && amTableStagedByName(aStaged, nStaged, zParent)
-       && !(addNameIndexFind(&workingIdx, zParent)
-            && addNameIndexFind(&headIdx, zParent)) ){
+       && !amNameListed(azTouched, nFromWorking, zParent) ){
         /* Staged-sourced index: table was staged explicitly (or a rename
         ** kept out of -a). Keep its previous number so it pairs as stored. */
         k2++;
@@ -485,8 +498,7 @@ static int doltliteCommitStageModifiedOnly(
        && strcmp(aWorkSchema[i2].zType, "index")==0
        && aWorkSchema[i2].iRootpage>1
        && aWorkSchema[i2].zTblName
-       && addNameIndexFind(&workingIdx, aWorkSchema[i2].zTblName)
-       && addNameIndexFind(&headIdx, aWorkSchema[i2].zTblName)
+       && amNameListed(azTouched, nFromWorking, aWorkSchema[i2].zTblName)
        && amTableStagedByName(aStaged, nStaged, aWorkSchema[i2].zTblName) ){
         nAppend++;
       }
@@ -509,8 +521,7 @@ static int doltliteCommitStageModifiedOnly(
        || strcmp(aWorkSchema[i2].zType, "index")!=0
        || aWorkSchema[i2].iRootpage<=1
        || !aWorkSchema[i2].zTblName
-       || !addNameIndexFind(&workingIdx, aWorkSchema[i2].zTblName)
-       || !addNameIndexFind(&headIdx, aWorkSchema[i2].zTblName)
+       || !amNameListed(azTouched, nFromWorking, aWorkSchema[i2].zTblName)
        || !amTableStagedByName(aStaged, nStaged, aWorkSchema[i2].zTblName) ){
         continue;
       }
