@@ -734,6 +734,67 @@ pure_done:
   return rc;
 }
 
+/* A column rename rewrites the text of every index on the column. True
+** when zSideSql is zAncSql with only such rewrites. A renamed column is one
+** the table lost where, between the same surviving neighbours, it gained
+** one of the same definition; a column dropped and another added are not. */
+static int mergeIndexSqlOnlyRenamed(
+  const char *zAncSql,
+  const char *zSideSql,
+  const char *zAncTblSql,
+  const char *zSideTblSql
+){
+  ParsedColumn *aAnc = 0, *aSide = 0;
+  int nAnc = 0, nSide = 0, i = 0, j = 0, n = 0, bSame = 0;
+  char **az = 0;
+
+  if( !zAncSql || !zSideSql || !zAncTblSql || !zSideTblSql ) return 0;
+  if( parseColumns(zAncTblSql, &aAnc, &nAnc)!=SQLITE_OK ) return 0;
+  if( parseColumns(zSideTblSql, &aSide, &nSide)!=SQLITE_OK ){
+    freeColumns(aAnc, nAnc);
+    return 0;
+  }
+  az = sqlite3_malloc64((2*(i64)nAnc + 1)*sizeof(char*));
+  while( az && i<nAnc && j<nSide ){
+    if( sqlite3_stricmp(aAnc[i].zName, aSide[j].zName)==0 ){
+      i++; j++;
+    }else if( parsedColumnIndexByName(aSide, nSide, aAnc[i].zName)>=0 ){
+      j++;
+    }else if( parsedColumnIndexByName(aAnc, nAnc, aSide[j].zName)>=0 ){
+      i++;
+    }else{
+      if( parsedColumnDefinitionsMatch(&aSide[j], &aAnc[i]) ){
+        az[n++] = aAnc[i].zName;
+        az[n++] = aSide[j].zName;
+      }
+      i++; j++;
+    }
+  }
+  if( n>0 ) bSame = mergeTextsEqualModuloRenames(zAncSql, zSideSql, az, n);
+  sqlite3_free(az);
+  freeColumns(aAnc, nAnc);
+  freeColumns(aSide, nSide);
+  return bSame;
+}
+
+int mergeIndexRenamedOnly(
+  SchemaEntry *aAnc, int nAnc,
+  SchemaEntry *aSide, int nSide,
+  const char *zIndex
+){
+  SchemaEntry *pAncIdx = findSchemaEntry(aAnc, nAnc, zIndex);
+  SchemaEntry *pSideIdx = findSchemaEntry(aSide, nSide, zIndex);
+  SchemaEntry *pAncTbl, *pSideTbl;
+  if( !pAncIdx || !pSideIdx || !pAncIdx->zTblName || !pSideIdx->zTblName ){
+    return 0;
+  }
+  pAncTbl = findSchemaEntry(aAnc, nAnc, pAncIdx->zTblName);
+  pSideTbl = findSchemaEntry(aSide, nSide, pSideIdx->zTblName);
+  return pAncTbl && pSideTbl
+      && mergeIndexSqlOnlyRenamed(pAncIdx->zSql, pSideIdx->zSql,
+                                  pAncTbl->zSql, pSideTbl->zSql);
+}
+
 static const char *mergeRenameMapLookup(char **az, int n, const char *zOld){
   int i;
   for(i=0; i+1<n; i+=2){

@@ -285,6 +285,8 @@ int parseColumns(
   ParsedColumn **ppCols, int *pnCols
 );
 void freeColumns(ParsedColumn *aCols, int nCols);
+int mergeIndexRenamedOnly(SchemaEntry *aAnc, int nAnc,
+                          SchemaEntry *aSide, int nSide, const char *zIndex);
 int parsedColumnIndexByName(
   ParsedColumn *aCols,
   int nCols,
