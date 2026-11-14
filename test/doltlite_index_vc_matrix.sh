@@ -531,7 +531,7 @@ UPDATE z SET label='zz';
 SELECT dolt_commit('-am','mixed');
 SELECT dolt_checkout('-b','snapshot');
 SELECT dolt_reset('--hard');
-SELECT id FROM items_$staged INDEXED BY sqlite_autoindex_items_${staged}_2 WHERE label='label_$staged';
+SELECT id FROM items_$staged INDEXED BY sqlite_autoindex_items_${staged}_2 WHERE label='unstaged';
 SELECT id FROM z INDEXED BY sqlite_autoindex_z_2 WHERE label='zz';
 SELECT count(*) FROM sqlite_master WHERE type='table' AND name LIKE 'items_%';
 PRAGMA integrity_check;" "$DB")
