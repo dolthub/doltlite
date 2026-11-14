@@ -1135,6 +1135,10 @@ Module *doltliteHistoricalModuleRegister(sqlite3 *db, const char *zName){
     zPrefix = "dolt_workspace_";
     nPrefix = 15;
     pModule = doltliteWorkspaceTableModule();
+  }else if( sqlite3_strnicmp(zName, "dolt_blame_", 11)==0 && zName[11] ){
+    zPrefix = "dolt_blame_";
+    nPrefix = 11;
+    pModule = doltliteBlameTableModule();
   }else if( sqlite3_strnicmp(zName, "dolt_constraint_violations_", 27)==0
          && zName[27] ){
     zPrefix = "dolt_constraint_violations_";
