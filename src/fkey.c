@@ -335,6 +335,7 @@ static void fkLookupParent(
 
 #ifdef DOLTLITE_PROLLY
   iDb = sqlite3SchemaToIndex(pParse->db, pTab->pSchema);
+  sqlite3CodeVerifySchema(pParse, iDb);
 #endif
   sqlite3VdbeVerifyAbortable(v,
     (!pFKey->isDeferred
