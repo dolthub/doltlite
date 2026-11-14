@@ -947,12 +947,22 @@ static int sqlite3LockAndPrepare(
   /* Compiling loaded a rules table the first sync could not see, or a
   ** statement in the batch changed it: compile once more with the
   ** redirects it implies. */
-  if( bTopLevel && !db->mallocFailed && doltliteNonlocalSync(db) ){
-    if( *ppStmt ){
-      sqlite3VdbeFinalize((Vdbe*)*ppStmt);
-      *ppStmt = 0;
+  if( bTopLevel && !db->mallocFailed ){
+    /* The sync runs SQL of its own, which clears the connection's error.
+    ** A compile that failed keeps its message unless it is compiled again. */
+    char *zErr = rc!=SQLITE_OK ? sqlite3DbStrDup(db, sqlite3_errmsg(db)) : 0;
+    int iErrOfst = db->errByteOffset;
+    if( doltliteNonlocalSync(db) ){
+      if( *ppStmt ){
+        sqlite3VdbeFinalize((Vdbe*)*ppStmt);
+        *ppStmt = 0;
+      }
+      rc = sqlite3Prepare(db, zSql, nBytes, prepFlags, pOld, ppStmt, pzTail);
+    }else if( zErr ){
+      sqlite3ErrorWithMsg(db, rc, "%s", zErr);
+      db->errByteOffset = iErrOfst;
     }
-    rc = sqlite3Prepare(db, zSql, nBytes, prepFlags, pOld, ppStmt, pzTail);
+    sqlite3DbFree(db, zErr);
   }
 lock_and_prepare_out:
   if( bTopLevel ){

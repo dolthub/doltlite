@@ -1244,4 +1244,40 @@ foreach {name local} {no-local-table 0 local-table-dropped 1} {
   sqlite3 db test.db
 }
 
+# The sync that runs around every compile executes SQL of its own. With an
+# uncommitted rule change it runs each time, and must not wipe the message
+# of the compile that just failed.
+foreach {name change} {
+  insert {INSERT INTO dolt_nonlocal_tables VALUES('zzz','other',NULL,'immediate')}
+  retarget {
+    INSERT INTO dolt_nonlocal_tables VALUES('users','main',NULL,'immediate');
+    UPDATE dolt_nonlocal_tables SET target_ref='other' WHERE table_name='users';
+  }
+} {
+  nl_reset
+  db eval BEGIN
+  db eval $change
+  set prefix nonlocal-pending-rule-errmsg-$name
+  do_test $prefix.syntax {
+    catchsql {selec 1}
+  } {1 {near "selec": syntax error}}
+  do_test $prefix.table {
+    catchsql {SELECT * FROM nosuchtable}
+  } {1 {no such table: nosuchtable}}
+  do_test $prefix.column {
+    catchsql {SELECT nosuchcol FROM notes}
+  } {1 {no such column: nosuchcol}}
+  do_test $prefix.offset {
+    catch {db eval {SELECT nosuchcol FROM notes}}
+    sqlite3_error_offset db
+  } 7
+  do_test $prefix.function {
+    catchsql {SELECT nosuchfunc(1)}
+  } {1 {no such function: nosuchfunc}}
+  do_test $prefix.still-works {
+    catchsql {SELECT count(*) FROM notes}
+  } {0 0}
+  db eval ROLLBACK
+}
+
 finish_test
