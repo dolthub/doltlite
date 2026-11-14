@@ -450,7 +450,10 @@ int mergeCatalogPass2(
           }else if( schemaEntryChangedByName(
                         aAncSchema, nAncSchema,
                         aTheirsSchema, nTheirsSchema,
-                        pTheirSe->zName) ){
+                        pTheirSe->zName)
+                 && !mergeIndexRenamedOnly(aAncSchema, nAncSchema,
+                                           aTheirsSchema, nTheirsSchema,
+                                           pTheirSe->zName) ){
             struct TableEntry newEntry = aTheirs[i];
             int j, conflict = 0;
             Pgno oldPg = newEntry.iTable;

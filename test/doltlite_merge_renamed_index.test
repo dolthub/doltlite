@@ -63,4 +63,68 @@ foreach renameTable {0 1 2 3 4} {
   }
 }
 
+# One side drops an index; the other renames the column it covers and
+# changes the table in some other way as well, so the rename is not the
+# whole of its change. The rename only rewrote the index's text: the drop
+# stands, as it does when the rename is the only change.
+foreach {rname rename col extra} {
+  add-column   {ALTER TABLE t RENAME COLUMN a TO aa; ALTER TABLE t ADD COLUMN z INT} aa 0
+  drop-column  {ALTER TABLE t RENAME COLUMN a TO aa; ALTER TABLE t DROP COLUMN c} aa 0
+  two-renames  {ALTER TABLE t RENAME COLUMN a TO aa; ALTER TABLE t RENAME COLUMN b TO bb} aa 0
+  with-rows    {ALTER TABLE t RENAME COLUMN a TO aa; ALTER TABLE t ADD COLUMN z INT;
+                INSERT INTO t VALUES(5,50,'q',5,5); UPDATE t SET aa=aa+1 WHERE id=2} aa 1
+} {
+  foreach {dname create drop} {
+    plain  {CREATE INDEX ia ON t(a)} {DROP INDEX ia}
+    unique {CREATE UNIQUE INDEX ia ON t(a)} {DROP INDEX ia; INSERT INTO t VALUES(9,10,'dup',9)}
+    multi  {CREATE INDEX ia ON t(a, b)} {DROP INDEX ia}
+  } {
+    foreach direction {forward reverse} {
+      foreach op {merge cherry_pick} {
+        reset_db
+        execsql {CREATE TABLE t(id INT PRIMARY KEY, a INT, b VARCHAR(20), c INT)}
+        execsql $create
+        execsql {
+          CREATE INDEX keep ON t(b);
+          INSERT INTO t VALUES(1,10,'x',1),(2,20,'y',2);
+          SELECT dolt_commit('-Am','base');
+          SELECT dolt_branch('br');
+        }
+        execsql $rename
+        execsql {
+          SELECT dolt_commit('-Am','rename');
+          SELECT dolt_checkout('br');
+        }
+        execsql $drop
+        execsql {SELECT dolt_commit('-Am','drop')}
+        if {$direction eq "forward"} {
+          execsql {SELECT dolt_checkout('main')}
+          set target br
+          set reopen [file normalize test.db]
+        } else {
+          set target main
+          set reopen "[file normalize test.db]/br"
+        }
+        set prefix dropped-index-impure-rename-$rname-$dname-$direction-$op
+        do_test $prefix.run {
+          lindex [catchsql "SELECT dolt_${op}('$target')"] 0
+        } 0
+        set rows [expr {($dname eq "unique" ? 3 : 2) + $extra}]
+        foreach stage {merged reopened} {
+          if {$stage eq "reopened"} {
+            db close
+            sqlite3 db $reopen
+          }
+          do_execsql_test $prefix.$stage "
+            SELECT count(*) FROM sqlite_schema WHERE type='index' AND name='ia';
+            SELECT count(*) FROM sqlite_schema WHERE type='index' AND name='keep';
+            SELECT count(*) FROM t WHERE $col>0;
+            PRAGMA integrity_check;
+          " [list 0 1 $rows ok]
+        }
+      }
+    }
+  }
+}
+
 finish_test

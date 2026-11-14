@@ -564,6 +564,13 @@ int rebuildDisjointSchemaRows(
                                  pSe->zName) ){
       continue;
     }
+    /* We dropped it and they only renamed a column under it. */
+    if( findSchemaEntry(aAncSchema, nAncSchema, pSe->zName)
+     && !findSchemaEntry(aOursSchema, nOursSchema, pSe->zName)
+     && mergeIndexRenamedOnly(aAncSchema, nAncSchema,
+                              aTheirsSchema, nTheirsSchema, pSe->zName) ){
+      continue;
+    }
     /* Pass 2 already declined this index: writing it here would displace
     ** one of ours with an index the catalog cannot load. */
     {

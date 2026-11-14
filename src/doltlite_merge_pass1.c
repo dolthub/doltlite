@@ -501,6 +501,14 @@ static int mergePass1OursModifyTheirsDelete(
                                 zSchemaMergeName) ){
     return SQLITE_OK;
   }
+  /* Our rename of a column the index covers rewrote its text. That is not
+  ** a change of definition either. */
+  if( !zName && zSchemaMergeName && zSchemaMergeName[0]
+   && mergeIndexRenamedOnly(c->aAncSchema, c->nAncSchema,
+                            c->aOursSchema, c->nOursSchema,
+                            zSchemaMergeName) ){
+    return SQLITE_OK;
+  }
   if( !zName && zSchemaMergeName && zSchemaMergeName[0] ){
     if( c->ppSchemaActions && c->pnSchemaActions ){
       rc = recordSchemaAddColumns(c->ppSchemaActions, c->pnSchemaActions,
@@ -1318,6 +1326,14 @@ static int mergePass1TheirsModifyDelete(MergePass1Ctx *c){
         changed = schemaEntryChangedByName(c->aAncSchema, c->nAncSchema,
                                            c->aTheirsSchema, c->nTheirsSchema,
                                            pTheirSe->zName);
+      }
+      /* Their rename of a covered column rewrote the index's text and
+      ** nothing else; our drop of it stands. */
+      if( changed
+       && mergeIndexRenamedOnly(c->aAncSchema, c->nAncSchema,
+                                c->aTheirsSchema, c->nTheirsSchema,
+                                pTheirSe->zName) ){
+        changed = 0;
       }
     }
     if( !pAncEntry || pOurEntry || !changed ) continue;
