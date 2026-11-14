@@ -358,4 +358,31 @@ INSERT INTO users VALUES(2,'replacement');
 SELECT CONCAT('R|after|',id,'|',name) FROM alias_users ORDER BY id;
 "
 
+# A rule redirects tables only. A view of that name stays the local view,
+# and once it is dropped the name is gone rather than the target's view.
+oracle "nonlocal_rule_does_not_redirect_view" "
+CREATE TABLE users(id INT PRIMARY KEY, name VARCHAR(20));
+INSERT INTO users VALUES(1,'main');
+CREATE VIEW v_users AS SELECT id, name FROM users;
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','exp');
+UPDATE users SET name='exp-local';
+INSERT INTO dolt_nonlocal_tables VALUES('v_users','main',NULL,'immediate');
+SELECT CONCAT('R|local-view|',id,'|',name) FROM v_users;
+DROP VIEW v_users;
+SELECT CONCAT('R|after-drop|',id,'|',name) FROM v_users;
+SELECT CONCAT('R|views|',count(*)) FROM dolt_schemas WHERE name='v_users';
+"
+
+oracle "nonlocal_alias_to_view_is_not_found" "
+CREATE TABLE users(id INT PRIMARY KEY, name VARCHAR(20));
+INSERT INTO users VALUES(1,'main');
+CREATE VIEW v_users AS SELECT id, name FROM users;
+SELECT dolt_commit('-Am','base');
+SELECT dolt_checkout('-b','exp');
+INSERT INTO dolt_nonlocal_tables VALUES('alias','main','v_users','immediate');
+SELECT CONCAT('R|alias|',id,'|',name) FROM alias;
+SELECT CONCAT('R|direct|',id,'|',name) FROM v_users;
+"
+
 vc_oracle_finish
