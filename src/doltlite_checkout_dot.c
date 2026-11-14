@@ -68,7 +68,9 @@ static int dotCollectSchema(
       continue;
     }
     if( strcmp(zType, "table")!=0 || !zName ) continue;
-    if( sqlite3_strnicmp(zName, "sqlite_", 7)==0 ) continue;
+    if( sqlite3_strnicmp(zName, "sqlite_", 7)==0
+     && sqlite3_stricmp(zName, "sqlite_sequence")!=0
+     && sqlite3_strnicmp(zName, "sqlite_stat", 11)!=0 ) continue;
     rc = dotAdd(pa, pn, zName, bit);
     if( rc!=SQLITE_OK ) return rc;
   }
@@ -259,6 +261,8 @@ int doltliteCheckoutDot(
       if( rc==SQLITE_OK ) rc = dotLoad(db, &head, DOT_OTHER, &aName, &nName);
     }
   }
+
+  if( rc==SQLITE_OK ) rc = dotAdd(&aName, &nName, "dolt_database", DOT_PRIMARY);
 
   if( rc==SQLITE_OK && zSourceRef ){
     rc = dotFill(aName, nName, DOT_PRIMARY|DOT_OTHER, 0,

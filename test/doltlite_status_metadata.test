@@ -313,4 +313,52 @@ do_test database-scoped-ref-commit {
     [execsql {SELECT id FROM t}] [execsql {SELECT count(*) FROM dolt_status}]
 } {0 0 1 0}
 
+foreach {form sql} {
+  dot      {SELECT dolt_checkout('.')}
+  head-dot {SELECT dolt_checkout('HEAD','--','.')}
+} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, a INT);
+    CREATE INDEX t_a ON t(a);
+    INSERT INTO t(a) VALUES(1),(2);
+    ANALYZE;
+    PRAGMA user_version=1;
+    PRAGMA application_id=5;
+    SELECT dolt_commit('-Am','base');
+    INSERT INTO t(a) VALUES(3),(4),(5);
+    ANALYZE;
+    PRAGMA user_version=2;
+    PRAGMA application_id=6;
+  }
+  do_execsql_test checkout-$form-dirty {
+    SELECT table_name, staged, status FROM dolt_status ORDER BY 1;
+  } {dolt_database 0 modified sqlite_sequence 0 modified
+     sqlite_stat1 0 modified t 0 modified}
+  do_test checkout-$form-restores-system-tables {
+    execsql $sql
+    execsql {
+      SELECT count(*) FROM dolt_status;
+      SELECT name, seq FROM sqlite_sequence;
+      SELECT tbl, idx, stat FROM sqlite_stat1;
+      SELECT count(*) FROM t;
+      PRAGMA user_version;
+      PRAGMA application_id;
+    }
+  } {0 t 2 t t_a {2 1} 2 1 5}
+}
+
+reset_db
+execsql {
+  CREATE TABLE t(id INT PRIMARY KEY, a INT);
+  INSERT INTO t VALUES(1,1);
+  SELECT dolt_commit('-Am','base');
+  UPDATE t SET a=2;
+}
+do_execsql_test checkout-dot-without-system-tables {
+  SELECT dolt_checkout('.');
+  SELECT a FROM t;
+  SELECT count(*) FROM dolt_status;
+} {0 1 0}
+
 finish_test
