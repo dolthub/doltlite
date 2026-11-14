@@ -1262,4 +1262,38 @@ SELECT concat('Q|staged|',count(*)) FROM dolt_status WHERE staged=1;"
   done
 done
 
+# A merge left open by --no-commit with nothing in conflict is ordinary staged
+# state: reset unstages it and the merge stays in progress.
+NOCOMMIT_MERGE="CREATE TABLE t(id INT PRIMARY KEY, a INT);
+CREATE TABLE u(id INT PRIMARY KEY, a INT);
+INSERT INTO t VALUES (1,10),(2,20);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('br');
+INSERT INTO t VALUES (100,1000);
+SELECT dolt_commit('-Am','m1');
+SELECT dolt_checkout('br');
+INSERT INTO t VALUES (4,40);
+INSERT INTO u VALUES (1,1);
+SELECT dolt_commit('-Am','b1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('--no-commit','br');"
+
+oracle "reset_during_clean_no_commit_merge" "$NOCOMMIT_MERGE
+SELECT dolt_reset();
+"
+
+oracle "reset_soft_during_clean_no_commit_merge" "$NOCOMMIT_MERGE
+SELECT dolt_reset('--soft');
+"
+
+oracle "reset_table_during_clean_no_commit_merge" "$NOCOMMIT_MERGE
+SELECT dolt_reset('t');
+"
+
+oracle "reset_then_partial_merge_commit" "$NOCOMMIT_MERGE
+SELECT dolt_reset();
+SELECT dolt_add('t');
+SELECT dolt_commit('-m','merge t only');
+"
+
 vc_oracle_finish
