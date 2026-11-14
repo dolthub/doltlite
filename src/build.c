@@ -472,6 +472,9 @@ Table *sqlite3LocateTable(
     if( eNonlocal<0 ) return 0;
     if( eNonlocal>0 ){
       p = sqlite3FindTable(db, zNonlocal, zNonlocalDb);
+      /* As in Dolt, a rule redirects tables only: a view on the target is
+      ** not reached through it. */
+      if( p && IsView(p) ) p = 0;
       if( p ){
         doltliteNonlocalNoteUse(pParse, p, zName);
       }else{
