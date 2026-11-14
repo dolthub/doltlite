@@ -484,6 +484,13 @@ int mergeIndexColumnRenamedAway(
   char **pzColumn
 );
 
+int mergeIndexOverGoneColumn(
+  SchemaEntry *aAnc, int nAnc,
+  SchemaEntry *aOurs, int nOurs,
+  SchemaEntry *aTheirs, int nTheirs,
+  const char *zIndex,
+  const char *zTable
+);
 int mergeIndexColumnGoneFrom(
   const char *zIndexSql,
   const char *zAncTableSql,

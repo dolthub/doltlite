@@ -396,24 +396,6 @@ static int mergePass1OursAdded(
 ){
   int rc;
 
-  /* Index over a column they dropped cannot load. Dolt drops it too. */
-  if( !zName && zSchemaMergeName && zSchemaConflictTable ){
-    SchemaEntry *pOurIdx = findSchemaEntry(
-        c->aOursSchema, c->nOursSchema, zSchemaMergeName);
-    SchemaEntry *pAncTbl = findSchemaEntry(
-        c->aAncSchema, c->nAncSchema, zSchemaConflictTable);
-    SchemaEntry *pTheirTbl = findSchemaEntry(
-        c->aTheirsSchema, c->nTheirsSchema, zSchemaConflictTable);
-    char *zGone = 0;
-    if( pOurIdx && pAncTbl && pTheirTbl
-     && mergeIndexColumnGoneFrom(pOurIdx->zSql, pAncTbl->zSql,
-                                 pTheirTbl->zSql, &zGone) ){
-      sqlite3_free(zGone);
-      return SQLITE_OK;
-    }
-    sqlite3_free(zGone);
-  }
-
   if( theirsEntry ){
     if( !zName && c->bDisjointSchemaChanges ){
       c->aMerged[(*c->pnMerged)++] = c->aOurs[iOurs];
@@ -1253,6 +1235,15 @@ static int mergePass1MergeOursEntry(MergePass1Ctx *c, int iOurs){
    || (zName && hasSchemaConflictTable(*c->ppConflictTables,
                                        *c->pnConflictTables, zName)) ){
     c->aMerged[(*c->pnMerged)++] = c->aOurs[iOurs];
+    return SQLITE_OK;
+  }
+
+  /* Index over a column the other side dropped cannot load. Dolt drops
+  ** it too. */
+  if( !zName && zSchemaMergeName && zSchemaConflictTable
+   && mergeIndexOverGoneColumn(c->aAncSchema, c->nAncSchema,
+        c->aOursSchema, c->nOursSchema, c->aTheirsSchema, c->nTheirsSchema,
+        zSchemaMergeName, zSchemaConflictTable) ){
     return SQLITE_OK;
   }
 

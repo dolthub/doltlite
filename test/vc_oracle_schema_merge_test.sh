@@ -2729,4 +2729,55 @@ SQL
   done
 done
 
+echo "--- Index re-pointed at a column the other side drops or renames ---"
+for direction in forward reverse; do
+  for operation in merge cherry_pick; do
+    for shape in single multi; do
+      for change in drop rename; do
+        cols=b
+        if [ "$shape" = multi ]; then cols='a,b'; fi
+        repoint="DROP INDEX ia; CREATE INDEX ia ON t($cols);"
+        alter='ALTER TABLE t DROP COLUMN b;'
+        want_index=''
+        want_cols='id,a,c'
+        if [ "$change" = rename ]; then
+          alter='ALTER TABLE t RENAME COLUMN b TO b2;'
+          want_index=$(printf '%s' "$cols" | sed 's/b/b2/')
+          want_cols='id,a,b2,c'
+        fi
+        main_sql="$repoint"; feat_sql="$alter"
+        if [ "$direction" = reverse ]; then main_sql="$alter"; feat_sql="$repoint"; fi
+        tag="index_repoint_${direction}_${operation}_${shape}_${change}"
+        DB="$TMPROOT/$tag.db"
+        cat <<SQL | dl_setup "$DB" "$tag"
+CREATE TABLE t(id INT PRIMARY KEY, a INT, b VARCHAR(50), c INT);
+CREATE INDEX ia ON t(a);
+INSERT INTO t VALUES(1,10,'x',100),(2,20,'y',200);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+$main_sql
+SELECT dolt_commit('-Am','ours');
+SELECT dolt_checkout('feat');
+$feat_sql
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');
+SQL
+        run_dual_command_outcome "${tag}_apply" "$DB" \
+          "SELECT dolt_${operation}('feat');" "CALL dolt_${operation}('feat');" ok
+        expect_dual_value "${tag}_index_columns" "$DB" "$want_index" \
+          "SELECT group_concat(name,',') FROM (SELECT name FROM pragma_index_info('ia') ORDER BY seqno);" \
+          "SELECT GROUP_CONCAT(column_name ORDER BY seq_in_index SEPARATOR ',') FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='t' AND index_name='ia';"
+        expect_dual_value "${tag}_table_columns" "$DB" "$want_cols" \
+          "SELECT group_concat(name,',') FROM pragma_table_info('t');" \
+          "SELECT GROUP_CONCAT(column_name ORDER BY ordinal_position SEPARATOR ',') FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='t';"
+        expect_dual_value "${tag}_rows" "$DB" '1:10:100,2:20:200' \
+          "SELECT group_concat(concat(id,':',a,':',c),',') FROM (SELECT id,a,c FROM t ORDER BY id);" \
+          "SELECT GROUP_CONCAT(CONCAT(id,':',a,':',c) ORDER BY id SEPARATOR ',') FROM t;"
+        expect_dual_value "${tag}_integrity" "$DB" 'ok' \
+          "PRAGMA integrity_check;" "SELECT 'ok';"
+      done
+    done
+  done
+done
+
 vc_oracle_finish
