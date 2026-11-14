@@ -75,8 +75,21 @@ class RoundtripChecks(unittest.TestCase):
         run(STOCK, replay, script)
         self.assertEqual(canonical(STOCK, self.database, normalized=True),
                          canonical(STOCK, replay, normalized=True))
-        self.assertIn("INSERT INTO t(rowid,v) VALUES(9,", script)
-        self.assertNotIn("INSERT INTO p(rowid,", script)
+        self.assertIn(b"INSERT INTO t(rowid,v) VALUES(9,", script)
+        self.assertNotIn(b"INSERT INTO p(rowid,", script)
+
+    def test_clustered_replay_preserves_invalid_utf8_text(self):
+        run(STOCK, self.database,
+            "UPDATE t SET v=CAST(x'ff80c328' AS TEXT);"
+            "UPDATE p SET v=CAST(x'fe' AS TEXT);"
+            'CREATE TABLE "🐬 table"("a""b" TEXT PRIMARY KEY,"值");'
+            'INSERT INTO "🐬 table"(rowid,"a""b","值") '
+            "VALUES(23,'🐬',CAST(x'ff' AS TEXT));")
+        script = dump_for_clustered_replay(STOCK, self.database)
+        replay = Path(self.directory.name) / "replay.db"
+        run(STOCK, replay, script)
+        self.assertEqual(canonical(STOCK, self.database, normalized=True),
+                         canonical(STOCK, replay, normalized=True))
 
     def test_unchanged_stock_file_is_protected(self):
         with self.assertRaisesRegex(AssertionError, "changed a file"):

@@ -22,7 +22,8 @@ def literal(value):
 
 
 def run(binary, database, sql, require_ok=True, cwd=None, env=None):
-    result = subprocess.run([str(binary), str(database)], input=sql.encode(),
+    result = subprocess.run([str(binary), str(database)],
+                            input=sql.encode() if isinstance(sql, str) else sql,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             timeout=90, cwd=cwd, env=env)
     if result.returncode != 0 and (require_ok or result.returncode != 1):
@@ -159,8 +160,7 @@ def import_sql(stock, database):
 
 
 def dump_for_clustered_replay(stock, database):
-    _, output = run(stock, database, ".dump --preserve-rowids\n")
-    script = output.decode()
+    _, script = run(stock, database, ".dump --preserve-rowids\n")
     def token(name):
         return "(?:%s|%s)" % (re.escape(name), re.escape(ident(name)))
     for obj in schema(stock, database):
@@ -175,7 +175,7 @@ def dump_for_clustered_replay(stock, database):
                 fields = ",".join(token(c["name"]) for c in cols if c["hidden"] == 0)
                 pattern = (r"^(INSERT INTO %s\()%s,(%s\) VALUES\()[-+]?\d+," % (
                     token(obj["name"]), token(alias), fields))
-                script = re.sub(pattern, r"\1\2", script, flags=re.MULTILINE)
+                script = re.sub(pattern.encode(), rb"\1\2", script, flags=re.MULTILINE)
                 break
     return script
 
@@ -214,7 +214,7 @@ def seed_run(engine, stock, seed, directory, with_handoff):
     check("export", canonical(stock, sqlite_export), snapshot, directory)
     sql_export = export(engine, source, directory, "working", "sql")
     replay = directory / "sql-replay.db"
-    run(stock, replay, sql_export.read_text())
+    run(stock, replay, sql_export.read_bytes())
     check("sink", canonical(stock, replay), snapshot, directory)
     run(engine, source, "SELECT dolt_commit('-A','-m','roundtrip');")
     head_export = export(engine, source, directory, "head", ref="HEAD")
