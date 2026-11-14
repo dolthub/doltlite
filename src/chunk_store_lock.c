@@ -59,6 +59,13 @@ int csReclaimTail(ChunkStore *cs){
   rc = sqlite3OsFileSize(cs->file.pFile, &size);
   if( rc!=SQLITE_OK || size<=cs->file.iFileSize ) return rc;
   if( !cs->isBuffer ){
+    int bSealed = 0;
+    rc = csTailHasSealedRoot(cs, cs->file.iFileSize, size,
+                             sqlite3OsSectorSize(cs->file.pFile), &bSealed);
+    if( rc!=SQLITE_OK ) return rc;
+    if( bSealed ) return SQLITE_BUSY_SNAPSHOT;
+  }
+  if( !cs->isBuffer ){
     rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_SHARED);
     if( rc==SQLITE_OK ) rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_RESERVED);
     if( rc==SQLITE_OK ){

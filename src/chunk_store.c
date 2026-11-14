@@ -250,6 +250,47 @@ int csTailHasRecordAt(ChunkStore *cs, i64 iOff, i64 physSize, int *pHas){
   return SQLITE_OK;
 }
 
+/* Whether the records from iFrom reach a sealed root. What a failed append
+** leaves has none: its root was never written, or was zeroed. A sealed root
+** is a peer's commit, and a handle that finds one past its own logical end
+** is behind the file; truncating there would destroy that commit, and the
+** peer would then write past the hole. */
+int csTailHasSealedRoot(
+  ChunkStore *cs,
+  i64 iFrom,
+  i64 physSize,
+  int sectorSize,
+  int *pHas
+){
+  u8 aRec[1 + CHUNK_MANIFEST_SIZE];
+  i64 iOff = iFrom;
+  int bSkipped = 0;
+  *pHas = 0;
+  while( iOff<physSize ){
+    int n = (int)MIN(physSize-iOff, (i64)sizeof(aRec));
+    int rc = sqlite3OsRead(cs->file.pFile, aRec, n, iOff);
+    if( rc==SQLITE_IOERR_SHORT_READ ) return SQLITE_OK;
+    if( rc!=SQLITE_OK ) return rc;
+    if( aRec[0]==CS_WAL_TAG_CHUNK && n>=CS_WAL_CHUNK_HDR_SIZE ){
+      iOff += CS_WAL_CHUNK_HDR_SIZE
+            + (i64)CS_READ_U32(aRec + CS_WAL_CHUNK_LEN_OFF);
+      continue;
+    }
+    if( aRec[0]==CS_WAL_TAG_ROOT && n==(int)sizeof(aRec)
+     && csManifestHashState(aRec+1, iOff)==CS_MANIFEST_HASH_OK ){
+      *pHas = 1;
+    }else if( aRec[0]==0 && sectorSize>1 && !bSkipped
+           && (iOff % sectorSize)!=0 ){
+      /* A writer that pads its batches starts on the next sector. */
+      iOff += sectorSize - (iOff % sectorSize);
+      bSkipped = 1;
+      continue;
+    }
+    break;
+  }
+  return SQLITE_OK;
+}
+
 int csTailHasRecord(ChunkStore *cs, i64 physSize, int *pHas){
   return csTailHasRecordAt(cs, cs->file.iFileSize, physSize, pHas);
 }
