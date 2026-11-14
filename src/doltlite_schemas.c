@@ -6,6 +6,7 @@
 #include "prolly_hash.h"
 #include "chunk_store.h"
 #include "doltlite_internal.h"
+#include "doltlite_ancestor.h"
 #include <string.h>
 
 #define SCHEMAS_IDX_TYPE_EQ 0x01
@@ -572,21 +573,20 @@ static int shDiffWalk(ShCursor *pCur, sqlite3 *db){
   return rc;
 }
 
-static int shSliceEnd(
+static int shSliceEndText(
   sqlite3 *db,
   sqlite3_vtab *pVtab,
-  sqlite3_value *pArg,
+  const char *zRef,
+  int bHasNul,
   ShEnd *pEnd
 ){
-  const char *zRef;
   const char *zErr = 0;
   int rc = SQLITE_OK;
   memset(pEnd, 0, sizeof(*pEnd));
-  zRef = (const char*)sqlite3_value_text(pArg);
-  if( sqlite3_value_type(pArg)==SQLITE_NULL || !zRef ){
+  if( !zRef ){
     zErr = "invalid argument: NULL";
     zRef = "";
-  }else if( doltliteValueHasNul(pArg) ){
+  }else if( bHasNul ){
     zErr = "invalid argument: contains a NUL byte";
     zRef = "";
   }else if( doltliteRefIsWorking(zRef) || doltliteRefIsStaged(zRef) ){
@@ -611,6 +611,65 @@ static int shSliceEnd(
                                      zErr, zRef);
     return pVtab->zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
   }
+  return rc;
+}
+
+static int shSliceEnd(
+  sqlite3 *db,
+  sqlite3_vtab *pVtab,
+  sqlite3_value *pArg,
+  ShEnd *pEnd
+){
+  const char *zRef = sqlite3_value_type(pArg)==SQLITE_NULL
+      ? 0 : (const char*)sqlite3_value_text(pArg);
+  return shSliceEndText(db, pVtab, zRef, doltliteValueHasNul(pArg), pEnd);
+}
+
+/* One argument is a range: 'a..b' diffs a to b, 'a...b' diffs their merge
+** base to b. */
+static int shRangeEnds(
+  sqlite3 *db,
+  sqlite3_vtab *pVtab,
+  sqlite3_value *pArg,
+  ShEnd *pFrom,
+  ShEnd *pTo
+){
+  char *zLeft = 0;
+  char *zRight = 0;
+  int rangeType = DOLTLITE_RANGE_NONE;
+  int rc;
+  if( sqlite3_value_type(pArg)==SQLITE_NULL || doltliteValueHasNul(pArg) ){
+    return shSliceEnd(db, pVtab, pArg, pFrom);
+  }
+  rc = doltliteSplitRevisionRange((const char*)sqlite3_value_text(pArg),
+                                  &zLeft, &zRight, &rangeType);
+  if( rc==SQLITE_NOTFOUND || rc==SQLITE_ERROR || rc==SQLITE_MISMATCH ){
+    sqlite3_free(pVtab->zErrMsg);
+    pVtab->zErrMsg = sqlite3_mprintf(rc==SQLITE_ERROR
+        ? "dolt_diff_dolt_schemas: invalid revision range '%s'"
+        : "dolt_diff_dolt_schemas requires both a from and a to revision",
+        (const char*)sqlite3_value_text(pArg));
+    return pVtab->zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+  }
+  if( rc!=SQLITE_OK ) return rc;
+  rc = shSliceEndText(db, pVtab, zRight, 0, pTo);
+  if( rc==SQLITE_OK ) rc = shSliceEndText(db, pVtab, zLeft, 0, pFrom);
+  if( rc==SQLITE_OK && rangeType==DOLTLITE_RANGE_THREE_DOT ){
+    ProllyHash left, right, ancestor;
+    rc = doltliteResolveRef(db, zLeft, &left);
+    if( rc==SQLITE_OK ) rc = doltliteResolveRef(db, zRight, &right);
+    if( rc==SQLITE_OK ) rc = doltliteFindAncestor(db, &left, &right, &ancestor);
+    if( rc==SQLITE_OK ) rc = shEndForCommit(db, &ancestor, pFrom);
+    if( rc==SQLITE_NOTFOUND || rc==SQLITE_ERROR ){
+      sqlite3_free(pVtab->zErrMsg);
+      pVtab->zErrMsg = sqlite3_mprintf(
+          "dolt_diff_dolt_schemas: invalid revision range '%s...%s'",
+          zLeft, zRight);
+      rc = pVtab->zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+    }
+  }
+  sqlite3_free(zLeft);
+  sqlite3_free(zRight);
   return rc;
 }
 
@@ -714,7 +773,14 @@ static int shBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
     else iTo = i;
   }
   if( iFrom<0 && iTo<0 ) return SQLITE_OK;
-  if( iFrom<0 || iTo<0 ){
+  if( iTo<0 ){
+    pInfo->aConstraintUsage[iFrom].argvIndex = 1;
+    pInfo->aConstraintUsage[iFrom].omit = 1;
+    pInfo->idxNum = SH_IDX_FROM_REF;
+    pInfo->estimatedCost = 100.0;
+    return SQLITE_OK;
+  }
+  if( iFrom<0 ){
     sqlite3_free(pVtab->zErrMsg);
     pVtab->zErrMsg = sqlite3_mprintf(
         "dolt_diff_dolt_schemas requires both a from and a to revision");
@@ -752,10 +818,14 @@ static int shFilter(sqlite3_vtab_cursor *pCursor,
     rc = shHistory(pCur, pVtab->db);
   }else if( pVtab->eKind==SH_BLAME ){
     rc = shBlame(pCur, pVtab->db);
-  }else if( idxNum && argc>=2 ){
+  }else if( idxNum && argc>=1 ){
     ShEnd from, to;
-    rc = shSliceEnd(pVtab->db, &pVtab->base, argv[0], &from);
-    if( rc==SQLITE_OK ) rc = shSliceEnd(pVtab->db, &pVtab->base, argv[1], &to);
+    if( argc==1 ){
+      rc = shRangeEnds(pVtab->db, &pVtab->base, argv[0], &from, &to);
+    }else{
+      rc = shSliceEnd(pVtab->db, &pVtab->base, argv[0], &from);
+      if( rc==SQLITE_OK ) rc = shSliceEnd(pVtab->db, &pVtab->base, argv[1], &to);
+    }
     if( rc==SQLITE_OK ) rc = shDiffEnds(pCur, pVtab->db, &from, &to);
   }else{
     rc = shDiffWalk(pCur, pVtab->db);
