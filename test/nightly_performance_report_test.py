@@ -246,15 +246,15 @@ class NightlyPerformanceReportTest(unittest.TestCase):
             "ac_writes", "insert_ac", 100, 600
         )
         self.assertEqual(nightly_report.individual_limit(ordinary), 2.3)
-        self.assertEqual(nightly_report.individual_limit(autocommit), 4.2)
+        self.assertEqual(nightly_report.individual_limit(autocommit), 3.6)
         self.assertEqual(nightly_report.average_limit("mem_reads"), 1.8)
-        self.assertEqual(nightly_report.average_limit("ac_writes"), 3.0)
+        self.assertEqual(nightly_report.average_limit("ac_writes"), 2.6)
 
         limits = {
             "BENCH_MAX_MULTIPLIER": "2.3",
             "BENCH_AVG_MAX_MULTIPLIER": "1.8",
-            "BENCH_AC_WRITE_MAX_MULTIPLIER": "4.2",
-            "BENCH_AC_WRITE_AVG_MAX_MULTIPLIER": "3.0",
+            "BENCH_AC_WRITE_MAX_MULTIPLIER": "3.6",
+            "BENCH_AC_WRITE_AVG_MAX_MULTIPLIER": "2.6",
         }
 
         repository = pathlib.Path(__file__).parent.parent
@@ -308,17 +308,17 @@ class NightlyPerformanceReportTest(unittest.TestCase):
         self.assertTrue(nightly_report.section_passes((suite,), "ac_writes"))
 
     def test_rejects_over_limit_autocommit_workload(self):
-        result = nightly_report.Result("ac_writes", "insert_ac", 100, 430)
+        result = nightly_report.Result("ac_writes", "insert_ac", 100, 361)
         suite = nightly_report.Suite(
             "int", (result,),
-            {("ac_writes", "insert_ac"): (nightly_report.Sample(1, 100, 430),)},
+            {("ac_writes", "insert_ac"): (nightly_report.Sample(1, 100, 361),)},
             0, 0,
         )
         self.assertFalse(nightly_report.result_passes(suite, result))
 
     def test_rejects_over_limit_section_means(self):
         for section, candidates in (("mem_writes", (160, 210)),
-                                    ("ac_writes", (280, 340))):
+                                    ("ac_writes", (250, 272))):
             with self.subTest(section=section):
                 results = tuple(
                     nightly_report.Result(section, str(i), 100, candidate)
@@ -357,7 +357,7 @@ class NightlyPerformanceReportTest(unittest.TestCase):
             report,
         )
         self.assertIn(
-            "Durable autocommit writes use 4.2× and 3.0× ceilings",
+            "Durable autocommit writes use 3.6× and 2.6× ceilings",
             report,
         )
         self.assertIn("Paired-ratio noise", report)
