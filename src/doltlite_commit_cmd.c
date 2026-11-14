@@ -219,6 +219,30 @@ static int amNameListed(const char **az, int n, const char *zName){
   return 0;
 }
 
+/* dolt_schemas is tracked once a view or trigger is in HEAD or staged. */
+static int amSchemasTracked(
+  sqlite3 *db,
+  const ProllyHash *pCatalog,
+  int *pTracked
+){
+  SchemaEntry *aSchema = 0;
+  int nSchema = 0;
+  int i, rc;
+  if( *pTracked || prollyHashIsEmpty(pCatalog) ) return SQLITE_OK;
+  rc = loadSchemaFromCatalog(db, doltliteGetChunkStore(db),
+                             doltliteGetCache(db), pCatalog,
+                             &aSchema, &nSchema);
+  for(i=0; rc==SQLITE_OK && i<nSchema; i++){
+    const char *zType = aSchema[i].zType;
+    if( zType && (strcmp(zType, "view")==0 || strcmp(zType, "trigger")==0) ){
+      *pTracked = 1;
+      break;
+    }
+  }
+  freeSchemaEntries(aSchema, nSchema);
+  return rc;
+}
+
 static int doltliteCommitStageModifiedOnly(
   sqlite3 *db,
   sqlite3_context *context,
@@ -552,12 +576,17 @@ static int doltliteCommitStageModifiedOnly(
         doltliteFindTableByNumber(aStaged, nStaged, 1);
     if( pWorkingMaster && pStagedMaster ){
       ProllyHash composedRoot;
-      rc = doltliteBuildNamedStageMasterRoot(db,
-              &pWorkingMaster->root, pWorkingMaster->flags,
-              &pStagedMaster->root, pStagedMaster->flags,
-              azTouched, nTouched,
-              aStaged, nStaged, 1,
-              &composedRoot, 0);
+      int bSchemas = 0;
+      rc = amSchemasTracked(db, &headCatHash, &bSchemas);
+      if( rc==SQLITE_OK ) rc = amSchemasTracked(db, &stagedHash, &bSchemas);
+      if( rc==SQLITE_OK ){
+        rc = doltliteBuildNamedStageMasterRoot(db,
+                &pWorkingMaster->root, pWorkingMaster->flags,
+                &pStagedMaster->root, pStagedMaster->flags,
+                azTouched, nTouched,
+                aStaged, nStaged, bSchemas,
+                &composedRoot, 0);
+      }
       if( rc!=SQLITE_OK ){
         sqlite3_result_error_code(context, rc);
         FREE_ADD_MODIFIED_CATALOGS();

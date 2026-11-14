@@ -420,6 +420,55 @@ INSERT INTO t VALUES (1, 1, 1);
 SELECT dolt_commit('-am', 'staged new then altered');
 "
 
+# dolt_schemas is tracked like any other table: the first view is a new
+# table that -a leaves alone until it is added or a view is in HEAD.
+oracle "commit_am_skips_first_view" "
+CREATE TABLE a(id INT PRIMARY KEY, v INT);
+INSERT INTO a VALUES (1, 1);
+SELECT dolt_add('.');
+SELECT dolt_commit('-m', 'base');
+CREATE VIEW vw1 AS SELECT 1 AS one;
+UPDATE a SET v = 2;
+SELECT dolt_commit('-am', 'no view');
+"
+
+oracle "commit_am_includes_staged_first_view" "
+CREATE TABLE a(id INT PRIMARY KEY, v INT);
+INSERT INTO a VALUES (1, 1);
+SELECT dolt_add('.');
+SELECT dolt_commit('-m', 'base');
+CREATE VIEW vw1 AS SELECT 1 AS one;
+SELECT dolt_add('dolt_schemas');
+CREATE VIEW vw2 AS SELECT 2 AS two;
+UPDATE a SET v = 2;
+SELECT dolt_commit('-am', 'both views');
+"
+
+oracle "commit_am_includes_view_change_once_tracked" "
+CREATE TABLE a(id INT PRIMARY KEY, v INT);
+CREATE VIEW vw1 AS SELECT 1 AS one;
+INSERT INTO a VALUES (1, 1);
+SELECT dolt_add('.');
+SELECT dolt_commit('-m', 'base');
+CREATE VIEW vw2 AS SELECT 2 AS two;
+DROP VIEW vw1;
+SELECT dolt_commit('-am', 'view swap');
+"
+
+oracle "commit_am_view_dropped_then_recreated" "
+CREATE TABLE a(id INT PRIMARY KEY, v INT);
+CREATE VIEW vw1 AS SELECT 1 AS one;
+INSERT INTO a VALUES (1, 1);
+SELECT dolt_add('.');
+SELECT dolt_commit('-m', 'base');
+DROP VIEW vw1;
+UPDATE a SET v = 2;
+SELECT dolt_commit('-am', 'drop view');
+CREATE VIEW vw2 AS SELECT 2 AS two;
+UPDATE a SET v = 3;
+SELECT dolt_commit('-am', 'no view again');
+"
+
 oracle "commit_amend_message_only" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
