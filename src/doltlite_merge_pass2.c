@@ -337,6 +337,34 @@ int mergeIndexColumnGoneFrom(
                               mergeIndexColSurvives, pzColumn);
 }
 
+/* Whether the merged index zIndex would name a column of zTable that the
+** side not supplying its text dropped. Dolt drops such an index with the
+** column. Our text is the merged one unless only theirs changed it. */
+int mergeIndexOverGoneColumn(
+  SchemaEntry *aAnc, int nAnc,
+  SchemaEntry *aOurs, int nOurs,
+  SchemaEntry *aTheirs, int nTheirs,
+  const char *zIndex,
+  const char *zTable
+){
+  SchemaEntry *pAncTbl = findSchemaEntry(aAnc, nAnc, zTable);
+  SchemaEntry *pOurTbl = findSchemaEntry(aOurs, nOurs, zTable);
+  SchemaEntry *pTheirTbl = findSchemaEntry(aTheirs, nTheirs, zTable);
+  SchemaEntry *pOur = findSchemaEntry(aOurs, nOurs, zIndex);
+  SchemaEntry *pTheir = findSchemaEntry(aTheirs, nTheirs, zIndex);
+  int bOurs;
+  if( !pOur || !pAncTbl || !pOurTbl || !pTheirTbl ) return 0;
+  bOurs = !findSchemaEntry(aAnc, nAnc, zIndex)
+       || schemaEntryChangedByName(aAnc, nAnc, aOurs, nOurs, zIndex);
+  if( bOurs ){
+    return mergeIndexColumnGoneFrom(pOur->zSql, pAncTbl->zSql,
+                                    pTheirTbl->zSql, 0);
+  }
+  return pTheir
+      && schemaEntryChangedByName(aAnc, nAnc, aTheirs, nTheirs, zIndex)
+      && mergeIndexColumnGoneFrom(pTheir->zSql, pAncTbl->zSql,
+                                  pOurTbl->zSql, 0);
+}
 
 int mergeCatalogPass2(
   sqlite3 *db,
