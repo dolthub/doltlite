@@ -76,4 +76,53 @@ do_execsql_test patch-system.unchanged {
   SELECT count(*) FROM dolt_patch('b','b');
 } {0}
 
+# A table rename re-creates the table's indexes. The DROP INDEX deletes
+# their statistics on replay although both ends hold the same rows.
+reset_db
+proc patch_stat_replay {from to} {
+  execsql "SELECT dolt_reset('--hard','$from')"
+  foreach statement [execsql "
+    SELECT statement FROM dolt_patch('$from','$to') ORDER BY statement_order
+  "] {execsql $statement}
+  set state [execsql {SELECT tbl, idx, stat FROM sqlite_stat1 ORDER BY tbl, idx}]
+  lappend state [execsql "
+    SELECT count(*) FROM dolt_diff_summary('$to','WORKING')
+  "]
+  execsql "SELECT dolt_reset('--hard','$to')"
+  set state
+}
+do_test patch-system.stat-setup {
+  execsql {
+    CREATE TABLE s(id INTEGER PRIMARY KEY, v INT);
+    CREATE INDEX sv ON s(v);
+    CREATE TABLE k(id INTEGER PRIMARY KEY, v INT);
+    CREATE INDEX kv ON k(v);
+    INSERT INTO s VALUES(1,1),(2,2);
+    INSERT INTO k VALUES(1,1),(2,2),(3,3);
+    ANALYZE;
+    SELECT dolt_commit('-Am','sa');
+    SELECT dolt_tag('sa');
+    ALTER TABLE s RENAME TO s2;
+    SELECT dolt_commit('-Am','sb');
+    SELECT dolt_tag('sb');
+  }
+  execsql {SELECT count(*) FROM dolt_patch('sa','sb') WHERE table_name='sqlite_stat1'}
+} {4}
+do_test patch-system.stat-rename-forward {
+  patch_stat_replay sa sb
+} {k kv {3 1} s sv {2 1} 0}
+do_test patch-system.stat-rename-reverse {
+  patch_stat_replay sb sa
+} {k kv {3 1} s sv {2 1} 0}
+execsql {
+  SELECT dolt_reset('--hard','sb');
+  INSERT INTO k VALUES(4,4);
+  SELECT dolt_commit('-Am','sc');
+  SELECT dolt_tag('sc');
+}
+do_execsql_test patch-system.stat-untouched-without-drop {
+  SELECT count(*) FROM dolt_patch('sb','sc');
+  SELECT count(*) FROM dolt_patch('sb','sc') WHERE table_name='sqlite_stat1';
+} {1 0}
+
 finish_test
