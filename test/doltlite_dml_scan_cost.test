@@ -244,4 +244,23 @@ do_test lookup-cost-qpsg-param-limit-plan {
   set plan
 } {{SCAN r USING INDEX r_g}}
 
+# On a stock-format file equal-cost index ties are broken as stock SQLite
+# breaks them, so the plan and the bytes written match stock.
+forcedelete dml-scan-oracle.db
+sqlite3 oracle {file:dml-scan-oracle.db?doltlite_engine=sqlite} -uri 1
+oracle eval {
+  CREATE TABLE t(k1 NOT NULL, k2 TEXT NOT NULL, c0 TEXT, PRIMARY KEY(k1,k2))
+    WITHOUT ROWID;
+  CREATE INDEX i8 ON t(k2, k1);
+  CREATE INDEX i32 ON t(k1||'q');
+  INSERT INTO t(k1,k2) VALUES ('',12),(3.0,8);
+}
+do_test stock-file-tie-delete-plan {
+  dml_scan_plan oracle {DELETE FROM t WHERE 1}
+} {{SCAN t USING INDEX i32}}
+do_test stock-file-tie-update-plan {
+  dml_scan_plan oracle {UPDATE t SET c0=1 WHERE 1}
+} {{SCAN t USING INDEX i32}}
+oracle close
+
 finish_test
