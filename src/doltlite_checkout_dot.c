@@ -395,6 +395,10 @@ int doltliteResumeForeignKeys(sqlite3 *db, int wasOn, int rc){
   return rc;
 }
 
+int doltliteCheckoutSqlIsVtab(const char *zSql){
+  return zSql && sqlite3_strnicmp(zSql, "CREATE VIRTUAL", 14)==0;
+}
+
 /* Replace table zName with zSourceSql (or drop it when zSourceSql is 0),
 ** keeping the working triggers and sqlite_sequence row a recreated table
 ** would otherwise lose. */
@@ -407,6 +411,10 @@ int doltliteCheckoutRebuildTable(
   KeptDependents kept;
   int rc = SQLITE_OK;
   memset(&kept, 0, sizeof(kept));
+  /* A shadow table belongs to its virtual table, which was restored or
+  ** dropped before it and took the shadow along. */
+  if( sqlite3ShadowTableName(db, zName, "main") ) return SQLITE_OK;
+  if( !sqlite3FindTable(db, zName, "main") ) hasCurrent = 0;
   if( hasCurrent ){
     char *zDrop;
     if( zSourceSql ){

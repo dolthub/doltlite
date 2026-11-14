@@ -585,6 +585,66 @@ check "rtree_refusal_keeps_first_merge" "1001" \
   "$(run_sql "SELECT group_concat(id) FROM rt2 WHERE id>1000;" "$DBR")"
 rm -f "$DBR"
 
+# A checkout naming a vtab together with its shadow tables, as "." does.
+DBC=$(mktemp -u)
+CO_BASE="CREATE TABLE base(id INTEGER PRIMARY KEY);
+INSERT INTO base VALUES(1);
+CREATE VIRTUAL TABLE ft USING fts5(body);
+INSERT INTO ft VALUES('hello world');
+CREATE VIRTUAL TABLE rt USING rtree(id, x0, x1);
+INSERT INTO rt VALUES(1, 0, 1);
+SELECT dolt_commit('-Am','c0');"
+CO_CHECK="SELECT count(*) FROM ft WHERE ft MATCH 'hello';
+SELECT count(*) FROM rt;
+SELECT count(*) FROM base;
+SELECT count(*) FROM dolt_status;
+INSERT INTO ft(ft) VALUES('integrity-check');
+SELECT rtreecheck('rt');
+PRAGMA integrity_check;"
+i=0
+for args in "'.'" "'HEAD','--','.'" "'ft','ft_data','rt','base'" \
+            "'ft_data','rt_node','ft','rt','base'"; do
+  i=$((i+1))
+  rm -f "$DBC"
+  run_sql "$CO_BASE
+DROP TABLE ft; DROP TABLE rt; DELETE FROM base;" "$DBC" > /dev/null
+  check "checkout_dropped_vtab_$i" "0
+1
+1
+1
+0
+ok
+ok" "$(run_sql "SELECT dolt_checkout($args);
+$CO_CHECK" "$DBC")"
+done
+rm -f "$DBC"
+run_sql "$CO_BASE
+DROP TABLE ft;
+CREATE VIRTUAL TABLE ft USING fts5(title, body);
+INSERT INTO ft VALUES('t','other');" "$DBC" > /dev/null
+check "checkout_redefined_vtab" "0
+CREATE VIRTUAL TABLE ft USING fts5(body)
+1
+1
+1
+0
+ok
+ok" "$(run_sql "SELECT dolt_checkout('.');
+SELECT sql FROM sqlite_master WHERE name='ft';
+$CO_CHECK" "$DBC")"
+rm -f "$DBC"
+run_sql "CREATE TABLE base(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am','c0');
+CREATE VIRTUAL TABLE ft USING fts5(body);
+INSERT INTO ft VALUES('hello world');
+SELECT dolt_commit('-Am','c1');" "$DBC" > /dev/null
+check "checkout_older_commit_drops_vtab" "0
+base
+ok" "$(run_sql "SELECT dolt_checkout('HEAD~1','--','.');
+SELECT group_concat(name) FROM sqlite_master;
+PRAGMA integrity_check;" "$DBC")"
+rm -f "$DBC"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then

@@ -1695,6 +1695,7 @@ int doltliteCheckoutTables(
 );
 int doltliteSuspendForeignKeys(sqlite3 *db, int *pWasOn);
 int doltliteResumeForeignKeys(sqlite3 *db, int wasOn, int rc);
+int doltliteCheckoutSqlIsVtab(const char *zSql);
 int doltliteCheckoutRebuildTable(sqlite3 *db, const char *zName,
                                  int hasCurrent, const char *zSourceSql);
 int doltliteCheckoutDot(
