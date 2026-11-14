@@ -166,4 +166,36 @@ foreach {before after} {{INTEGER PRIMARY KEY} {TEXT PRIMARY KEY}
   } {0 0}
 }
 
+# A table that is not in HEAD yet has an empty blame, as in Dolt.
+reset_db
+execsql {
+  CREATE TABLE base(id INT PRIMARY KEY);
+  SELECT dolt_commit('-Am','base');
+  CREATE TABLE n(id INT PRIMARY KEY, a INT);
+  INSERT INTO n VALUES(1,1);
+}
+do_execsql_test blame-working-new-table.unstaged {
+  SELECT count(*) FROM dolt_blame_n;
+} {0}
+do_test blame-working-new-table.staged {
+  execsql {SELECT dolt_add('.')}
+  execsql {SELECT count(*) FROM dolt_blame_n}
+} {0}
+do_test blame-working-new-table.reopen {
+  db close
+  sqlite3 db test.db
+  execsql {SELECT count(*) FROM dolt_blame_n}
+} {0}
+do_test blame-working-new-table.committed {
+  execsql {SELECT dolt_commit('-m','add n')}
+  execsql {SELECT id, message FROM dolt_blame_n}
+} {1 {add n}}
+do_catchsql_test blame-working-new-table.missing {
+  SELECT * FROM dolt_blame_nosuch;
+} {1 {no such table: dolt_blame_nosuch}}
+do_test blame-working-new-table.dropped {
+  execsql {DROP TABLE n}
+  catchsql {SELECT * FROM dolt_blame_n}
+} {1 {no such table: dolt_blame_n}}
+
 finish_test
