@@ -7,6 +7,7 @@ median_n() {
 }
 
 SAMPLES=7
+GC_SAMPLES=3
 
 ms_now() {
   python3 -c 'import time; print(int(time.time()*1000))'
@@ -30,6 +31,24 @@ run_ms_median() {
   done
   median_n "${samples[@]}"
 }
+
+run_gc_ms_median() (
+  local db="$1" snapshot="$1.gc-snapshot"
+  local samples=() t i
+  trap 'rm -f "$snapshot"' EXIT
+  # GC rewrites the image, so each sample needs the same pre-GC input.
+  cp "$db" "$snapshot" || return $?
+  for (( i=0; i<GC_SAMPLES; i++ )); do
+    if [ "$i" -gt 0 ]; then
+      cp "$snapshot" "$db" || return $?
+    fi
+    t=$(run_ms "$db" "SELECT dolt_gc();") || return $?
+    samples+=("$t")
+  done
+  t=$(median_n "${samples[@]}")
+  echo "  dolt_gc ${db##*/}: samples [$(IFS=,; echo "${samples[*]}")]ms; median ${t}ms" >&2
+  echo "$t"
+)
 
 if [ "${1:-}" = "--self-test" ]; then
   failures=0
@@ -233,7 +252,7 @@ for idx in 0 1 2 3; do
   "$DOLTLITE" "$db" "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, val INTEGER, pad TEXT);" > /dev/null
   seed_rows "$db" "$n" "x, 'row_'||x, x%1000, printf('%032d', x)"
   "$DOLTLITE" "$db" "SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed');" > /dev/null
-  T_GC[$idx]=$(run_ms "$db" "SELECT dolt_gc();")
+  T_GC[$idx]=$(run_gc_ms_median "$db")
 
   T_OPEN[$idx]=$(run_ms_median "$db" "SELECT 1;")
 
