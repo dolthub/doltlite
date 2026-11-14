@@ -529,6 +529,13 @@ static int csCommitToFile(
         }
         if( rc!=SQLITE_OK ) goto commit_done;
       }
+      if( bRecord && !cs->isBuffer ){
+        int bSealed = 0;
+        rc = csTailHasSealedRoot(cs, fileSize, physFileSize, sectorSize,
+                                 &bSealed);
+        if( rc==SQLITE_OK && bSealed ) rc = SQLITE_BUSY_SNAPSHOT;
+        if( rc!=SQLITE_OK ) goto commit_done;
+      }
       if( bRecord ){
         rc = sqlite3OsTruncate(cs->file.pFile, fileSize);
         if( rc!=SQLITE_OK ) goto commit_done;

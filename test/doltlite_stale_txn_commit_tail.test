@@ -1,0 +1,85 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# A connection in an open transaction keeps the end of the file it began
+# with. A version-control command inside that transaction commits under the
+# lock without a refresh; it must not take commits that peers appended since
+# for the remains of a failed append and truncate them. The peers still hold
+# their own end of file, and their next commit would land past the hole.
+proc stale_rows {branch} {
+  sqlite3 observer [file normalize test.db]/$branch -readonly 1
+  set r [observer eval {
+    SELECT group_concat(id) FROM (SELECT id FROM w ORDER BY id);
+    PRAGMA integrity_check;
+  }]
+  observer close
+  return $r
+}
+proc stale_setup {} {
+  catch {c1 close}
+  catch {c2 close}
+  reset_db
+  db eval {
+    CREATE TABLE w(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO w VALUES(1,'a');
+    SELECT dolt_commit('-Am','init');
+    SELECT dolt_branch('b1');
+    SELECT dolt_branch('b3');
+    SELECT dolt_checkout('b3');
+  }
+  sqlite3 c1 test.db
+  c1 eval {SELECT dolt_checkout('b1')}
+  sqlite3 c2 test.db
+  c2 eval {SELECT dolt_checkout('b3')}
+}
+
+# A command that persists the session's working set is refused as a stale
+# write. One that only moves refs refreshes them first and goes through.
+foreach {name stale refused} {
+  reset-soft   {SELECT dolt_reset('--soft')} 1
+  reset-hard   {SELECT dolt_reset('--hard')} 1
+  tag          {SELECT dolt_tag('t_stale')} 0
+  branch       {SELECT dolt_branch('nb_stale')} 0
+  add          {SELECT dolt_add('.')} 1
+  commit       {SELECT dolt_commit('--allow-empty','-m','stale')} 1
+} {
+  stale_setup
+  set prefix stale-commit-tail-$name
+  do_test $prefix.run {
+    # The session's branch is deleted and re-created under it, as a peer
+    # that force-moves a branch does; the open transaction pins the old view.
+    c1 eval {SELECT dolt_branch('-D','b3')}
+    db eval BEGIN
+    catchsql {INSERT INTO w VALUES(100,'stale')}
+    c1 eval {
+      SELECT dolt_branch('b3');
+      INSERT INTO w VALUES(10,'b1');
+      SELECT dolt_commit('-Am','m1');
+      INSERT INTO w VALUES(11,'b1'),(12,'b1');
+    }
+    catchsql {SELECT dolt_tag('t_0')}
+    c2 eval {INSERT INTO w VALUES(20,'b3')}
+    c1 eval {INSERT INTO w VALUES(13,'b1'); SELECT dolt_reset('--soft')}
+    c2 eval {SELECT dolt_add('w'); SELECT dolt_commit('-m','m2')}
+    set r [lindex [catchsql $stale] 0]
+    catchsql ROLLBACK
+    c2 eval {BEGIN IMMEDIATE; INSERT INTO w VALUES(21,'b3'); COMMIT}
+    c1 eval {INSERT INTO w VALUES(14,'b1')}
+    c2 eval {
+      INSERT INTO w VALUES(22,'b3');
+      SELECT dolt_add('w');
+      SELECT dolt_commit('-m','m3');
+    }
+    lappend r [c1 eval {PRAGMA integrity_check}] [c2 eval {PRAGMA integrity_check}]
+  } [list $refused ok ok]
+  c1 close
+  c2 close
+  do_test $prefix.b1 {stale_rows b1} {1,10,11,12,13,14 ok}
+  do_test $prefix.b3 {stale_rows b3} {1,20,21,22 ok}
+  do_execsql_test $prefix.recovers {
+    SELECT dolt_reset('--soft');
+    PRAGMA integrity_check;
+  } {0 ok}
+}
+
+finish_test
