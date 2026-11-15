@@ -16,6 +16,9 @@ struct ChunkIndexSpool {
   int nBuffer;
   int nEntry;
   int ready;
+  ProllyHash *aFence;
+  int nFence;
+  int nFenceStep;
   ProllyHash last;
   int aCache[CS_SPOOL_CACHE];
   ChunkIndexEntry aBuffer[CS_SPOOL_BUFFER];
@@ -40,6 +43,7 @@ static int csSpoolOpen(sqlite3_vfs *pVfs, sqlite3_file **ppFile){
 void csIndexSpoolFree(ChunkIndexSpool *p){
   if( !p ) return;
   if( p->pFile ) sqlite3OsCloseFree(p->pFile);
+  sqlite3_free(p->aFence);
   sqlite3_free(p);
 }
 
@@ -151,8 +155,9 @@ static int csSpoolPeek(CsSpoolReader *p, ChunkIndexEntry **pp){
 }
 
 int csIndexSpoolFinish(ChunkIndexSpool *p){
-  int rc = csSpoolFlush(p);
-  int i;
+  int rc, i;
+  if( p->ready ) return SQLITE_OK;
+  rc = csSpoolFlush(p);
   if( rc!=SQLITE_OK ) return rc;
   while( p->nRun>1 ){
     sqlite3_file *pOut = 0;
@@ -210,6 +215,22 @@ int csIndexSpoolFinish(ChunkIndexSpool *p){
     p->nRun = nRun;
   }
   p->nEntry = p->nRun ? (int)((p->iWrite-8)/sizeof(ChunkIndexEntry)) : 0;
+  if( p->nEntry>0 ){
+    int nBlock = (p->nEntry-1)/CS_SPOOL_BLOCK+1;
+    p->nFenceStep = ((nBlock-1)/CS_SPOOL_BUFFER+1)*CS_SPOOL_BLOCK;
+    p->nFence = (p->nEntry-1)/p->nFenceStep+1;
+    p->aFence = sqlite3_malloc64((sqlite3_uint64)p->nFence*sizeof(ProllyHash));
+    if( !p->aFence ) return SQLITE_NOMEM;
+    for(i=0; i<p->nFence; i++){
+      i64 off = 8+(i64)i*p->nFenceStep*sizeof(ChunkIndexEntry);
+      rc = sqlite3OsRead(p->pFile, &p->aFence[i], sizeof(ProllyHash), off);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(p->aFence);
+        p->aFence = 0;
+        return rc;
+      }
+    }
+  }
   for(i=0; i<CS_SPOOL_CACHE; i++) p->aCache[i] = -1;
   p->ready = 1;
   return SQLITE_OK;
@@ -238,8 +259,16 @@ int csIndexSpoolGet(ChunkIndexSpool *p, int i, ChunkIndexEntry *e){
 }
 
 int csIndexSpoolFind(ChunkIndexSpool *p, const ProllyHash *h, int *pi){
-  int lo = 0, hi = p->nEntry-1;
+  int lo = 0, hi = p->nFence-1;
   *pi = -1;
+  while( lo<=hi ){
+    int mid = lo+(hi-lo)/2;
+    if( prollyHashCompare(&p->aFence[mid], h)<=0 ) lo = mid+1;
+    else hi = mid-1;
+  }
+  if( hi<0 ) return SQLITE_OK;
+  lo = hi*p->nFenceStep;
+  hi = lo+MIN(p->nEntry-lo, p->nFenceStep)-1;
   while( lo<=hi ){
     int mid = lo+(hi-lo)/2;
     ChunkIndexEntry e;

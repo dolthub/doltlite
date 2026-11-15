@@ -472,11 +472,40 @@ static void indexTestHash(ProllyHash *h, int i){
   h->data[3] = (u8)i;
 }
 
+static sqlite3_vfs *pSpoolVfs;
+static sqlite3_io_methods spoolMethods;
+static int (*xSpoolRead)(sqlite3_file*, void*, int, sqlite3_int64);
+static int nSpoolRead;
+
+static int spoolRead(sqlite3_file *f, void *buf, int n, sqlite3_int64 off){
+  nSpoolRead++;
+  return xSpoolRead(f, buf, n, off);
+}
+
+static int spoolOpen(
+  sqlite3_vfs *vfs, const char *path, sqlite3_file *f, int flags, int *out
+){
+  int rc = pSpoolVfs->xOpen(pSpoolVfs, path, f, flags, out);
+  (void)vfs;
+  if( rc==SQLITE_OK ){
+    spoolMethods = *f->pMethods;
+    xSpoolRead = spoolMethods.xRead;
+    spoolMethods.xRead = spoolRead;
+    f->pMethods = &spoolMethods;
+  }
+  return rc;
+}
+
 static void test_index_spool(void){
   ChunkIndexSpool *p = 0;
   ChunkIndexEntry e;
+  sqlite3_vfs vfs;
   sqlite3_int64 oldLimit = sqlite3_hard_heap_limit64(sqlite3_memory_used()+512*1024);
-  int i, rc = csIndexSpoolInit(sqlite3_vfs_find(0), &p);
+  int i, maxRead = 0, rc;
+  pSpoolVfs = sqlite3_vfs_find(0);
+  vfs = *pSpoolVfs;
+  vfs.xOpen = spoolOpen;
+  rc = csIndexSpoolInit(&vfs, &p);
   for(i=0; rc==SQLITE_OK && i<80000; i++){
     int key = (int)(((sqlite3_int64)i*7919)%40000);
     indexTestHash(&e.hash, key);
@@ -504,9 +533,61 @@ static void test_index_spool(void){
       if( rc==SQLITE_OK && found!=i ) rc = SQLITE_ERROR;
     }
     check("spool_random_lookup", rc==SQLITE_OK);
+    for(i=0; rc==SQLITE_OK && i<1000; i++){
+      ProllyHash h;
+      int found, before = nSpoolRead;
+      int key = (i*7919)%40000;
+      indexTestHash(&h, key);
+      rc = csIndexSpoolFind(p, &h, &found);
+      if( rc==SQLITE_OK && found!=key ) rc = SQLITE_ERROR;
+      if( nSpoolRead-before>maxRead ) maxRead = nSpoolRead-before;
+    }
+    check("spool_lookup_reads_at_most_one_block", rc==SQLITE_OK && maxRead<=1);
+    printf("spool lookup maximum block reads: %d\n", maxRead);
   }
   csIndexSpoolFree(p);
   sqlite3_hard_heap_limit64(oldLimit);
+}
+
+static void test_index_spool_bounds(void){
+  static const int sizes[] = {0, 1, 127, 128, 129, 1048576, 1048577};
+  int k;
+  for(k=0; k<(int)(sizeof(sizes)/sizeof(sizes[0])); k++){
+    ChunkIndexSpool *p = 0;
+    ChunkIndexEntry e;
+    ProllyHash h;
+    sqlite3_int64 oldLimit = sqlite3_hard_heap_limit64(sqlite3_memory_used()+512*1024);
+    int i, found, n = sizes[k];
+    int rc = csIndexSpoolInit(sqlite3_vfs_find(0), &p);
+    for(i=0; rc==SQLITE_OK && i<n; i++){
+      indexTestHash(&e.hash, 2*i+2);
+      e.offset = i+CHUNK_MANIFEST_SIZE;
+      e.size = i;
+      rc = csIndexSpoolAdd(p, &e);
+    }
+    if( rc==SQLITE_OK ) rc = csIndexSpoolFinish(p);
+    if( rc==SQLITE_OK ) rc = csIndexSpoolFinish(p);
+    if( rc==SQLITE_OK && csIndexSpoolCount(p)!=n ) rc = SQLITE_ERROR;
+    for(i=0; rc==SQLITE_OK && i<n; i+=MAX(1,n/127)){
+      indexTestHash(&h, 2*i+2);
+      rc = csIndexSpoolFind(p, &h, &found);
+      if( rc==SQLITE_OK && found!=i ) rc = SQLITE_ERROR;
+      indexTestHash(&h, 2*i+1);
+      if( rc==SQLITE_OK ) rc = csIndexSpoolFind(p, &h, &found);
+      if( rc==SQLITE_OK && found!=-1 ) rc = SQLITE_ERROR;
+    }
+    if( rc==SQLITE_OK && n>0 ){
+      indexTestHash(&h, 2*n);
+      rc = csIndexSpoolFind(p, &h, &found);
+      if( rc==SQLITE_OK && found!=n-1 ) rc = SQLITE_ERROR;
+    }
+    indexTestHash(&h, 2*n+3);
+    if( rc==SQLITE_OK ) rc = csIndexSpoolFind(p, &h, &found);
+    if( rc==SQLITE_OK && found!=-1 ) rc = SQLITE_ERROR;
+    check("spool_edge_and_missing_hashes_with_512kib", rc==SQLITE_OK);
+    csIndexSpoolFree(p);
+    sqlite3_hard_heap_limit64(oldLimit);
+  }
 }
 
 #define LARGE_INDEX_COUNT (67108864+129)
@@ -654,6 +735,7 @@ int main(void){
   test_gc_allocation_budget();
   test_gc_live_allocation_budget();
   test_index_spool();
+  test_index_spool_bounds();
   test_index_over_2gib();
 
   printf("\ngc_tip_survival_test: %d passed, %d failed\n", nPass, nFail);
