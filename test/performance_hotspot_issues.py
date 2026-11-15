@@ -30,6 +30,7 @@ def api(repo, endpoint, payload=None, paginate=False):
 
 def read_issues(repo):
     issues = {}
+    comments = {}
     for label in LABELS:
         pages = api(repo, f'issues?state=all&labels={label}&per_page=100', paginate=True)
         for page in pages:
@@ -37,15 +38,24 @@ def read_issues(repo):
                 if 'pull_request' in issue:
                     continue
                 body = issue.get('body') or ''
+                labels = [x['name'] for x in issue['labels']]
+                markers = body
+                if 'known-performance-hotspot' in labels and issue.get('comments', 0):
+                    number = issue['number']
+                    if number not in comments:
+                        comment_pages = api(repo, f'issues/{number}/comments?per_page=100', paginate=True)
+                        comments[number] = '\n'.join(comment.get('body') or ''
+                                                    for page in comment_pages for comment in page)
+                    markers += '\n' + comments[number]
                 bundles = []
                 for match in BUNDLE.finditer(body):
                     bundles.append(json.loads(match[1]))
                 issues[issue['number']] = {
                     'number': issue['number'], 'url': issue['html_url'], 'state': issue['state'],
                     'state_reason': issue.get('state_reason'),
-                    'labels': [x['name'] for x in issue['labels']],
-                    'fingerprints': MARKER.findall(body), 'families': FAMILY.findall(body),
-                    'statements': STATEMENT.findall(body), 'bundles': bundles,
+                    'labels': labels,
+                    'fingerprints': MARKER.findall(markers), 'families': FAMILY.findall(markers),
+                    'statements': STATEMENT.findall(markers), 'bundles': bundles,
                 }
     return list(issues.values())
 
