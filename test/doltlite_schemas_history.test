@@ -113,4 +113,44 @@ do_test schemas-history.empty {
   }
 } {0 0 0}
 
+# One argument is a revision range, as for every other dolt_diff_<table>.
+reset_db
+execsql {
+  CREATE TABLE t(id INT PRIMARY KEY, a INT);
+  CREATE VIEW v1 AS SELECT id FROM t;
+  SELECT dolt_commit('-Am','c1');
+  SELECT dolt_branch('feat');
+  CREATE VIEW v2 AS SELECT a FROM t;
+  SELECT dolt_commit('-Am','c2');
+  SELECT dolt_checkout('feat');
+  CREATE VIEW v3 AS SELECT 3;
+  SELECT dolt_commit('-Am','f1');
+  SELECT dolt_checkout('main');
+  CREATE VIEW w AS SELECT 4;
+}
+do_execsql_test schemas-history.range-two-dot {
+  SELECT to_name, from_name, diff_type
+    FROM dolt_diff_dolt_schemas('feat..main') ORDER BY 3, 1;
+} {v2 {} added {} v3 removed}
+do_execsql_test schemas-history.range-three-dot {
+  SELECT to_name, from_name, diff_type
+    FROM dolt_diff_dolt_schemas('feat...main');
+} {v2 {} added}
+do_execsql_test schemas-history.range-working {
+  SELECT to_name, to_commit, diff_type
+    FROM dolt_diff_dolt_schemas('HEAD..WORKING');
+  SELECT to_name, diff_type
+    FROM dolt_diff_dolt_schemas WHERE from_ref='feat..main' ORDER BY 2, 1;
+} {w WORKING added v2 added {} removed}
+foreach {tn arg msg} {
+  no-range  'main'         {dolt_diff_dolt_schemas requires both a from and a to revision}
+  bad-ref   'nope..main'   {dolt_diff_dolt_schemas: ref not found: nope}
+  bad-range 'a..b..c'      {dolt_diff_dolt_schemas: invalid revision range 'a..b..c'}
+  null      NULL           {dolt_diff_dolt_schemas: invalid argument: NULL}
+} {
+  do_catchsql_test schemas-history.range-$tn "
+    SELECT * FROM dolt_diff_dolt_schemas($arg)
+  " [list 1 $msg]
+}
+
 finish_test
