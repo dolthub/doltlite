@@ -493,6 +493,39 @@ class IssueTests(unittest.TestCase):
             self.assertTrue(call.kwargs['paginate'])
         self.assertEqual(result[0]['bundles'], [self.bundle])
 
+    def test_known_issue_comment_markers_are_paginated_and_read_once(self):
+        item = {'number': 10, 'html_url': self.issue['url'], 'state': 'open',
+                'labels': [{'name': label} for label in issues.LABELS], 'comments': 2,
+                'body': issues.issue_body(self.report, self.record, self.bundle, 'run')}
+        comments = [[{'body': '<!-- doltlite-hotspot:' + 'b'*24 + ' -->\n'
+                             '<!-- doltlite-hotspot-family:' + 'f'*24 + ' -->'}],
+                    [{'body': '<!-- doltlite-hotspot-statement:' + 'c'*24 + ' -->'}]]
+        def response(repo, endpoint, **kwargs):
+            return comments if '/comments?' in endpoint else [[item]]
+        with patch.object(issues, 'api', side_effect=response) as api:
+            result = issues.read_issues('repo/name')
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['fingerprints'], [self.fp, 'b'*24])
+        self.assertEqual(result[0]['families'], ['f'*24])
+        self.assertEqual(result[0]['statements'], ['c'*24])
+        self.assertEqual(result[0]['bundles'], [self.bundle])
+        self.assertEqual(api.call_count, 3)
+        api.assert_any_call('repo/name', 'issues/10/comments?per_page=100', paginate=True)
+        self.assertEqual(issues.disposition('e'*24, result, 'f'*24)[0], 'duplicate')
+        self.assertEqual(issues.disposition('e'*24, result, statement='c'*24)[0], 'duplicate')
+        result[0].update(state='closed', state_reason='completed')
+        self.assertEqual(issues.disposition('e'*24, result, statement='c'*24)[0], 'regression')
+
+    def test_unaccepted_issue_comments_do_not_supply_known_markers(self):
+        item = {'number': 10, 'html_url': self.issue['url'], 'state': 'open',
+                'labels': [{'name': 'performance-hotspot'}], 'comments': 1,
+                'body': issues.issue_body(self.report, self.record, self.bundle, 'run')}
+        with patch.object(issues, 'api', return_value=[[item]]) as api:
+            result = issues.read_issues('repo/name')
+        self.assertEqual(api.call_count, 2)
+        self.assertEqual(result[0]['families'], [])
+        self.assertEqual(result[0]['statements'], [])
+
     def test_publish_is_idempotent_and_api_failures_do_not_create_issues(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
