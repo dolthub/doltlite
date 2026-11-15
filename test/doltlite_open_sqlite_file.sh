@@ -2,6 +2,7 @@
 
 DOLTLITE="${1:-./doltlite}"
 . "$(dirname "$0")/lib/doltlite_integrity_common.sh"
+. "$(dirname "$0")/lib/stop_process.sh"
 SQLITE3="${SQLITE3:-$(command -v sqlite3 2>/dev/null || echo /usr/bin/sqlite3)}"
 TMP=$(mktemp -d)
 trap "rm -rf $TMP" EXIT
@@ -340,7 +341,7 @@ for i in $(seq 1 100); do
   [ -s "$HJ/f.db-journal" ] && [ "$(wc -c < "$HJ/f.db" | tr -d ' ')" -gt 400000 ] && break
   sleep 0.1
 done
-kill -9 $hj_pid 2>/dev/null; wait $hj_pid 2>/dev/null
+stop_process $hj_pid KILL 2>/dev/null; wait $hj_pid 2>/dev/null
 exec 9>&-
 want_eq "J13_crash_left_a_hot_journal" "$([ -s "$HJ/f.db-journal" ] && echo yes || echo no)" "yes"
 cp "$HJ/f.db-journal" "$HJ/journal.snap"

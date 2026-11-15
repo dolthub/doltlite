@@ -7,6 +7,7 @@
 # for malformed framing, unknown endpoints, or 5xx responses, and the suite
 # fails if a single one is recorded.
 set -uo pipefail
+. "$(dirname "$0")/lib/stop_process.sh"
 
 DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
 REMOTESRV="${2:-$(dirname "$0")/../build/doltlite-remotesrv}"
@@ -24,8 +25,8 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/doltlite-remotesrv-http.XXXXXX")"
 SRV_PID=""
 PROXY_PID=""
 cleanup() {
-  [ -n "$PROXY_PID" ] && { kill "$PROXY_PID" 2>/dev/null || true; wait "$PROXY_PID" 2>/dev/null || true; }
-  [ -n "$SRV_PID" ] && { kill "$SRV_PID" 2>/dev/null || true; wait "$SRV_PID" 2>/dev/null || true; }
+  [ -n "$PROXY_PID" ] && { stop_process "$PROXY_PID" 2>/dev/null || true; wait "$PROXY_PID" 2>/dev/null || true; }
+  [ -n "$SRV_PID" ] && { stop_process "$SRV_PID" 2>/dev/null || true; wait "$SRV_PID" 2>/dev/null || true; }
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -524,7 +525,7 @@ check "local db intact after failed push" "$a_users
 echo "--- 11. server death mid-stream: error now, success after restart ---"
 result=$("$DB" "$A" "SELECT dolt_pull('origin','main');" 2>&1 | tail -1)
 check "A syncs with origin before the outage" "0" "$result"
-kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null || true; SRV_PID=""
+stop_process "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null || true; SRV_PID=""
 "$DB" "$A" "INSERT INTO blobs VALUES(2, randomblob(2097152)); SELECT dolt_commit('-am','blob2');" >/dev/null 2>&1
 result=$("$DB" "$A" "SELECT dolt_push('origin','main');" 2>&1)
 check_match "push with server down errors" "ERROR|Error|error|failed|refused" "$result"

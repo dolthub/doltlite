@@ -5,6 +5,7 @@ DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
 REMOTESRV="${2:-$(dirname "$0")/../build/doltlite-remotesrv}"
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 . "$(dirname "$0")/lib/openssl_test_cert.sh"
+. "$(dirname "$0")/lib/stop_process.sh"
 CC="${CC:-cc}"
 TMP=$(mktemp -d)
 SRV_PID=""
@@ -12,16 +13,16 @@ PRIVATE_PID=""
 PUBLIC_PID=""
 cleanup() {
   if [ -n "$PUBLIC_PID" ]; then
-    kill "$PUBLIC_PID" 2>/dev/null || true
+    stop_process "$PUBLIC_PID" 2>/dev/null || true
     wait "$PUBLIC_PID" 2>/dev/null || true
   fi
   if [ -n "$PRIVATE_PID" ]; then
-    kill "$PRIVATE_PID" 2>/dev/null || true
+    stop_process "$PRIVATE_PID" 2>/dev/null || true
     wait "$PRIVATE_PID" 2>/dev/null || true
     PRIVATE_PID=""
   fi
   if [ -n "$SRV_PID" ]; then
-    kill "$SRV_PID" 2>/dev/null || true
+    stop_process "$SRV_PID" 2>/dev/null || true
     wait "$SRV_PID" 2>/dev/null || true
     SRV_PID=""
   fi
@@ -72,7 +73,7 @@ for _ in $(seq 1 100); do
   sleep 0.1
 done
 if kill -0 "$PRIVATE_PID" 2>/dev/null; then
-  kill "$PRIVATE_PID" 2>/dev/null || true
+  stop_process "$PRIVATE_PID" 2>/dev/null || true
   wait "$PRIVATE_PID" 2>/dev/null || true
   echo "FAIL: server accepted a private credential in --auth-keys"
   exit 1
@@ -162,7 +163,7 @@ if [ -n "$PORT2" ]; then
 else
   echo "  SKIP: plaintext server did not start"
 fi
-kill "$SRV2_PID" 2>/dev/null || true
+stop_process "$SRV2_PID" 2>/dev/null || true
 wait "$SRV2_PID" 2>/dev/null || true
 
 echo "=== 6. Multi-chunk clone integrity (batched /get-chunks) ==="

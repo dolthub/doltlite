@@ -1,5 +1,6 @@
 #!/bin/bash
 . "$(dirname "$0")/lib/doltlite_test_common.sh"
+. "$(dirname "$0")/lib/stop_process.sh"
 
 echo "=== Doltlite Branch Tests (Per-Session) ==="
 echo ""
@@ -339,7 +340,7 @@ if [ "$PRESENCE22" = 1 ]; then
   run_test_error_match "rename_in_use_branch_refused" \
     "SELECT dolt_branch('-m','feat','feat2');" "branches in use in other sessions" "$DB22"
   run_test "delete_in_use_branch_keeps_rows" "SELECT count(*) FROM t;" "2" "$DB22/feat"
-  kill "$HOLDER22" 2>/dev/null
+  stop_process "$HOLDER22" 2>/dev/null
   wait "$HOLDER22" 2>/dev/null
   rm -f "$READY22"
   # Nobody has it checked out: uncommitted changes alone do not refuse -d.
