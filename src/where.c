@@ -2832,6 +2832,7 @@ static void whereLoopAdjustCost(const WhereLoop *p, WhereLoop *pTemplate){
 
 #ifdef DOLTLITE_PROLLY
 static int whereLoopIsNoBetter(const WhereLoop*, const WhereLoop*);
+static int doltliteTableOnProlly(WhereInfo*, Table*);
 #endif
 /*
 ** Search the list of WhereLoops in *ppPrev looking for one that can be
@@ -2902,6 +2903,8 @@ static WhereLoop **whereLoopFindLesser(
        && p->nOut==pTemplate->nOut
        && ((p->wsFlags|pTemplate->wsFlags)&(WHERE_IDX_ONLY|WHERE_EXPRIDX))==0
        && !whereLoopIsNoBetter(pTemplate, p)
+       && doltliteTableOnProlly(pWC->pWInfo,
+              pWC->pWInfo->pTabList->a[pTemplate->iTab].pSTab)
       ){
         int i;
         int iCur = pWC->pWInfo->pTabList->a[pTemplate->iTab].iCursor;
