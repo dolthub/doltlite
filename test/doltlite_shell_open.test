@@ -95,5 +95,24 @@ ifcapable mem5 {
   } {0 feat}
 }
 
+# 6: opening a stock WAL file without naming a branch asks the database
+# nothing, so the idle shell holds no lock on it, like the sqlite3 shell.
+# Leaving WAL mode needs every other connection to be off the file.
+forcedelete wal.db
+sqlite3 dbs file:wal.db?doltlite_engine=sqlite -uri 1
+dbs eval {
+  PRAGMA journal_mode=wal;
+  CREATE TABLE t(id INTEGER PRIMARY KEY, who TEXT);
+  INSERT INTO t VALUES(1,'seed');
+}
+dbs close
+do_test 6.1 {
+  catchcmd "wal.db" \
+    ".shell \"$CLI\" file:wal.db?doltlite_engine=sqlite \"PRAGMA journal_mode=delete\""
+} {0 delete}
+do_test 6.2 {
+  catchcmd "wal.db" {SELECT who FROM t;}
+} {0 seed}
+
 sqlite3 db test.db
 finish_test
