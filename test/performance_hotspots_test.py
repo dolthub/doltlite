@@ -115,7 +115,7 @@ class HotspotTests(unittest.TestCase):
 
     def test_main_measures_only_remaining_workloads_for_all_arms(self):
         paths = list((hotspots.TEST_DIR/'performance-hotspot-corpus').glob('*.json'))
-        self.assertEqual(paths, [])
+        self.assertEqual([path.name for path in paths], ['issue_4955.json'])
 
         with tempfile.TemporaryDirectory() as directory:
             result = Path(directory) / "results.tsv"
@@ -199,13 +199,22 @@ class HotspotTests(unittest.TestCase):
                           "Pending Edit Map"):
                 self.assertIn(f"### {title}\n", report.getvalue())
             for call in measure_retained.call_args_list:
-                self.assertEqual(call.args[2], [])
+                self.assertEqual(len(call.args[2]), 1)
+                name, bundle, databases = call.args[2][0]
+                self.assertEqual(name, 'retained_4955_pending_edits_wide_text_update_memory_x1')
+                self.assertEqual(bundle['issue'], 4955)
+                self.assertEqual(bundle['category'], 'pending_edits')
+                self.assertTrue(bundle['profile']['memory'])
+                self.assertGreater(bundle['profile']['rows'] * bundle['profile']['payload'], 64 << 20)
+                self.assertEqual(set(databases.values()), {':memory:'})
             self.assertNotIn('https://github.com/dolthub/doltlite/issues/3427', report.getvalue())
+            self.assertIn('[wide_text_update_memory_x1](https://github.com/dolthub/doltlite/issues/4955)',
+                          report.getvalue())
             self.assertEqual(report.getvalue().count('### Pending Edit Map\n'), 1)
             self.assertNotIn('retained_3427_', result.read_text())
-            self.assertEqual(len(result.read_text().splitlines()), 24)
+            self.assertEqual(len(result.read_text().splitlines()), 25)
             self.assertIn('add_column\tadd_column_default\t100000\t100000\n', result.read_text())
-            self.assertEqual(len(raw.read_text().splitlines()), 49)
+            self.assertEqual(len(raw.read_text().splitlines()), 51)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:
