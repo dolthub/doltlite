@@ -20,18 +20,18 @@ esac
 "$cc_bin" -w -O1 -c "$build_dir/sqlite3.c" -o "$tmp/amalgamation.o"
 
 case "$("$cc_bin" -dumpmachine)" in
-  x86_64*|amd64*) kernel=blake3_hash_many_sse2 ;;
-  aarch64*|arm64*) kernel=blake3_hash_many_neon ;;
-  *) kernel= ;;
+  x86_64*|amd64*) kernels="sse2 sse41 avx2 avx512" ;;
+  aarch64*|arm64*) kernels="neon" ;;
+  *) kernels= ;;
 esac
-if [ -n "$kernel" ]; then
-  nm "$tmp/amalgamation.o" > "$tmp/symbols"
-  if ! grep -q "T _\{0,1\}$kernel\$" "$tmp/symbols"; then
-    echo "FAIL: amalgamation does not define $kernel" >&2
+nm "$tmp/amalgamation.o" > "$tmp/symbols"
+for kernel in $kernels; do
+  if ! grep -q "T _\{0,1\}blake3_hash_many_$kernel\$" "$tmp/symbols"; then
+    echo "FAIL: amalgamation does not define blake3_hash_many_$kernel" >&2
     exit 1
   fi
-  echo "  PASS  amalgamation defines $kernel"
-fi
+  echo "  PASS  amalgamation defines blake3_hash_many_$kernel"
+done
 
 "$cc_bin" -w -O1 -I"$repo_dir/ext/blake3" "$repo_dir/test/blake3_kat.c" \
   "$tmp/amalgamation.o" "${libs[@]}" -o "$tmp/blake3_kat"

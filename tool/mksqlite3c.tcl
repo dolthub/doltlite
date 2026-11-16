@@ -727,13 +727,59 @@ proc emit_doltlite_storage_block {} {
 # dependency order used by PROLLY_OBJS in main.mk. prolly_btree.c/pager_shim.c
 # define the unprefixed sqlite3Btree*/sqlite3Pager* entry points and call the
 # orig_* engine emitted above for ATTACH'd stock databases.
-# The kernels share one translation unit with blake3_portable.c here, so the
-# static helpers both define are renamed for the span of the kernel. Their
-# intrinsics headers are written out directly: copy_file drops an #include it
-# has already seen, and the earlier sighting sits inside another file's #if.
-proc emit_blake3_baseline_kernels {} {
+# The kernels share one translation unit here, and they define static helpers
+# and macros under the same names, so each kernel's are renamed or undefined
+# for its own span. A kernel above the baseline ISA is compiled under a
+# per-function target, which stands in for the per-file -m flag. A kernel's
+# own prototype of another kernel's entry point is dropped: blake3_impl.h has
+# already declared it, and under clang a redeclaration carrying this span's
+# target would turn that function into a multiversioned one.
+proc emit_blake3_kernel {file suffix guard target} {
   global out srcdir
-  set sse2_statics {round_fn compress_pre}
+  set in [open $srcdir/$file rb]
+  set text [read $in]
+  close $in
+  regsub -all -line {^#include "[^"]*"\s*$} $text {} text
+  regsub -all {(^|\n)void blake3_\w+\([^{};]*\);} $text {\1} text
+  set statics {}
+  foreach {all name} [regexp -all -inline -line \
+      {^(?:INLINE|static)\s[^(;=]*?\m(\w+)\(} $text] {
+    if {[lsearch -exact $statics $name]<0} {lappend statics $name}
+  }
+  set macros {}
+  foreach {all name} [regexp -all -inline -line {^#define\s+(\w+)} $text] {
+    if {[lsearch -exact $macros $name]<0} {lappend macros $name}
+  }
+  section_comment "Begin file $file"
+  puts $out "#if $guard"
+  if {$target ne ""} {
+    puts $out "#if defined(__clang__)"
+    puts $out "#pragma clang attribute push(__attribute__((target(\"$target\"))), apply_to=function)"
+    puts $out "#elif defined(__GNUC__)"
+    puts $out "#pragma GCC push_options"
+    puts $out "#pragma GCC target(\"$target\")"
+    puts $out "#endif"
+  }
+  foreach name $statics {
+    puts $out "#define $name ${name}_$suffix"
+  }
+  puts -nonewline $out $text
+  foreach name [concat $statics $macros] {
+    puts $out "#undef $name"
+  }
+  if {$target ne ""} {
+    puts $out "#if defined(__clang__)"
+    puts $out "#pragma clang attribute pop"
+    puts $out "#elif defined(__GNUC__)"
+    puts $out "#pragma GCC pop_options"
+    puts $out "#endif"
+  }
+  puts $out "#endif /* $guard */"
+  section_comment "End of $file"
+}
+
+proc emit_blake3_kernels {} {
+  global out
   puts $out "#ifndef DOLTLITE_BLAKE3_SIMD_OBJECTS"
   puts $out "#if defined(__clang__)"
   puts $out "#pragma clang diagnostic push"
@@ -742,20 +788,12 @@ proc emit_blake3_baseline_kernels {} {
   puts $out "#pragma GCC diagnostic push"
   puts $out "#pragma GCC diagnostic ignored \"-Wdeclaration-after-statement\""
   puts $out "#endif"
-  puts $out "#if !defined(BLAKE3_NO_SSE2)"
-  foreach name $sse2_statics {
-    puts $out "#define $name ${name}_sse2"
-  }
-  puts $out "#include <immintrin.h>"
-  copy_file $srcdir/blake3_sse2.c
-  foreach name $sse2_statics {
-    puts $out "#undef $name"
-  }
-  puts $out "#endif /* !BLAKE3_NO_SSE2 */"
-  puts $out "#if BLAKE3_USE_NEON == 1"
-  puts $out "#include <arm_neon.h>"
-  copy_file $srcdir/blake3_neon.c
-  puts $out "#endif /* BLAKE3_USE_NEON */"
+  emit_blake3_kernel blake3_sse2.c sse2 "!defined(BLAKE3_NO_SSE2)" ""
+  emit_blake3_kernel blake3_sse41.c sse41 "!defined(BLAKE3_NO_SSE41)" "sse4.1"
+  emit_blake3_kernel blake3_avx2.c avx2 "!defined(BLAKE3_NO_AVX2)" "avx2"
+  emit_blake3_kernel blake3_avx512.c avx512 "!defined(BLAKE3_NO_AVX512)" \
+    "avx512f,avx512vl"
+  emit_blake3_kernel blake3_neon.c neon "BLAKE3_USE_NEON == 1" ""
   puts $out "#if defined(__clang__)"
   puts $out "#pragma clang diagnostic pop"
   puts $out "#elif defined(__GNUC__)"
@@ -767,22 +805,39 @@ proc emit_blake3_baseline_kernels {} {
 proc emit_doltlite_engine_block {} {
   global out srcdir seen_hdr doltlite_external_remotes
   section_comment "doltlite: BEGIN prolly engine + version-control layer"
-  # blake3: a single-TU amalgamation cannot pass the per-file -m{sse4.1,avx}
-  # flags those kernels need, so they stay off here. SSE2 on x86-64 and NEON
-  # on little-endian aarch64 are part of the baseline ISA and need no flags,
-  # so their kernels are emitted below and the dispatcher selects them.
+  # blake3: a single-TU amalgamation cannot pass the per-file -m flags the
+  # make build gives each SIMD source. SSE2 on x86-64 and NEON on
+  # little-endian aarch64 are baseline ISA and need none. SSE4.1, AVX2 and
+  # AVX-512 are compiled under a per-function target where the compiler has
+  # one (GCC, clang) or needs none (MSVC), and stay off elsewhere. The
+  # dispatcher picks among whatever is compiled in at run time.
   # DOLTLITE_BLAKE3_SIMD_OBJECTS says every SIMD source is compiled
   # separately and linked in, so nothing is disabled or emitted inline.
   puts $out "#ifndef DOLTLITE_BLAKE3_SIMD_OBJECTS"
+  puts $out "#if (defined(__x86_64__) || defined(_M_X64)) && !defined(_M_ARM64EC)"
+  puts $out "#if defined(__clang__)"
+  puts $out "#if defined(_MSC_VER) || __clang_major__<9"
+  puts $out "#define DOLTLITE_BLAKE3_BASELINE_ONLY 1"
+  puts $out "#endif"
+  puts $out "#elif defined(__GNUC__)"
+  puts $out "#if __GNUC__<7"
+  puts $out "#define DOLTLITE_BLAKE3_BASELINE_ONLY 1"
+  puts $out "#endif"
+  puts $out "#elif !defined(_MSC_VER) || _MSC_VER<1920"
+  puts $out "#define DOLTLITE_BLAKE3_BASELINE_ONLY 1"
+  puts $out "#endif"
+  puts $out "#else"
+  puts $out "#define DOLTLITE_BLAKE3_BASELINE_ONLY 1"
+  puts $out "#ifndef BLAKE3_NO_SSE2"
+  puts $out "#define BLAKE3_NO_SSE2 1"
+  puts $out "#endif"
+  puts $out "#endif"
+  puts $out "#ifdef DOLTLITE_BLAKE3_BASELINE_ONLY"
   foreach m {BLAKE3_NO_SSE41 BLAKE3_NO_AVX2 BLAKE3_NO_AVX512} {
     puts $out "#ifndef $m"
     puts $out "#define $m 1"
     puts $out "#endif"
   }
-  puts $out "#if !(defined(__x86_64__) || defined(_M_X64)) || defined(_M_ARM64EC)"
-  puts $out "#ifndef BLAKE3_NO_SSE2"
-  puts $out "#define BLAKE3_NO_SSE2 1"
-  puts $out "#endif"
   puts $out "#endif"
   puts $out "#endif /* DOLTLITE_BLAKE3_SIMD_OBJECTS */"
   copy_file $srcdir/doltlite_parse.h
@@ -943,7 +998,7 @@ proc emit_doltlite_engine_block {} {
     if {$f in {doltlite_creds.c doltlite_tls.c}} continue
     if {$doltlite_external_remotes && $f in $doltlite_remote_sources} continue
     copy_file $srcdir/$f
-    if {$f eq "blake3_dispatch.c"} emit_blake3_baseline_kernels
+    if {$f eq "blake3_dispatch.c"} emit_blake3_kernels
   }
   set doltlite_unemitted {}
   foreach path [lsort [concat \
