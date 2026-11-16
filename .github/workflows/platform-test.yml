@@ -380,6 +380,7 @@ jobs:
         bash ../test/remotesrv_auth_body_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
         bash ../test/remotesrv_http_partial_failure_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
         bash ../test/remotesrv_http_force_push_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
+        bash ../test/remotesrv_pre_receive_test.sh ./doltlite.exe ./doltlite-remotesrv.exe
         bash ../test/amalgamation_windows_source_test.sh ./sqlite3.c
         bash ../test/amalgamation_http_remote_test.sh .
         bash ../test/amalgamation_https_remote_test.sh .
@@ -442,6 +443,11 @@ jobs:
     - name: HTTP remote force push tests
       if: matrix.platform == 'macos'
       run: cd build && bash ../test/remotesrv_http_force_push_test.sh ./doltlite ./doltlite-remotesrv
+      timeout-minutes: 5
+
+    - name: Remotesrv pre-receive hook tests
+      if: matrix.platform == 'macos'
+      run: cd build && bash ../test/remotesrv_pre_receive_test.sh ./doltlite ./doltlite-remotesrv
       timeout-minutes: 5
 
     - name: Amalgamation excludes remote implementation

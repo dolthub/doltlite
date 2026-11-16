@@ -29,6 +29,17 @@ static void usage(const char *prog){
     "                  Omitted, requests are\n"
     "                  unauthenticated and may read and push.\n"
     "  --audience AUD  Expected JWT audience (required with --auth-keys)\n"
+    "  --pre-receive PROGRAM\n"
+    "                  Run PROGRAM before a push moves a branch or tag. It\n"
+    "                  gets DOLTLITE_DB, DOLTLITE_DB_PATH, DOLTLITE_REF,\n"
+    "                  DOLTLITE_BRANCH, DOLTLITE_TAG, DOLTLITE_OLD,\n"
+    "                  DOLTLITE_NEW, DOLTLITE_FORCE and DOLTLITE_KID in its\n"
+    "                  environment. Exit status 0 accepts the push; anything\n"
+    "                  else refuses it and the first line PROGRAM printed is\n"
+    "                  sent to the client. Not available on Windows.\n"
+    "  --pre-receive-timeout-ms MS\n"
+    "                  Refuse the push when PROGRAM runs longer (default:\n"
+    "                  10000).\n"
     "  --timeout-ms MS Body and TLS-handshake budget in ms (default: 30000).\n"
     "                  Request headers must arrive within 2s, or this\n"
     "                  value when it is shorter.\n"
@@ -46,11 +57,13 @@ static void onSignal(int sig){ (void)sig; g_stop = 1; }
 
 int main(int argc, char **argv){
   DoltliteServeOpts o;
+  DoltliteServeHooks hooks;
   DoltliteServer *srv;
   const char *zBindShown;
   int i;
 
   memset(&o, 0, sizeof(o));
+  memset(&hooks, 0, sizeof(hooks));
   o.port = 8080;
 
   for(i=1; i<argc; i++){
@@ -73,6 +86,17 @@ int main(int argc, char **argv){
       o.authKeysDir = argv[++i];
     }else if( strcmp(argv[i], "--audience")==0 && i+1<argc ){
       o.audience = argv[++i];
+    }else if( strcmp(argv[i], "--pre-receive")==0 && i+1<argc ){
+      hooks.zPreReceive = argv[++i];
+    }else if( strcmp(argv[i], "--pre-receive-timeout-ms")==0 && i+1<argc ){
+      uint64_t value;
+      const char *z = argv[++i];
+      if( doltliteParseDecimal(z, z+strlen(z), 0x7fffffff, &value)
+          !=DOLTLITE_DECIMAL_OK || value==0 ){
+        fprintf(stderr, "Error: invalid pre-receive timeout: %s\n", z);
+        return 1;
+      }
+      hooks.preReceiveTimeoutMs = (int)value;
     }else if( strcmp(argv[i], "--timeout-ms")==0 && i+1<argc ){
       uint64_t value;
       const char *z = argv[++i];
@@ -113,10 +137,21 @@ int main(int argc, char **argv){
       "dolt_creds('export', ...)\n");
     return 1;
   }
+#ifdef _WIN32
+  if( hooks.zPreReceive ){
+    fprintf(stderr, "Error: --pre-receive is not supported on Windows\n");
+    return 1;
+  }
+#endif
+  if( hooks.preReceiveTimeoutMs && !hooks.zPreReceive ){
+    fprintf(stderr,
+            "Error: --pre-receive-timeout-ms requires --pre-receive\n");
+    return 1;
+  }
   signal(SIGINT, onSignal);
   signal(SIGTERM, onSignal);
 
-  srv = doltliteServeAsyncOpts(&o);
+  srv = doltliteServeAsyncHooks(&o, &hooks);
   if( !srv ){
     fprintf(stderr, "Error: failed to start server "
                     "(check DIRECTORY, --cert/--key, and the bind address)\n");

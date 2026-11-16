@@ -23,6 +23,17 @@ int doltliteServerPort(DoltliteServer *s){ (void)s; return 0; }
 #include "doltlite_net.h"
 #include <pthread.h>
 #include <errno.h>
+#ifndef _WIN32
+#include <signal.h>
+#include <sys/wait.h>
+#ifdef __APPLE__
+/* A shared library on macOS cannot name environ directly. */
+#include <crt_externs.h>
+#define environ (*_NSGetEnviron())
+#else
+extern char **environ;
+#endif
+#endif
 
 /* Workers run only after the request has arrived. Idle connections
 ** stay on the accept thread, so they cannot fill the pool. */
@@ -32,6 +43,8 @@ int doltliteServerPort(DoltliteServer *s){ (void)s; return 0; }
 #define SERVER_DEFAULT_TIMEOUT_MS 30000
 #define SERVER_HEADER_TIMEOUT_MS 2000
 #define SERVER_DB_CACHE_MAX 32
+#define SERVER_HOOK_TIMEOUT_MS 10000
+#define SERVER_HOOK_MESSAGE_MAX 160
 #define MAX_HEADER_SIZE 4096
 
 typedef struct DoltliteWorkerArg DoltliteWorkerArg;
@@ -112,6 +125,8 @@ struct DoltliteServer {
   DoltliteTlsServer *tls;
   char *authKeysDir;
   char *audience;
+  char *zPreReceive;
+  int preReceiveTimeoutMs;
 
   RemoteDbHandle *pDbCache;
   int nDbCache;
@@ -821,6 +836,209 @@ static void handleGetRefs(ChunkStore *pStore, DoltliteConn *fd){
   sqlite3_free(pData);
 }
 
+/* One ref update put to the pre-receive hook. zMessage carries the first
+** line the hook printed back to the client. */
+typedef struct RemoteSrvHook RemoteSrvHook;
+struct RemoteSrvHook {
+  const char *zProgram;
+  int timeoutMs;
+  const char *zDb;
+  const char *zDbPath;
+  const char *zKid;
+  char zMessage[SERVER_HOOK_MESSAGE_MAX];
+};
+
+#ifndef _WIN32
+/* Runs the hook with azEnv and waits for it. Returns 0 only when it exited
+** with status 0 inside the time allowed: a hook that cannot be started,
+** crashes or hangs must not let the push through. */
+static int remoteSrvRunHook(RemoteSrvHook *p, char **azEnv){
+  char *azArg[2];
+  char aBuf[512];
+  struct pollfd pfd;
+  int aIn[2], aOut[2];
+  int nMsg = 0, bLine = 0, bEof = 0, status = 0, bReaped = 0;
+  i64 deadline = monotonicMs() + p->timeoutMs;
+  pid_t pid;
+
+  if( pipe(aIn)!=0 ) return 1;
+  if( pipe(aOut)!=0 ){
+    close(aIn[0]);
+    close(aIn[1]);
+    return 1;
+  }
+  azArg[0] = (char*)p->zProgram;
+  azArg[1] = 0;
+  pid = fork();
+  if( pid<0 ){
+    close(aIn[0]);
+    close(aIn[1]);
+    close(aOut[0]);
+    close(aOut[1]);
+    return 1;
+  }
+  if( pid==0 ){
+    /* Only async-signal-safe calls from here: other threads of the server
+    ** may have held any lock at the fork. */
+    int fd;
+    setpgid(0, 0);
+    dup2(aIn[0], 0);
+    dup2(aOut[1], 1);
+    for(fd=3; fd<1024; fd++) close(fd);
+    execve(p->zProgram, azArg, azEnv);
+    _exit(127);
+  }
+  close(aIn[0]);
+  close(aIn[1]);
+  close(aOut[1]);
+  pfd.fd = aOut[0];
+  pfd.events = POLLIN;
+  while( !bEof ){
+    i64 left = deadline - monotonicMs();
+    int n;
+    if( left<=0 ) break;
+    pfd.revents = 0;
+    n = doltlitePoll(&pfd, 1, (int)(left>1000 ? 1000 : left));
+    if( n<0 && errno!=EINTR ) break;
+    if( n<=0 ) continue;
+    n = (int)read(aOut[0], aBuf, sizeof(aBuf));
+    if( n<0 && errno==EINTR ) continue;
+    if( n<=0 ){
+      bEof = 1;
+    }else{
+      int i;
+      for(i=0; i<n && !bLine; i++){
+        char c = aBuf[i];
+        if( c=='\n' || c=='\r' ){
+          bLine = 1;
+        }else if( nMsg<SERVER_HOOK_MESSAGE_MAX-1 ){
+          /* The message goes into a JSON string unescaped. */
+          if( c=='"' ) c = '\'';
+          if( c=='\\' ) c = '/';
+          p->zMessage[nMsg++] = (c>=0x20 && c<0x7f) ? c : ' ';
+        }
+      }
+    }
+  }
+  close(aOut[0]);
+  p->zMessage[nMsg] = 0;
+  while( !bReaped ){
+    pid_t r = waitpid(pid, &status, WNOHANG);
+    if( r==pid ){
+      bReaped = 1;
+    }else if( r<0 && errno!=EINTR ){
+      return 1;
+    }else if( monotonicMs()>=deadline ){
+      kill(-pid, SIGKILL);
+      kill(pid, SIGKILL);
+      while( waitpid(pid, &status, 0)<0 && errno==EINTR ){}
+      sqlite3_snprintf(sizeof(p->zMessage), p->zMessage,
+                       "pre-receive hook timed out");
+      return 1;
+    }else{
+      sqlite3_sleep(5);
+    }
+  }
+  return !(WIFEXITED(status) && WEXITSTATUS(status)==0);
+}
+
+/* Asks the hook about the update of zRef that installing pBlob would make.
+** The caller holds the store lock, so the old commit reported is the one
+** the install replaces. SQLITE_AUTH refuses the push. */
+static int remoteSrvPreReceive(
+  ChunkStore *pStore,
+  RemoteSrvHook *p,
+  const char *zRef,
+  int bForce,
+  const u8 *pBlob,
+  int nBlob
+){
+  static const char *const azOwn[] = {
+    "DOLTLITE_DB=", "DOLTLITE_DB_PATH=", "DOLTLITE_REF=", "DOLTLITE_BRANCH=",
+    "DOLTLITE_TAG=", "DOLTLITE_OLD=", "DOLTLITE_NEW=", "DOLTLITE_FORCE=",
+    "DOLTLITE_KID="
+  };
+  const char *zName = zRef + (zRef[0]==':');
+  int bTag = strncmp(zName, "tag:", 4)==0 && zName[4];
+  ChunkStore view;
+  ProllyHash oldHash, newHash;
+  char zOld[PROLLY_HASH_SIZE*2+1];
+  char zNew[PROLLY_HASH_SIZE*2+1];
+  char *azSet[ArraySize(azOwn)];
+  char **azEnv = 0;
+  int nEnv = 0, nKeep = 0, i, j, rc;
+
+  if( bTag ) zName += 4;
+  memset(&view, 0, sizeof(view));
+  memset(azSet, 0, sizeof(azSet));
+  zOld[0] = 0;
+  zNew[0] = 0;
+  rc = chunkStoreLoadRefsFromBlob(&view, pBlob, nBlob);
+  if( rc!=SQLITE_OK ){
+    chunkStoreClose(&view);
+    return rc;
+  }
+  if( (bTag ? chunkStoreFindTag(pStore, zName, &oldHash)
+            : chunkStoreFindBranch(pStore, zName, &oldHash))==SQLITE_OK ){
+    doltliteHashToHex(&oldHash, zOld);
+  }
+  if( (bTag ? chunkStoreFindTag(&view, zName, &newHash)
+            : chunkStoreFindBranch(&view, zName, &newHash))==SQLITE_OK ){
+    doltliteHashToHex(&newHash, zNew);
+  }
+  chunkStoreClose(&view);
+
+  azSet[0] = sqlite3_mprintf("DOLTLITE_DB=%s", p->zDb);
+  azSet[1] = sqlite3_mprintf("DOLTLITE_DB_PATH=%s", p->zDbPath);
+  azSet[2] = sqlite3_mprintf("DOLTLITE_REF=refs/%s/%s",
+                             bTag ? "tags" : "heads", zName);
+  azSet[3] = sqlite3_mprintf("DOLTLITE_BRANCH=%s", bTag ? "" : zName);
+  azSet[4] = sqlite3_mprintf("DOLTLITE_TAG=%s", bTag ? zName : "");
+  azSet[5] = sqlite3_mprintf("DOLTLITE_OLD=%s", zOld);
+  azSet[6] = sqlite3_mprintf("DOLTLITE_NEW=%s", zNew);
+  azSet[7] = sqlite3_mprintf("DOLTLITE_FORCE=%d", bForce ? 1 : 0);
+  azSet[8] = sqlite3_mprintf("DOLTLITE_KID=%s", p->zKid ? p->zKid : "");
+  while( environ && environ[nEnv] ) nEnv++;
+  azEnv = sqlite3_malloc64(
+      (sqlite3_uint64)(nEnv + ArraySize(azOwn) + 1)*sizeof(char*));
+  rc = azEnv ? SQLITE_OK : SQLITE_NOMEM;
+  for(i=0; i<ArraySize(azOwn); i++){
+    if( !azSet[i] ) rc = SQLITE_NOMEM;
+  }
+  if( rc==SQLITE_OK ){
+    for(i=0; i<nEnv; i++){
+      for(j=0; j<ArraySize(azOwn); j++){
+        if( strncmp(environ[i], azOwn[j], strlen(azOwn[j]))==0 ) break;
+      }
+      if( j==ArraySize(azOwn) ) azEnv[nKeep++] = environ[i];
+    }
+    for(i=0; i<ArraySize(azOwn); i++) azEnv[nKeep++] = azSet[i];
+    azEnv[nKeep] = 0;
+    p->zMessage[0] = 0;
+    if( remoteSrvRunHook(p, azEnv) ){
+      if( !p->zMessage[0] ){
+        sqlite3_snprintf(sizeof(p->zMessage), p->zMessage,
+                         "push refused by the pre-receive hook");
+      }
+      rc = SQLITE_AUTH;
+    }
+  }
+  for(i=0; i<ArraySize(azOwn); i++) sqlite3_free(azSet[i]);
+  sqlite3_free(azEnv);
+  return rc;
+}
+#else
+static int remoteSrvPreReceive(
+  ChunkStore *pStore, RemoteSrvHook *p, const char *zRef, int bForce,
+  const u8 *pBlob, int nBlob
+){
+  (void)pStore; (void)zRef; (void)bForce; (void)pBlob; (void)nBlob;
+  sqlite3_snprintf(sizeof(p->zMessage), p->zMessage,
+                   "pre-receive hooks are not supported on Windows");
+  return SQLITE_AUTH;
+}
+#endif
+
 static int remoteSrvPersistRefs(ChunkStore *pStore){
   int rc = chunkStoreSerializeRefs(pStore);
   if( rc==SQLITE_OK ) rc = remoteSrvCommitPending(pStore);
@@ -830,7 +1048,7 @@ static int remoteSrvPersistRefs(ChunkStore *pStore){
 
 static int remoteSrvApplyRefsLocked(ChunkStore *pStore, const char *zBranch,
                                     int bForce, const u8 *pBody, int nBody,
-                                    int *pbMissing){
+                                    int *pbMissing, RemoteSrvHook *pHook){
   ProllyHash refsHash;
   int rc;
 
@@ -847,6 +1065,9 @@ static int remoteSrvApplyRefsLocked(ChunkStore *pStore, const char *zBranch,
     rc = doltliteValidateRefsTargetGraph(pStore, pBody, nBody, zBranch,
                                          pbMissing);
     if( rc==SQLITE_CORRUPT && *pbMissing ) rc = SQLITE_BUSY_SNAPSHOT;
+  }
+  if( rc==SQLITE_OK && pHook ){
+    rc = remoteSrvPreReceive(pStore, pHook, zBranch, bForce, pBody, nBody);
   }
   if( rc!=SQLITE_OK ){
     chunkStoreRollback(pStore);
@@ -876,13 +1097,13 @@ static int remoteSrvLockAndForceRefresh(ChunkStore *pStore){
 
 static int remoteSrvApplyRefs(ChunkStore *pStore, const char *zBranch,
                               int bForce, const u8 *pBody, int nBody,
-                              int *pbMissing){
+                              int *pbMissing, RemoteSrvHook *pHook){
   int rc;
   if( nBody<=0 ) return SQLITE_ERROR;
   rc = remoteSrvLockAndForceRefresh(pStore);
   if( rc!=SQLITE_OK ) return rc;
   rc = remoteSrvApplyRefsLocked(pStore, zBranch, bForce, pBody, nBody,
-                                pbMissing);
+                                pbMissing, pHook);
   chunkStoreUnlock(pStore);
   return rc;
 }
@@ -894,7 +1115,8 @@ static int remoteSrvApplyRefsIf(
   int bForce,
   const u8 *pBody,
   int nBody,
-  int *pbMissing
+  int *pbMissing,
+  RemoteSrvHook *pHook
 ){
   u8 *pMerged = 0;
   int nMerged = 0;
@@ -908,11 +1130,11 @@ static int remoteSrvApplyRefsIf(
                                       pbMissing);
     if( rc==SQLITE_OK ){
       rc = remoteSrvApplyRefsLocked(pStore, zBranch, bForce, pMerged, nMerged,
-                                    pbMissing);
+                                    pbMissing, pHook);
     }
   }else{
     rc = remoteSrvApplyRefsLocked(pStore, zBranch, bForce, pBody, nBody,
-                                  pbMissing);
+                                  pbMissing, pHook);
   }
   sqlite3_free(pMerged);
   chunkStoreUnlock(pStore);
@@ -939,7 +1161,13 @@ static int remoteSrvParseRefsPrefix(
 
 /* 409 + BUSY_SNAPSHOT keeps older clients retrying; the code tells newer
 ** ones to rescan below chunks this server already holds. */
-static void remoteSrvSendRefsError(DoltliteConn *fd, int rc, int bMissing){
+static void remoteSrvSendRefsError(
+  DoltliteConn *fd, int rc, int bMissing, RemoteSrvHook *pHook
+){
+  if( rc==SQLITE_AUTH && pHook ){
+    sendStructuredError(fd, 403, "Forbidden", "rejected", rc, pHook->zMessage);
+    return;
+  }
   if( rc==SQLITE_BUSY_SNAPSHOT && bMissing ){
     sendStructuredError(fd, 409, "Conflict", "missing_chunks", rc,
                         "remote is missing chunks of the pushed history; "
@@ -950,7 +1178,7 @@ static void remoteSrvSendRefsError(DoltliteConn *fd, int rc, int bMissing){
 }
 
 static void handlePutRefs(ChunkStore *pStore, DoltliteConn *fd,
-                          const u8 *pBody, int nBody){
+                          const u8 *pBody, int nBody, RemoteSrvHook *pHook){
   int bMissing = 0;
   char *zBranch = 0;
   int bForce = 0;
@@ -966,10 +1194,11 @@ static void handlePutRefs(ChunkStore *pStore, DoltliteConn *fd,
     return;
   }
 
-  rc = remoteSrvApplyRefs(pStore, zBranch, bForce, pRest, nRest, &bMissing);
+  rc = remoteSrvApplyRefs(pStore, zBranch, bForce, pRest, nRest, &bMissing,
+                          pHook);
   sqlite3_free(zBranch);
   if( rc!=SQLITE_OK ){
-    remoteSrvSendRefsError(fd, rc, bMissing);
+    remoteSrvSendRefsError(fd, rc, bMissing, pHook);
     return;
   }
 
@@ -977,7 +1206,7 @@ static void handlePutRefs(ChunkStore *pStore, DoltliteConn *fd,
 }
 
 static void handlePutRefsIf(ChunkStore *pStore, DoltliteConn *fd,
-                            const u8 *pBody, int nBody){
+                            const u8 *pBody, int nBody, RemoteSrvHook *pHook){
   int bMissing = 0;
   ProllyHash expectedRefsHash;
   char *zBranch = 0;
@@ -997,10 +1226,10 @@ static void handlePutRefsIf(ChunkStore *pStore, DoltliteConn *fd,
 
   rc = remoteSrvApplyRefsIf(pStore, &expectedRefsHash, zBranch, bForce,
                             pRest + PROLLY_HASH_SIZE,
-                            nRest - PROLLY_HASH_SIZE, &bMissing);
+                            nRest - PROLLY_HASH_SIZE, &bMissing, pHook);
   sqlite3_free(zBranch);
   if( rc!=SQLITE_OK ){
-    remoteSrvSendRefsError(fd, rc, bMissing);
+    remoteSrvSendRefsError(fd, rc, bMissing, pHook);
     return;
   }
 
@@ -1025,7 +1254,8 @@ int doltliteRemoteSrvApplyScopedRefsForTest(
   int nBody
 ){
   int bMissing = 0;
-  return remoteSrvApplyRefs(pStore, zBranch, bForce, pBody, nBody, &bMissing);
+  return remoteSrvApplyRefs(pStore, zBranch, bForce, pBody, nBody, &bMissing,
+                            0);
 }
 
 int doltliteRemoteSrvApplyRefsForTest(
@@ -1270,6 +1500,11 @@ static void handleRequest(
   int contentRc = 0;
   sqlite3_vfs *pVfs;
   RemoteSrvPending pending;
+  RemoteSrvHook hook;
+  RemoteSrvHook *pHook = 0;
+  char zAuth[1024];
+  char zHookPath[1024];
+  char *zKid = 0;
 
   if( requestStatus!=200 ){
     if( requestStatus==401 ) sendUnauthorized(fd);
@@ -1280,7 +1515,7 @@ static void handleRequest(
   rc = parseRequestHeaders(zPrefix, nPrefix, nHeader,
                            zMethod, sizeof(zMethod),
                            zPath, sizeof(zPath),
-                           0, 0,
+                           zAuth, sizeof(zAuth),
                            &contentLength, &contentRc);
   if( rc!=0 || contentRc!=0 || contentLength!=nBody ){
     sendBadRequest(fd);
@@ -1319,8 +1554,32 @@ static void handleRequest(
     return;
   }
 
+  if( pSrv->zPreReceive && strcmp(zMethod, "PUT")==0 ){
+    /* The hook is told which key pushed. The accept thread only kept the
+    ** verdict, so the token is read again for its key id. */
+    if( pSrv->authKeysDir
+     && doltliteCredsVerifyBearer(zAuth, pSrv->audience, pSrv->authKeysDir,
+                                  (long)time(NULL), &zKid)!=0 ){
+      sqlite3_free(zKid);
+      sendUnauthorized(fd);
+      return;
+    }
+    memset(&hook, 0, sizeof(hook));
+    hook.zProgram = pSrv->zPreReceive;
+    hook.timeoutMs = pSrv->preReceiveTimeoutMs;
+    hook.zDb = zDbName;
+    hook.zDbPath = zDbPath;
+    if( pVfs->xFullPathname(pVfs, zDbPath, sizeof(zHookPath), zHookPath)
+          ==SQLITE_OK ){
+      hook.zDbPath = zHookPath;
+    }
+    hook.zKid = zKid;
+    pHook = &hook;
+  }
+
   rc = remoteDbAcquire(pSrv, zDbPath, !isReadOnlyEndpoint, &pHandle);
   if( rc!=SQLITE_OK ){
+    sqlite3_free(zKid);
     sendSqliteError(fd, rc);
     return;
   }
@@ -1353,9 +1612,9 @@ static void handleRequest(
     }
   }else if( strcmp(zMethod, "PUT")==0 ){
     if( strcmp(zEndpoint, "refs")==0 ){
-      handlePutRefs(pStore, fd, pBody, nBody);
+      handlePutRefs(pStore, fd, pBody, nBody, pHook);
     }else if( strcmp(zEndpoint, "refs-if")==0 ){
-      handlePutRefsIf(pStore, fd, pBody, nBody);
+      handlePutRefsIf(pStore, fd, pBody, nBody, pHook);
     }else{
       sendNotFound(fd);
     }
@@ -1365,6 +1624,7 @@ static void handleRequest(
 
   remotesrvPending = 0;
   remoteDbRelease(pSrv, pHandle);
+  sqlite3_free(zKid);
   if( pending.bFail ){
     sqlite3_free(pending.pMsg);
     sendSqliteError(fd, SQLITE_NOMEM);
@@ -1951,6 +2211,8 @@ static void serverCleanup(DoltliteServer *pSrv){
   pSrv->authKeysDir = 0;
   sqlite3_free(pSrv->audience);
   pSrv->audience = 0;
+  sqlite3_free(pSrv->zPreReceive);
+  pSrv->zPreReceive = 0;
   sqlite3_free(pSrv->aPending);
   pSrv->aPending = 0;
   if( pSrv->condInit ){
@@ -2011,7 +2273,10 @@ static void *serverThreadEntry(void *pArg){
   return 0;
 }
 
-DoltliteServer *doltliteServeAsyncOpts(const DoltliteServeOpts *o){
+DoltliteServer *doltliteServeAsyncHooks(
+  const DoltliteServeOpts *o,
+  const DoltliteServeHooks *pHooks
+){
   DoltliteServer *pSrv;
   int rc;
 
@@ -2023,6 +2288,18 @@ DoltliteServer *doltliteServeAsyncOpts(const DoltliteServeOpts *o){
     sqlite3_free(pSrv);
     return 0;
   }
+  if( pHooks && pHooks->zPreReceive && pHooks->zPreReceive[0] ){
+    pSrv->zPreReceive = dupStr(pHooks->zPreReceive);
+    pSrv->preReceiveTimeoutMs = pHooks->preReceiveTimeoutMs>0
+        ? pHooks->preReceiveTimeoutMs : SERVER_HOOK_TIMEOUT_MS;
+    if( !pSrv->zPreReceive ){
+      serverRequestStop(pSrv);
+      serverJoinWorkers(pSrv);
+      serverCleanup(pSrv);
+      sqlite3_free(pSrv);
+      return 0;
+    }
+  }
 
   if( pthread_create(&pSrv->thread, 0, serverThreadEntry, pSrv)!=0 ){
     serverRequestStop(pSrv);
@@ -2033,6 +2310,10 @@ DoltliteServer *doltliteServeAsyncOpts(const DoltliteServeOpts *o){
   }
 
   return pSrv;
+}
+
+DoltliteServer *doltliteServeAsyncOpts(const DoltliteServeOpts *o){
+  return doltliteServeAsyncHooks(o, 0);
 }
 
 DoltliteServer *doltliteServeAsync(const char *zDir, int port,
