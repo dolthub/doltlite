@@ -7,7 +7,6 @@ median_n() {
 }
 
 SAMPLES=7
-GC_SAMPLES=3
 
 ms_now() {
   python3 -c 'import time; print(int(time.time()*1000))'
@@ -32,23 +31,24 @@ run_ms_median() {
   median_n "${samples[@]}"
 }
 
-run_gc_ms_median() (
-  local db="$1" snapshot="$1.gc-snapshot"
-  local samples=() t i
-  trap 'rm -f "$snapshot"' EXIT
-  # GC rewrites the image, so each sample needs the same pre-GC input.
-  cp "$db" "$snapshot" || return $?
-  for (( i=0; i<GC_SAMPLES; i++ )); do
-    if [ "$i" -gt 0 ]; then
-      cp "$snapshot" "$db" || return $?
-    fi
-    t=$(run_ms "$db" "SELECT dolt_gc();") || return $?
-    samples+=("$t")
-  done
-  t=$(median_n "${samples[@]}")
-  echo "  dolt_gc ${db##*/}: samples [$(IFS=,; echo "${samples[*]}")]ms; median ${t}ms" >&2
-  echo "$t"
-)
+# GC's wall-clock ends in a sync of the rewritten image, which hosted runners
+# throttle by image size, so it is reported and its work is gated instead:
+# the engine counters are exact and identical on every machine.
+# Prints "<wall ms> <chunks read> <bytes verified>".
+run_gc_counted() {
+  local db="$1" t0 t1 out stats
+  t0=$(ms_now)
+  out=$("$DOLTLITE" "$db" "SELECT dolt_gc();
+    SELECT 'gc-work '||(SELECT value FROM dolt_engine_stats WHERE name='chunk_read')
+         ||' '||(SELECT value FROM dolt_engine_stats WHERE name='verify_bytes');") || return $?
+  t1=$(ms_now)
+  stats=$(printf '%s\n' "$out" | sed -n 's/^gc-work \([0-9][0-9]* [0-9][0-9]*\)$/\1/p')
+  if [ -z "$stats" ]; then
+    echo "dolt_gc reported no engine counters: $out" >&2
+    return 1
+  fi
+  echo "$(( t1 - t0 )) $stats"
+}
 
 if [ "${1:-}" = "--self-test" ]; then
   failures=0
@@ -97,15 +97,15 @@ pass=0
 fail=0
 
 check_ratio() {
-  local desc="$1" num="$2" den="$3" max="$4"
+  local desc="$1" num="$2" den="$3" max="$4" unit="${5-ms}"
   # floor den at 1ms
   local den_floored=$(( den > 0 ? den : 1 ))
   local ratio=$(( (num * 10) / den_floored ))
   if [ "$ratio" -le $(( max * 10 )) ]; then
-    echo "  PASS: $desc (${num}ms / ${den_floored}ms = $((ratio/10)).$((ratio%10))x <= ${max}x)"
+    echo "  PASS: $desc (${num}${unit} / ${den_floored}${unit} = $((ratio/10)).$((ratio%10))x <= ${max}x)"
     pass=$((pass+1))
   else
-    echo "  FAIL: $desc (${num}ms / ${den_floored}ms = $((ratio/10)).$((ratio%10))x > ${max}x)"
+    echo "  FAIL: $desc (${num}${unit} / ${den_floored}${unit} = $((ratio/10)).$((ratio%10))x > ${max}x)"
     fail=$((fail+1))
   fi
 }
@@ -163,6 +163,8 @@ seed_rows() {
 # Depth-independent after head re-confirm; CI spikes to ~16x, gate matches O(n) scan/gc headroom.
 COMMIT_GROWTH_GATE=20
 SESSION_OP_GATE=20
+# Counted work, not time: 10x the rows reads 10x the chunks plus tree overhead.
+GC_WORK_GATE=12
 
 echo "══════════════════════════════════════"
 echo "  Segment A: cost vs history depth"
@@ -245,14 +247,15 @@ echo "════════════════════════�
 echo "  Segment B: per-op cost vs table size (post-gc)"
 echo "══════════════════════════════════════"
 declare -a SIZES=(100000 1000000 10000000 100000000)
-declare -a T_OPEN T_LOOKUP T_COMMIT T_SCAN T_GC T_DIFF
+declare -a T_OPEN T_LOOKUP T_COMMIT T_SCAN T_GC GC_CHUNKS GC_BYTES T_DIFF
 for idx in 0 1 2 3; do
   n=${SIZES[$idx]}
   db="$TMPDIR/size$n"
   "$DOLTLITE" "$db" "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, val INTEGER, pad TEXT);" > /dev/null
   seed_rows "$db" "$n" "x, 'row_'||x, x%1000, printf('%032d', x)"
   "$DOLTLITE" "$db" "SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed');" > /dev/null
-  T_GC[$idx]=$(run_gc_ms_median "$db")
+  gc_out=$(run_gc_counted "$db")
+  read -r T_GC[$idx] GC_CHUNKS[$idx] GC_BYTES[$idx] <<< "$gc_out"
 
   T_OPEN[$idx]=$(run_ms_median "$db" "SELECT 1;")
 
@@ -287,7 +290,7 @@ for idx in 0 1 2 3; do
   check_eq "branch isolation at N=$n" "0|1000" "$wipe_seen|$main_seen"
 
   size_bytes=$(wc -c < "$db" | tr -d ' ')
-  echo "  N=$n: open=${T_OPEN[$idx]}ms lookups400=${T_LOOKUP[$idx]}ms upd500+commit=${T_COMMIT[$idx]}ms scan=${T_SCAN[$idx]}ms gc=${T_GC[$idx]}ms diff=${T_DIFF[$idx]}ms file=$(( size_bytes / 1000000 ))MB"
+  echo "  N=$n: open=${T_OPEN[$idx]}ms lookups400=${T_LOOKUP[$idx]}ms upd500+commit=${T_COMMIT[$idx]}ms scan=${T_SCAN[$idx]}ms gc=${T_GC[$idx]}ms gc_chunks=${GC_CHUNKS[$idx]} gc_bytes=${GC_BYTES[$idx]} diff=${T_DIFF[$idx]}ms file=$(( size_bytes / 1000000 ))MB"
   if [ "$n" -ge 1000000 ]; then
     check_max "structural sharing: bytes/row at N=$n" $(( size_bytes / n )) 150 "B"
   fi
@@ -301,7 +304,8 @@ for step in 1 2 3; do
   check_ratio "400 point lookups, ${hi} vs ${lo} rows" "${T_LOOKUP[$step]}" "${T_LOOKUP[$((step-1))]}" "$SESSION_OP_GATE"
   check_ratio "500-row commit, ${hi} vs ${lo} rows" "${T_COMMIT[$step]}" "${T_COMMIT[$((step-1))]}" "$SESSION_OP_GATE"
   check_ratio "full scan, ${hi} vs ${lo} rows" "${T_SCAN[$step]}" "${T_SCAN[$((step-1))]}" 20
-  check_ratio "dolt_gc, ${hi} vs ${lo} rows" "${T_GC[$step]}" "${T_GC[$((step-1))]}" 20
+  check_ratio "dolt_gc chunks read, ${hi} vs ${lo} rows" "${GC_CHUNKS[$step]}" "${GC_CHUNKS[$((step-1))]}" "$GC_WORK_GATE" ""
+  check_ratio "dolt_gc bytes verified, ${hi} vs ${lo} rows" "${GC_BYTES[$step]}" "${GC_BYTES[$((step-1))]}" "$GC_WORK_GATE" ""
   check_ratio "newest-commit diff, ${hi} vs ${lo} rows" "${T_DIFF[$step]}" "${T_DIFF[$((step-1))]}" 20
 done
 
