@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -uo pipefail
+. "$(dirname "$0")/lib/stop_process.sh"
 
 DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
 REMOTESRV="${2:-$(dirname "$0")/../build/doltlite-remotesrv}"
@@ -12,7 +13,7 @@ fi
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/doltlite-http-force.XXXXXX")"
 SRV_PID=""
 cleanup() {
-  [ -n "$SRV_PID" ] && { kill "$SRV_PID" 2>/dev/null || true; wait "$SRV_PID" 2>/dev/null || true; }
+  [ -n "$SRV_PID" ] && { stop_process "$SRV_PID" 2>/dev/null || true; wait "$SRV_PID" 2>/dev/null || true; }
   rm -rf "$TMP"
 }
 trap cleanup EXIT

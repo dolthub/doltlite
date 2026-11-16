@@ -2,6 +2,7 @@
 # With --auth-keys, a request that has no valid bearer token is rejected
 # from the headers alone. The declared body is not allocated or read.
 set -u
+. "$(dirname "$0")/lib/stop_process.sh"
 
 DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
 REMOTESRV="${2:-$(dirname "$0")/../build/doltlite-remotesrv}"
@@ -12,7 +13,7 @@ SRV_PID=""
 
 cleanup() {
   if [ -n "$SRV_PID" ]; then
-    kill "$SRV_PID" 2>/dev/null || true
+    stop_process "$SRV_PID" 2>/dev/null || true
     wait "$SRV_PID" 2>/dev/null || true
     SRV_PID=""
   fi

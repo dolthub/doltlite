@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+. "$(dirname "$0")/lib/stop_process.sh"
 
 DOLTLITE="${1:?DoltLite binary required}"
 REMOTESRV="${2:?remote server binary required}"
@@ -7,7 +8,7 @@ TMP=$(mktemp -d "${TMPDIR:-/tmp}/doltlite-http-large.XXXXXX")
 SRV_PID=""
 cleanup() {
   if [ -n "$SRV_PID" ]; then
-    kill "$SRV_PID" 2>/dev/null || true
+    stop_process "$SRV_PID" 2>/dev/null || true
     wait "$SRV_PID" 2>/dev/null || true
   fi
   rm -rf "$TMP"

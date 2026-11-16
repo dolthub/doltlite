@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -uo pipefail
+. "$(dirname "$0")/lib/stop_process.sh"
 
 DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
 REMOTESRV="${2:-$(dirname "$0")/../build/doltlite-remotesrv}"
@@ -17,8 +18,8 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/doltlite-http-partial.XXXXXX")"
 SRV_PID=""
 PROXY_PID=""
 cleanup() {
-  [ -n "$PROXY_PID" ] && { kill "$PROXY_PID" 2>/dev/null || true; wait "$PROXY_PID" 2>/dev/null || true; }
-  [ -n "$SRV_PID" ] && { kill "$SRV_PID" 2>/dev/null || true; wait "$SRV_PID" 2>/dev/null || true; }
+  [ -n "$PROXY_PID" ] && { stop_process "$PROXY_PID" 2>/dev/null || true; wait "$PROXY_PID" 2>/dev/null || true; }
+  [ -n "$SRV_PID" ] && { stop_process "$SRV_PID" 2>/dev/null || true; wait "$SRV_PID" 2>/dev/null || true; }
   rm -rf "$TMP"
 }
 trap cleanup EXIT

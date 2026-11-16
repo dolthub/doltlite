@@ -10,6 +10,7 @@ set -uo pipefail
 DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
 REMOTESRV="${2:-$(dirname "$0")/../build/doltlite-remotesrv}"
 . "$(dirname "$0")/lib/openssl_test_cert.sh"
+. "$(dirname "$0")/lib/stop_process.sh"
 
 if [ ! -x "$DOLTLITE" ] || [ ! -x "$REMOTESRV" ]; then
   echo "SKIP: doltlite/doltlite-remotesrv binaries not found ($DOLTLITE, $REMOTESRV)"
@@ -65,7 +66,7 @@ warnings_for() {
     grep -q 'serving' "$out" 2>/dev/null && break
     sleep 0.1
   done
-  kill "$pid" 2>/dev/null || true
+  stop_process "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   cat "$err"
 }

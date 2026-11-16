@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+. "$(dirname "$0")/lib/stop_process.sh"
 
 build_dir="${1:-.}"
 cd "$build_dir"
@@ -30,7 +31,7 @@ tmp="$(mktemp -d "${TMPDIR:-/tmp}/doltlite-amalg-https.XXXXXX")"
 srv_pid=""
 cleanup() {
   if [ -n "$srv_pid" ]; then
-    kill "$srv_pid" 2>/dev/null || true
+    stop_process "$srv_pid" 2>/dev/null || true
     wait "$srv_pid" 2>/dev/null || true
   fi
   rm -rf "$tmp"

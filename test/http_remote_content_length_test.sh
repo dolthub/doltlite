@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+. "$(dirname "$0")/lib/stop_process.sh"
 
 DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
 REMOTESRV="${2:-$(dirname "$0")/../build/doltlite-remotesrv}"
@@ -18,11 +19,11 @@ SRV_PID=""
 PROXY_PID=""
 cleanup() {
   if [ -n "$PROXY_PID" ]; then
-    kill "$PROXY_PID" 2>/dev/null || true
+    stop_process "$PROXY_PID" 2>/dev/null || true
     wait "$PROXY_PID" 2>/dev/null || true
   fi
   if [ -n "$SRV_PID" ]; then
-    kill "$SRV_PID" 2>/dev/null || true
+    stop_process "$SRV_PID" 2>/dev/null || true
     wait "$SRV_PID" 2>/dev/null || true
   fi
   rm -rf "$TMP"

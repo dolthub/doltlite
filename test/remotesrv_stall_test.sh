@@ -4,6 +4,7 @@ set -euo pipefail
 DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
 REMOTESRV="${2:-$(dirname "$0")/../build/doltlite-remotesrv}"
 . "$(dirname "$0")/lib/openssl_test_cert.sh"
+. "$(dirname "$0")/lib/stop_process.sh"
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "SKIP: python3 not available"
@@ -19,9 +20,9 @@ SRV_PID=""
 CLIENT_PID=""
 BLACKHOLE_PID=""
 cleanup() {
-  [ -n "$BLACKHOLE_PID" ] && { kill "$BLACKHOLE_PID" 2>/dev/null || true; wait "$BLACKHOLE_PID" 2>/dev/null || true; }
-  [ -n "$CLIENT_PID" ] && { kill "$CLIENT_PID" 2>/dev/null || true; wait "$CLIENT_PID" 2>/dev/null || true; }
-  [ -n "$SRV_PID" ] && { kill "$SRV_PID" 2>/dev/null || true; wait "$SRV_PID" 2>/dev/null || true; }
+  [ -n "$BLACKHOLE_PID" ] && { stop_process "$BLACKHOLE_PID" 2>/dev/null || true; wait "$BLACKHOLE_PID" 2>/dev/null || true; }
+  [ -n "$CLIENT_PID" ] && { stop_process "$CLIENT_PID" 2>/dev/null || true; wait "$CLIENT_PID" 2>/dev/null || true; }
+  [ -n "$SRV_PID" ] && { stop_process "$SRV_PID" 2>/dev/null || true; wait "$SRV_PID" 2>/dev/null || true; }
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -68,7 +69,7 @@ time.sleep(30)
 PY
   CLIENT_PID=$!
   sleep 0.2
-  kill -TERM "$SRV_PID"
+  stop_process "$SRV_PID"
   for _ in $(seq 1 30); do
     kill -0 "$SRV_PID" 2>/dev/null || break
     sleep 0.1
@@ -79,7 +80,7 @@ PY
   fi
   wait "$SRV_PID" 2>/dev/null || true
   SRV_PID=""
-  kill "$CLIENT_PID" 2>/dev/null || true
+  stop_process "$CLIENT_PID" 2>/dev/null || true
   wait "$CLIENT_PID" 2>/dev/null || true
   CLIENT_PID=""
   echo "  PASS: shutdown interrupts active and queued stalled clients"
@@ -266,7 +267,7 @@ for mode in ("progress", "stall"):
         assert 0.3 < elapsed < 3.0, elapsed
         print("  PASS: HTTP remote client cuts a response that stops progressing")
 PY
-kill "$BLACKHOLE_PID" 2>/dev/null || true
+stop_process "$BLACKHOLE_PID" 2>/dev/null || true
 wait "$BLACKHOLE_PID" 2>/dev/null || true
 BLACKHOLE_PID=""
 
@@ -566,7 +567,7 @@ print("  PASS: unread get-chunks does not block other readers "
           results["repo_a"][2], results["repo_b"][2], results["other"][2]))
 PY
 
-kill "$SRV_PID" 2>/dev/null || true
+stop_process "$SRV_PID" 2>/dev/null || true
 wait "$SRV_PID" 2>/dev/null || true
 SRV_PID=""
 
