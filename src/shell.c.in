@@ -5534,6 +5534,13 @@ static int doltliteSelectConnectBranch(sqlite3 *db, const char *zBranch){
   int nBranch = 0;
   int rc;
 
+  /* Without a branch to select there is nothing to ask the database, and
+  ** asking reads its schema: on a stock WAL file that takes the WAL locks
+  ** before the user ran anything, where the sqlite3 shell stays idle. */
+  if( zBranch==0 || zBranch[0]==0 ){
+    return SQLITE_OK;
+  }
+
   rc = doltliteCountBranches(db, &nBranch);
   if( rc!=SQLITE_OK ){
     return SQLITE_OK;
@@ -5541,10 +5548,6 @@ static int doltliteSelectConnectBranch(sqlite3 *db, const char *zBranch){
 
   rc = doltliteGetCurrentBranch(db, &zCurrent);
   if( rc!=SQLITE_OK ){
-    sqlite3_free(zCurrent);
-    return SQLITE_OK;
-  }
-  if( zBranch==0 || zBranch[0]==0 ){
     sqlite3_free(zCurrent);
     return SQLITE_OK;
   }
