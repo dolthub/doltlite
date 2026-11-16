@@ -63,7 +63,7 @@ the forms each surface accepts are in [refs.md](refs.md).
 ## Remotes
 
 - [remotes.md](remotes.md) — push, fetch, pull, clone, lazy clones, filesystem and HTTP URLs
-- [remotesrv.md](remotesrv.md) — running `doltlite-remotesrv` and enforcing push policies with pre-receive hooks
+- [remotesrv.md](remotesrv.md) — running `doltlite-remotesrv`
 - [auth.md](auth.md) — credentials, JWT, and TLS for remotes
 
 ## Extensions
