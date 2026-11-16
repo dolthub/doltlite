@@ -382,10 +382,21 @@ of the resolved result.
 ## Scaling curves
 
 [doltlite_scaling.sh](../../test/doltlite_scaling.sh) runs in the PR scaling job
-on an optimized build. Its timings include process and connection overhead.
-It compares larger fixtures with smaller ones using generous ratio limits and
+on an optimized build. It compares larger fixtures with smaller ones and
 checks data correctness alongside the measurements. These are regression
 indicators for expected complexity, not proofs of asymptotic bounds.
+
+The comparisons use engine counters, not time. Each measured operation reads
+`dolt_engine_stats` in the session that ran it and reports two figures: nodes
+(tree nodes fetched plus chunks read and written) and bytes (verified on read
+plus hashed on write). The counters are exact and identical on every machine,
+so the ratio limits sit close to the expected growth: 2x for work that should
+not follow history depth or table size, 12x for work linear in ten times the
+rows, 16x for work linear in twelve times the history, and 20x for sixteen
+times the BLOB bytes. Wall-clock time is printed for each operation, including
+process and connection overhead, but does not decide the result. Counters do
+not see time spent outside the counted work, such as a slower hash or an
+extra sync; the benchmark job and the nightly report cover timing.
 
 ### History depth
 
@@ -393,15 +404,17 @@ Measures blocks of 200 single-row updates plus `dolt_commit`, a full `dolt_log`
 walk, a round-trip checkout to an old branch, and merges from disjoint side
 branches. It compares shallow history near 200 commits with deeper history
 near 2,400 commits. After GC it also measures more commits to detect a lasting
-increase in write cost. The log query deliberately reads the whole history;
-its work is expected to grow with history length.
+increase in write cost. The log query deliberately reads the whole history,
+and the side branches fork from the first commit, so each merge walks back to
+the root for its base; work for both is expected to grow with history length.
+Commits and checkout are expected to stay flat.
 
 ### Table size
 
 Tests 100,000, 1 million, 10 million, and 100 million rows. At each size it
-reports GC time, open time, 400 point lookups, a 500-row update plus commit,
+measures GC, open, 400 point lookups, a 500-row update plus commit,
 a predicate scan, the newest commit's 500-row diff, and file size. It checks
-ratios between adjacent sizes, verifies row contents and branch isolation, and
+work ratios between adjacent sizes, verifies row contents and branch isolation, and
 bounds bytes per row for the larger fixtures. GC runs before the read/write
 measurements so they exercise the compacted storage layout.
 
@@ -409,7 +422,7 @@ measurements so they exercise the compacted storage layout.
 
 Compares inserting and committing a 1 MiB BLOB with a 16 MiB BLOB, then queries
 their lengths and verifies them. This catches excessive growth in write and
-read-access cost as values grow. The read query returns a length, so its timing
+read-access cost as values grow. The read query returns a length, so it
 is not a measurement of transferring the BLOB to an application.
 
 ## HEAD queries versus history depth
