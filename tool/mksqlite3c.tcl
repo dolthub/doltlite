@@ -727,24 +727,62 @@ proc emit_doltlite_storage_block {} {
 # dependency order used by PROLLY_OBJS in main.mk. prolly_btree.c/pager_shim.c
 # define the unprefixed sqlite3Btree*/sqlite3Pager* entry points and call the
 # orig_* engine emitted above for ATTACH'd stock databases.
+# The kernels share one translation unit with blake3_portable.c here, so the
+# static helpers both define are renamed for the span of the kernel. Their
+# intrinsics headers are written out directly: copy_file drops an #include it
+# has already seen, and the earlier sighting sits inside another file's #if.
+proc emit_blake3_baseline_kernels {} {
+  global out srcdir
+  set sse2_statics {round_fn compress_pre}
+  puts $out "#ifndef DOLTLITE_BLAKE3_SIMD_OBJECTS"
+  puts $out "#if defined(__clang__)"
+  puts $out "#pragma clang diagnostic push"
+  puts $out "#pragma clang diagnostic ignored \"-Wdeclaration-after-statement\""
+  puts $out "#elif defined(__GNUC__)"
+  puts $out "#pragma GCC diagnostic push"
+  puts $out "#pragma GCC diagnostic ignored \"-Wdeclaration-after-statement\""
+  puts $out "#endif"
+  puts $out "#if !defined(BLAKE3_NO_SSE2)"
+  foreach name $sse2_statics {
+    puts $out "#define $name ${name}_sse2"
+  }
+  puts $out "#include <immintrin.h>"
+  copy_file $srcdir/blake3_sse2.c
+  foreach name $sse2_statics {
+    puts $out "#undef $name"
+  }
+  puts $out "#endif /* !BLAKE3_NO_SSE2 */"
+  puts $out "#if BLAKE3_USE_NEON == 1"
+  puts $out "#include <arm_neon.h>"
+  copy_file $srcdir/blake3_neon.c
+  puts $out "#endif /* BLAKE3_USE_NEON */"
+  puts $out "#if defined(__clang__)"
+  puts $out "#pragma clang diagnostic pop"
+  puts $out "#elif defined(__GNUC__)"
+  puts $out "#pragma GCC diagnostic pop"
+  puts $out "#endif"
+  puts $out "#endif /* DOLTLITE_BLAKE3_SIMD_OBJECTS */"
+}
+
 proc emit_doltlite_engine_block {} {
   global out srcdir seen_hdr doltlite_external_remotes
   section_comment "doltlite: BEGIN prolly engine + version-control layer"
-  # blake3: a single-TU amalgamation cannot pass the per-file -m{sse,avx} flags
-  # the SIMD sources need, so force the portable backend (the object/release
-  # builds keep SIMD). NEON is left disabled (BLAKE3_USE_NEON unset).
-  # DOLTLITE_BLAKE3_SIMD_OBJECTS says the SIMD sources are compiled separately
-  # and linked in, so the dispatcher keeps its runtime selection.
+  # blake3: a single-TU amalgamation cannot pass the per-file -m{sse4.1,avx}
+  # flags those kernels need, so they stay off here. SSE2 on x86-64 and NEON
+  # on little-endian aarch64 are part of the baseline ISA and need no flags,
+  # so their kernels are emitted below and the dispatcher selects them.
+  # DOLTLITE_BLAKE3_SIMD_OBJECTS says every SIMD source is compiled
+  # separately and linked in, so nothing is disabled or emitted inline.
   puts $out "#ifndef DOLTLITE_BLAKE3_SIMD_OBJECTS"
-  foreach m {BLAKE3_NO_SSE2 BLAKE3_NO_SSE41 BLAKE3_NO_AVX2 BLAKE3_NO_AVX512} {
+  foreach m {BLAKE3_NO_SSE41 BLAKE3_NO_AVX2 BLAKE3_NO_AVX512} {
     puts $out "#ifndef $m"
     puts $out "#define $m 1"
     puts $out "#endif"
   }
-  # Also force-disable the ARM NEON backend (autodetected on by default on
-  # aarch64); its blake3_neon.c is not part of the single-file build.
-  puts $out "#ifndef BLAKE3_USE_NEON"
-  puts $out "#define BLAKE3_USE_NEON 0"
+  puts $out "#if !(defined(__x86_64__) || defined(_M_X64)) || defined(_M_ARM64EC)"
+  puts $out "#ifndef BLAKE3_NO_SSE2"
+  puts $out "#define BLAKE3_NO_SSE2 1"
+  puts $out "#endif"
   puts $out "#endif"
   puts $out "#endif /* DOLTLITE_BLAKE3_SIMD_OBJECTS */"
   copy_file $srcdir/doltlite_parse.h
@@ -905,6 +943,7 @@ proc emit_doltlite_engine_block {} {
     if {$f in {doltlite_creds.c doltlite_tls.c}} continue
     if {$doltlite_external_remotes && $f in $doltlite_remote_sources} continue
     copy_file $srcdir/$f
+    if {$f eq "blake3_dispatch.c"} emit_blake3_baseline_kernels
   }
   set doltlite_unemitted {}
   foreach path [lsort [concat \
