@@ -52,7 +52,17 @@ case "$*" in
       no-counters:*) chunks= ;;
     esac
     echo 1
-    [ -n "$chunks" ] && echo "gc-work $chunks $bytes"
+    [ -n "$chunks" ] && echo "scale-work $chunks $bytes"
+    ;;
+  *"scale-work"*)
+    commits=$(printf '%s' "$*" | grep -o "dolt_commit(" | wc -l)
+    [ "$commits" -gt 0 ] || commits=1
+    work="$((commits*100)) $((commits*1000))"
+    case "$SCALING_TEST_FAILURE:$*" in
+      merge-regression:*"dolt_merge('side2"*) work="1700 1000" ;;
+      lookup-regression:*"/size100000000 SELECT val FROM t"*) work="100 2100" ;;
+    esac
+    trailer="scale-work $work"
     ;;
 esac
 if [ -n "${SCALING_TEST_CLOCK:-}" ]; then
@@ -77,6 +87,7 @@ case "$*" in
   *"SELECT dolt_checkout('main')"*) printf '0\n1000\n' ;;
   *"SELECT group_concat(length(data)"*) echo '1048576|16777216' ;;
 esac
+[ -n "${trailer:-}" ] && echo "$trailer"
 exit 0
 ''')
     engine.chmod(0o755)
@@ -111,9 +122,13 @@ fi
     for case, expected, needle in (
             ("throttled-disk", 0, None),
             ("work-regression", 1,
-             "FAIL: dolt_gc chunks read, 10000000 vs 1000000 rows"),
+             "FAIL: dolt_gc, 10000000 vs 1000000 rows: nodes (448275 / 34482 = 13.0x > 12x)"),
             ("bytes-regression", 1,
-             "FAIL: dolt_gc bytes verified, 100000000 vs 10000000 rows"),
+             "FAIL: dolt_gc, 100000000 vs 10000000 rows: bytes (17030000000 / 1310000000 = 13.0x > 12x)"),
+            ("merge-regression", 1,
+             "FAIL: merge across divergence, deep vs 200: nodes (1700 / 100 = 17.0x > 16x)"),
+            ("lookup-regression", 1,
+             "FAIL: 400 point lookups, 100000000 vs 10000000 rows: bytes (2100 / 1000 = 2.1x > 2x)"),
             ("no-counters", 1, None)):
         clockfile = root / f"{case}.clock"
         clockfile.write_text("1000\n")
@@ -126,13 +141,12 @@ fi
         assert result.returncode == expected, (case, result.returncode,
                                                 result.stdout, result.stderr)
         if case == "no-counters":
-            assert "dolt_gc reported no engine counters" in result.stderr, result.stderr
+            assert "no engine counters after: SELECT dolt_gc();" in result.stderr, result.stderr
             assert "Results:" not in result.stdout, result.stdout
         elif needle:
             assert needle in result.stdout, result.stdout
-            assert "13.0x > 12x" in result.stdout, result.stdout
             assert result.stdout.count("FAIL:") == 1, result.stdout
         else:
             assert "FAIL:" not in result.stdout, result.stdout
             assert "gc=3971ms" in result.stdout, result.stdout
-        print(f"PASS: scaling GC {case} policy")
+        print(f"PASS: scaling {case} policy")

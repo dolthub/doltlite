@@ -12,43 +12,50 @@ ms_now() {
   python3 -c 'import time; print(int(time.time()*1000))'
 }
 
-run_ms() {
-  local db="$1"; shift
-  local t0 t1
+# Gates compare engine counters, not time: wall-clock on a hosted runner
+# follows its CPU model and its throttled disk, while the counters are exact.
+# "nodes" is tree nodes fetched plus chunks read and written; "bytes" is
+# bytes verified on read plus bytes hashed on write.
+WORK_SQL="SELECT 'scale-work '
+  ||sum(CASE WHEN name IN ('cache_miss','chunk_read','chunk_write') THEN value ELSE 0 END)||' '
+  ||sum(CASE WHEN name IN ('verify_bytes','hash_bytes') THEN value ELSE 0 END)
+  FROM dolt_engine_stats;"
+
+# Prints "<wall ms> <nodes> <bytes>" for one session running the SQL.
+run_counted() {
+  local db="$1" sql="$2" t0 t1 out work
   t0=$(ms_now)
-  "$DOLTLITE" "$db" "$@" > /dev/null || return $?
+  out=$("$DOLTLITE" "$db" "$sql $WORK_SQL") || return $?
   t1=$(ms_now)
-  echo $(( t1 - t0 ))
+  work=$(printf '%s\n' "$out" | sed -n 's/^scale-work \([0-9][0-9]* [0-9][0-9]*\)$/\1/p' | tail -1)
+  if [ -z "$work" ]; then
+    echo "no engine counters after: ${sql:0:60}" >&2
+    return 1
+  fi
+  echo "$(( t1 - t0 )) $work"
+}
+
+# Median of each column over "<wall> <nodes> <bytes>" samples.
+median_work() {
+  local walls=() nodes=() bytes=() sample w n b
+  for sample in "$@"; do
+    read -r w n b <<< "$sample"
+    walls+=("$w"); nodes+=("$n"); bytes+=("$b")
+  done
+  echo "$(median_n "${walls[@]}") $(median_n "${nodes[@]}") $(median_n "${bytes[@]}")"
 }
 
 # Odd SAMPLES: median drops (SAMPLES-1)/2 outliers each side.
-run_ms_median() {
+run_counted_median() {
   local samples=() t i
   for (( i=0; i<SAMPLES; i++ )); do
-    t=$(run_ms "$@") || return $?
+    t=$(run_counted "$@") || return $?
     samples+=("$t")
   done
-  median_n "${samples[@]}"
+  median_work "${samples[@]}"
 }
 
-# GC's wall-clock ends in a sync of the rewritten image, which hosted runners
-# throttle by image size, so it is reported and its work is gated instead:
-# the engine counters are exact and identical on every machine.
-# Prints "<wall ms> <chunks read> <bytes verified>".
-run_gc_counted() {
-  local db="$1" t0 t1 out stats
-  t0=$(ms_now)
-  out=$("$DOLTLITE" "$db" "SELECT dolt_gc();
-    SELECT 'gc-work '||(SELECT value FROM dolt_engine_stats WHERE name='chunk_read')
-         ||' '||(SELECT value FROM dolt_engine_stats WHERE name='verify_bytes');") || return $?
-  t1=$(ms_now)
-  stats=$(printf '%s\n' "$out" | sed -n 's/^gc-work \([0-9][0-9]* [0-9][0-9]*\)$/\1/p')
-  if [ -z "$stats" ]; then
-    echo "dolt_gc reported no engine counters: $out" >&2
-    return 1
-  fi
-  echo "$(( t1 - t0 )) $stats"
-}
+wall_of() { echo "${1%% *}"; }
 
 if [ "${1:-}" = "--self-test" ]; then
   failures=0
@@ -67,7 +74,7 @@ if [ "${1:-}" = "--self-test" ]; then
   done
   scaling_failure() { echo "injected database failure" >&2; return 17; }
   DOLTLITE=scaling_failure
-  for timer in run_ms run_ms_median; do
+  for timer in run_counted run_counted_median; do
     if actual=$("$timer" :memory: "SELECT 1;" 2>&1); then
       rc=0
     else
@@ -110,6 +117,14 @@ check_ratio() {
   fi
 }
 
+check_work() {
+  local desc="$1" num="$2" den="$3" max="$4" nw nn nb dw dn db
+  read -r nw nn nb <<< "$num"
+  read -r dw dn db <<< "$den"
+  check_ratio "$desc: nodes" "$nn" "$dn" "$max" ""
+  check_ratio "$desc: bytes" "$nb" "$db" "$max" ""
+}
+
 check_max() {
   local desc="$1" val="$2" max="$3" unit="$4"
   if [ "$val" -le "$max" ]; then
@@ -144,7 +159,7 @@ commit_block() {
     stmts+="UPDATE t SET v=v+1 WHERE id=$(( (start + k) % 10000 + 1 ));"
     stmts+="SELECT dolt_commit('-am','c$((start + k))');"
   done
-  run_ms "$db" "$stmts"
+  run_counted "$db" "$stmts"
 }
 
 # One session + stdin: reopen replays WAL (quadratic); argv hits 128KB.
@@ -160,11 +175,14 @@ seed_rows() {
   } | "$DOLTLITE" "$db" > /dev/null
 }
 
-# Depth-independent after head re-confirm; CI spikes to ~16x, gate matches O(n) scan/gc headroom.
-COMMIT_GROWTH_GATE=20
-SESSION_OP_GATE=20
-# Counted work, not time: 10x the rows reads 10x the chunks plus tree overhead.
-GC_WORK_GATE=12
+# Work that must not follow history depth or table size, beyond one more tree level.
+FLAT_WORK_GATE=2
+# 10x the rows: that much work plus tree overhead.
+LINEAR_WORK_GATE=12
+# 12x the history, for what walks it: the log, and a merge whose base is the
+# root commit.
+DEPTH_WORK_GATE=16
+BLOB_WORK_GATE=20
 
 echo "══════════════════════════════════════"
 echo "  Segment A: cost vs history depth"
@@ -183,30 +201,25 @@ for side in side1a side1b side1c side2a side2b side2c; do
 done
 "$DOLTLITE" "$DBA" "$sides_sql" > /dev/null
 
-median3() {
-  printf '%s\n%s\n%s\n' "$1" "$2" "$3" | sort -n | awk 'NR==2{print; exit}'
-}
-
 depth_ops() {
   local prefix="$1"
-  local lg co m1 m2 m3 mg
-  lg=$(run_ms_median "$DBA" "SELECT count(*) FROM dolt_log;") || return $?
+  local lg co m1 m2 m3
+  lg=$(run_counted_median "$DBA" "SELECT count(*) FROM dolt_log;") || return $?
   # Both checkouts in one session: a leftover branch made later samples a no-op.
-  co=$(run_ms_median "$DBA" \
+  co=$(run_counted_median "$DBA" \
        "SELECT dolt_checkout('anchor'); SELECT dolt_checkout('main');") || return $?
   # One branch per sample: merging twice is a no-op.
-  m1=$(run_ms "$DBA" "SELECT dolt_merge('${prefix}a');") || return $?
-  m2=$(run_ms "$DBA" "SELECT dolt_merge('${prefix}b');") || return $?
-  m3=$(run_ms "$DBA" "SELECT dolt_merge('${prefix}c');") || return $?
-  mg=$(median3 "$m1" "$m2" "$m3")
-  echo "$lg $co $mg"
+  m1=$(run_counted "$DBA" "SELECT dolt_merge('${prefix}a');") || return $?
+  m2=$(run_counted "$DBA" "SELECT dolt_merge('${prefix}b');") || return $?
+  m3=$(run_counted "$DBA" "SELECT dolt_merge('${prefix}c');") || return $?
+  echo "$lg|$co|$(median_work "$m1" "$m2" "$m3")"
 }
 
 BLOCK=200
 block1=$(commit_block "$DBA" 0 "$BLOCK")
 depth_result=$(depth_ops side1)
-read -r log1 co1 mg1 <<< "$depth_result"
-echo "  depth 200:   ${block1}ms/block ($((block1 / BLOCK))ms/commit) log=${log1}ms checkout=${co1}ms merge=${mg1}ms"
+IFS='|' read -r log1 co1 mg1 <<< "$depth_result"
+echo "  depth 200:   $(wall_of "$block1")ms/block log=$(wall_of "$log1")ms checkout=$(wall_of "$co1")ms merge=$(wall_of "$mg1")ms"
 for b in 1 2 3 4; do
   commit_block "$DBA" $(( b * BLOCK )) "$BLOCK" > /dev/null
 done
@@ -216,29 +229,30 @@ for (( i=0; i<SAMPLES; i++ )); do
   sample=$(commit_block "$DBA" $(( deep_start + i * BLOCK )) "$BLOCK")
   deep_samples+=("$sample")
 done
-deep=$(median_n "${deep_samples[@]}")
+deep=$(median_work "${deep_samples[@]}")
 depth_result=$(depth_ops side2)
-read -r log_deep co_deep mg_deep <<< "$depth_result"
-echo "  depth ~$(( deep_start + SAMPLES * BLOCK )): ${deep}ms/block ($((deep / BLOCK))ms/commit) log=${log_deep}ms checkout=${co_deep}ms merge=${mg_deep}ms [samples $(IFS=,; echo "${deep_samples[*]}")ms; median ${deep}ms]"
+IFS='|' read -r log_deep co_deep mg_deep <<< "$depth_result"
+echo "  depth ~$(( deep_start + SAMPLES * BLOCK )): $(wall_of "$deep")ms/block log=$(wall_of "$log_deep")ms checkout=$(wall_of "$co_deep")ms merge=$(wall_of "$mg_deep")ms"
 
-check_ratio "per-commit growth, deep vs 200" "$deep" "$block1" "$COMMIT_GROWTH_GATE"
-check_ratio "dolt_log full walk, deep vs 200" "$log_deep" "$log1" "$SESSION_OP_GATE"
-check_ratio "checkout old commit, deep vs 200" "$co_deep" "$co1" "$SESSION_OP_GATE"
-check_ratio "merge across divergence, deep vs 200" "$mg_deep" "$mg1" "$SESSION_OP_GATE"
+check_work "per-commit growth, deep vs 200" "$deep" "$block1" "$FLAT_WORK_GATE"
+check_work "dolt_log full walk, deep vs 200" "$log_deep" "$log1" "$DEPTH_WORK_GATE"
+check_work "checkout old commit, deep vs 200" "$co_deep" "$co1" "$FLAT_WORK_GATE"
+check_work "merge across divergence, deep vs 200" "$mg_deep" "$mg1" "$DEPTH_WORK_GATE"
 check_eq "merged rows visible" "6|1" "$(query "$DBA" "SELECT count(*), max(v) FROM s WHERE v=1;")"
 
-gc_ms=$(run_ms "$DBA" "SELECT dolt_gc();")
-echo "  dolt_gc: ${gc_ms}ms"
+gc_work=$(run_counted "$DBA" "SELECT dolt_gc();")
+echo "  dolt_gc: $(wall_of "$gc_work")ms"
 postgc_samples=()
 postgc_start=$(( deep_start + SAMPLES * BLOCK ))
 for (( i=0; i<SAMPLES; i++ )); do
   sample=$(commit_block "$DBA" $(( postgc_start + i * 50 )) 50)
   postgc_samples+=("$sample")
 done
-postgc=$(median_n "${postgc_samples[@]}")
-postgc_scaled=$(( postgc * BLOCK / 50 ))
-echo "  post-gc:     ${postgc}ms for 50 ($((postgc / 50))ms/commit) [samples $(IFS=,; echo "${postgc_samples[*]}")ms; median ${postgc}ms]"
-check_ratio "post-gc commit cost vs shallow-history cost" "$postgc_scaled" "$block1" "$COMMIT_GROWTH_GATE"
+postgc=$(median_work "${postgc_samples[@]}")
+read -r pw pn pb <<< "$postgc"
+echo "  post-gc:     ${pw}ms for 50 commits"
+check_work "post-gc commit cost vs shallow-history cost" \
+  "$pw $(( pn * BLOCK / 50 )) $(( pb * BLOCK / 50 ))" "$block1" "$FLAT_WORK_GATE"
 expect_commits=$(( BLOCK + 4 * BLOCK + SAMPLES * BLOCK + SAMPLES * 50 ))
 check_eq "commit increments all applied" "$expect_commits" "$(query "$DBA" "SELECT sum(v) FROM t;")"
 
@@ -247,29 +261,28 @@ echo "════════════════════════�
 echo "  Segment B: per-op cost vs table size (post-gc)"
 echo "══════════════════════════════════════"
 declare -a SIZES=(100000 1000000 10000000 100000000)
-declare -a T_OPEN T_LOOKUP T_COMMIT T_SCAN T_GC GC_CHUNKS GC_BYTES T_DIFF
+declare -a W_OPEN W_LOOKUP W_COMMIT W_SCAN W_GC W_DIFF
 for idx in 0 1 2 3; do
   n=${SIZES[$idx]}
   db="$TMPDIR/size$n"
   "$DOLTLITE" "$db" "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, val INTEGER, pad TEXT);" > /dev/null
   seed_rows "$db" "$n" "x, 'row_'||x, x%1000, printf('%032d', x)"
   "$DOLTLITE" "$db" "SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed');" > /dev/null
-  gc_out=$(run_gc_counted "$db")
-  read -r T_GC[$idx] GC_CHUNKS[$idx] GC_BYTES[$idx] <<< "$gc_out"
+  W_GC[$idx]=$(run_counted "$db" "SELECT dolt_gc();")
 
-  T_OPEN[$idx]=$(run_ms_median "$db" "SELECT 1;")
+  W_OPEN[$idx]=$(run_counted_median "$db" "SELECT 1;")
 
   lookups=""
   for (( k=0; k<400; k++ )); do
     lookups+="SELECT val FROM t WHERE id=$(( (k * 997) % n + 1 ));"
   done
-  T_LOOKUP[$idx]=$(run_ms_median "$db" "$lookups")
+  W_LOOKUP[$idx]=$(run_counted_median "$db" "$lookups")
 
   lo=$(( n / 2 ))
-  T_COMMIT[$idx]=$(run_ms_median "$db" \
+  W_COMMIT[$idx]=$(run_counted_median "$db" \
     "UPDATE t SET val=val+1 WHERE id BETWEEN $lo AND $(( lo + 499 )); SELECT dolt_commit('-am','delta');")
 
-  T_SCAN[$idx]=$(run_ms_median "$db" "SELECT count(*) FROM t WHERE val >= 0;")
+  W_SCAN[$idx]=$(run_counted_median "$db" "SELECT count(*) FROM t WHERE val >= 0;")
 
   # Closed-form id/val plus name/pad from id.
   sum_id=$(( n * (n + 1) / 2 ))
@@ -279,9 +292,8 @@ for idx in 0 1 2 3; do
 
   # Newest diff is the 500 modified rows, old=new-1.
   head_hash=$(query "$db" "SELECT commit_hash FROM dolt_log LIMIT 1;")
-  t0=$(ms_now)
-  diff_out=$(query "$db" "SELECT count(*) FROM dolt_diff_t WHERE to_commit='$head_hash' AND diff_type='modified' AND to_val=from_val+1;")
-  T_DIFF[$idx]=$(( $(ms_now) - t0 ))
+  diff_out=$("$DOLTLITE" "$db" "SELECT count(*) FROM dolt_diff_t WHERE to_commit='$head_hash' AND diff_type='modified' AND to_val=from_val+1;")
+  W_DIFF[$idx]=$(run_counted "$db" "SELECT count(*) FROM dolt_diff_t WHERE to_commit='$head_hash' AND diff_type='modified' AND to_val=from_val+1;")
   check_eq "history diff of newest commit at N=$n" "500" "$diff_out"
 
   "$DOLTLITE" "$db" "SELECT dolt_checkout('-b','wipe'); DELETE FROM t WHERE id<=1000; SELECT dolt_commit('-am','wipe'); SELECT dolt_checkout('main');" > /dev/null
@@ -290,23 +302,22 @@ for idx in 0 1 2 3; do
   check_eq "branch isolation at N=$n" "0|1000" "$wipe_seen|$main_seen"
 
   size_bytes=$(wc -c < "$db" | tr -d ' ')
-  echo "  N=$n: open=${T_OPEN[$idx]}ms lookups400=${T_LOOKUP[$idx]}ms upd500+commit=${T_COMMIT[$idx]}ms scan=${T_SCAN[$idx]}ms gc=${T_GC[$idx]}ms gc_chunks=${GC_CHUNKS[$idx]} gc_bytes=${GC_BYTES[$idx]} diff=${T_DIFF[$idx]}ms file=$(( size_bytes / 1000000 ))MB"
+  echo "  N=$n: open=$(wall_of "${W_OPEN[$idx]}")ms lookups400=$(wall_of "${W_LOOKUP[$idx]}")ms upd500+commit=$(wall_of "${W_COMMIT[$idx]}")ms scan=$(wall_of "${W_SCAN[$idx]}")ms gc=$(wall_of "${W_GC[$idx]}")ms diff=$(wall_of "${W_DIFF[$idx]}")ms file=$(( size_bytes / 1000000 ))MB"
   if [ "$n" -ge 1000000 ]; then
     check_max "structural sharing: bytes/row at N=$n" $(( size_bytes / n )) 150 "B"
   fi
   rm -f "$db"
 done
 
-# 10x rows/step; point ~O(log n), scan/gc/diff ~O(n).
+# 10x rows/step; point ~O(log n), scan/gc ~O(n), newest diff ~O(change).
 for step in 1 2 3; do
   lo=${SIZES[$((step-1))]}; hi=${SIZES[$step]}
-  check_ratio "open cost, ${hi} vs ${lo} rows" "${T_OPEN[$step]}" "${T_OPEN[$((step-1))]}" "$SESSION_OP_GATE"
-  check_ratio "400 point lookups, ${hi} vs ${lo} rows" "${T_LOOKUP[$step]}" "${T_LOOKUP[$((step-1))]}" "$SESSION_OP_GATE"
-  check_ratio "500-row commit, ${hi} vs ${lo} rows" "${T_COMMIT[$step]}" "${T_COMMIT[$((step-1))]}" "$SESSION_OP_GATE"
-  check_ratio "full scan, ${hi} vs ${lo} rows" "${T_SCAN[$step]}" "${T_SCAN[$((step-1))]}" 20
-  check_ratio "dolt_gc chunks read, ${hi} vs ${lo} rows" "${GC_CHUNKS[$step]}" "${GC_CHUNKS[$((step-1))]}" "$GC_WORK_GATE" ""
-  check_ratio "dolt_gc bytes verified, ${hi} vs ${lo} rows" "${GC_BYTES[$step]}" "${GC_BYTES[$((step-1))]}" "$GC_WORK_GATE" ""
-  check_ratio "newest-commit diff, ${hi} vs ${lo} rows" "${T_DIFF[$step]}" "${T_DIFF[$((step-1))]}" 20
+  check_work "open, ${hi} vs ${lo} rows" "${W_OPEN[$step]}" "${W_OPEN[$((step-1))]}" "$FLAT_WORK_GATE"
+  check_work "400 point lookups, ${hi} vs ${lo} rows" "${W_LOOKUP[$step]}" "${W_LOOKUP[$((step-1))]}" "$FLAT_WORK_GATE"
+  check_work "500-row commit, ${hi} vs ${lo} rows" "${W_COMMIT[$step]}" "${W_COMMIT[$((step-1))]}" "$FLAT_WORK_GATE"
+  check_work "full scan, ${hi} vs ${lo} rows" "${W_SCAN[$step]}" "${W_SCAN[$((step-1))]}" "$LINEAR_WORK_GATE"
+  check_work "dolt_gc, ${hi} vs ${lo} rows" "${W_GC[$step]}" "${W_GC[$((step-1))]}" "$LINEAR_WORK_GATE"
+  check_work "newest-commit diff, ${hi} vs ${lo} rows" "${W_DIFF[$step]}" "${W_DIFF[$((step-1))]}" "$FLAT_WORK_GATE"
 done
 
 echo ""
@@ -315,15 +326,15 @@ echo "  Segment C: cost vs blob size"
 echo "══════════════════════════════════════"
 DBC="$TMPDIR/blob"
 "$DOLTLITE" "$DBC" "CREATE TABLE b(id INTEGER PRIMARY KEY, data BLOB); SELECT dolt_add('-A'); SELECT dolt_commit('-m','seed');" > /dev/null
-b_small=$(run_ms "$DBC" "INSERT INTO b VALUES(1, randomblob(1048576)); SELECT dolt_commit('-am','small');")
-b_big=$(run_ms "$DBC" "INSERT INTO b VALUES(2, randomblob(16777216)); SELECT dolt_commit('-am','big');")
-r_small=$(run_ms_median "$DBC" "SELECT length(data) FROM b WHERE id=1;")
-r_big=$(run_ms_median "$DBC" "SELECT length(data) FROM b WHERE id=2;")
-echo "  insert+commit: 1MB=${b_small}ms 16MB=${b_big}ms; read: 1MB=${r_small}ms 16MB=${r_big}ms"
+b_small=$(run_counted "$DBC" "INSERT INTO b VALUES(1, randomblob(1048576)); SELECT dolt_commit('-am','small');")
+b_big=$(run_counted "$DBC" "INSERT INTO b VALUES(2, randomblob(16777216)); SELECT dolt_commit('-am','big');")
+r_small=$(run_counted_median "$DBC" "SELECT length(data) FROM b WHERE id=1;")
+r_big=$(run_counted_median "$DBC" "SELECT length(data) FROM b WHERE id=2;")
+echo "  insert+commit: 1MB=$(wall_of "$b_small")ms 16MB=$(wall_of "$b_big")ms; read: 1MB=$(wall_of "$r_small")ms 16MB=$(wall_of "$r_big")ms"
 check_eq "blob roundtrip lengths" "1048576|16777216" "$(query "$DBC" "SELECT group_concat(length(data),'|') FROM b ORDER BY id;")"
-# 16x bytes; ~linear, 3x headroom.
-check_ratio "blob insert+commit, 16MB vs 1MB" "$b_big" "$b_small" 48
-check_ratio "blob readback, 16MB vs 1MB" "$r_big" "$r_small" 48
+# 16x the bytes.
+check_work "blob insert+commit, 16MB vs 1MB" "$b_big" "$b_small" "$BLOB_WORK_GATE"
+check_work "blob readback, 16MB vs 1MB" "$r_big" "$r_small" "$BLOB_WORK_GATE"
 
 echo ""
 echo ""
