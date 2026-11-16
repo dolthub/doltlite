@@ -26,14 +26,24 @@ case "$("$cc_bin" -dumpmachine)" in
 esac
 nm "$tmp/amalgamation.o" > "$tmp/symbols"
 for kernel in $kernels; do
-  if ! grep -q "T _\{0,1\}blake3_hash_many_$kernel\$" "$tmp/symbols"; then
-    echo "FAIL: amalgamation does not define blake3_hash_many_$kernel" >&2
+  if ! grep -q "T _\{0,1\}doltlite_blake3_hash_many_$kernel\$" "$tmp/symbols"; then
+    echo "FAIL: amalgamation does not define doltlite_blake3_hash_many_$kernel" >&2
     exit 1
   fi
-  echo "  PASS  amalgamation defines blake3_hash_many_$kernel"
+  echo "  PASS  amalgamation defines doltlite_blake3_hash_many_$kernel"
 done
+# Uppercase nm types are the global ones; a file-local symbol cannot collide.
+if grep " [A-Z] _\{0,1\}blake3_" "$tmp/symbols"; then
+  echo "FAIL: amalgamation exports or imports an unprefixed blake3_ symbol" >&2
+  exit 1
+fi
+echo "  PASS  no unprefixed global blake3_ symbol in the amalgamation"
 
-"$cc_bin" -w -O1 -I"$repo_dir/ext/blake3" "$repo_dir/test/blake3_kat.c" \
+"$cc_bin" -w -O1 -I"$repo_dir/ext/blake3" \
+  -Dblake3_hasher_init=doltlite_blake3_hasher_init \
+  -Dblake3_hasher_update=doltlite_blake3_hasher_update \
+  -Dblake3_hasher_finalize=doltlite_blake3_hasher_finalize \
+  "$repo_dir/test/blake3_kat.c" \
   "$tmp/amalgamation.o" "${libs[@]}" -o "$tmp/blake3_kat"
 DOLTLITE_BLAKE3_KAT_BIN="$tmp/blake3_kat" \
   bash "$repo_dir/test/blake3_kat_test.sh" "$tmp/blake3_kat"

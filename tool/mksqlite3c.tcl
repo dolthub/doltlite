@@ -739,11 +739,11 @@ proc emit_blake3_kernel {file suffix guard target} {
   set in [open $srcdir/$file rb]
   set text [read $in]
   close $in
-  regsub -all -line {^#include "[^"]*"\s*$} $text {} text
+  regsub -all {(^|\n)#include "[^"\n]*"[^\n]*} $text {\1} text
   regsub -all {(^|\n)void blake3_\w+\([^{};]*\);} $text {\1} text
   set statics {}
-  foreach {all name} [regexp -all -inline -line \
-      {^(?:INLINE|static)\s[^(;=]*?\m(\w+)\(} $text] {
+  foreach {all name} [regexp -all -inline \
+      {(?:^|\n)(?:INLINE|static)\s[^(;=]*\m(\w+)\(} $text] {
     if {[lsearch -exact $statics $name]<0} {lappend statics $name}
   }
   set macros {}
@@ -776,6 +776,36 @@ proc emit_blake3_kernel {file suffix guard target} {
   }
   puts $out "#endif /* $guard */"
   section_comment "End of $file"
+}
+
+# Every blake3_ name the BLAKE3 sources give external linkage or declare in a
+# header. Per-kernel static helpers are left out: emit_blake3_kernel renames
+# those itself, and a second #define of one would be a redefinition.
+proc blake3_linked_names {} {
+  global srcdir
+  set files {blake3.h blake3_impl.h blake3.c blake3_portable.c
+    blake3_dispatch.c blake3_sse2.c blake3_sse41.c blake3_avx2.c
+    blake3_avx512.c blake3_neon.c}
+  array set static {}
+  array set seen {}
+  foreach f $files {
+    set in [open $srcdir/$f rb]
+    set text [read $in]
+    close $in
+    foreach {all name} [regexp -all -inline \
+        {(?:^|\n)(?:INLINE|static)\s[^(;=]*\m(\w+)\(} $text] {
+      set static($name) 1
+    }
+    regsub -all {blake3_\w+\.[ch]} $text {} text
+    foreach name [regexp -all -inline {\mblake3_\w+} $text] {
+      set seen($name) 1
+    }
+  }
+  set names {}
+  foreach name [lsort [array names seen]] {
+    if {![info exists static($name)]} {lappend names $name}
+  }
+  return $names
 }
 
 proc emit_blake3_kernels {} {
@@ -832,6 +862,13 @@ proc emit_doltlite_engine_block {} {
   puts $out "#define BLAKE3_NO_SSE2 1"
   puts $out "#endif"
   puts $out "#endif"
+  # A program that links this file beside another copy of BLAKE3 would see
+  # every blake3_ symbol twice, so here they carry a doltlite_ prefix. With
+  # DOLTLITE_BLAKE3_SIMD_OBJECTS the separately compiled kernels use the
+  # upstream names, and so must this file.
+  foreach name [blake3_linked_names] {
+    puts $out "#define $name doltlite_$name"
+  }
   puts $out "#ifdef DOLTLITE_BLAKE3_BASELINE_ONLY"
   foreach m {BLAKE3_NO_SSE41 BLAKE3_NO_AVX2 BLAKE3_NO_AVX512} {
     puts $out "#ifndef $m"
@@ -1016,6 +1053,11 @@ emitted into the amalgamation: $doltlite_unemitted. Add them to the emission\
 list in tool/mksqlite3c.tcl (in dependency order), or exclude them from\
 DOLTLITE_EXTRA_TSRC in doltlite.mk if they are compiled separately."
   }
+  puts $out "#ifndef DOLTLITE_BLAKE3_SIMD_OBJECTS"
+  foreach name [blake3_linked_names] {
+    puts $out "#undef $name"
+  }
+  puts $out "#endif"
   section_comment "doltlite: END prolly engine + version-control layer"
 }
 
