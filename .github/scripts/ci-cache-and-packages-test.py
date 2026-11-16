@@ -140,7 +140,8 @@ printf '%s\n' "$*" >> "$LOG"
 if [ "$(wc -l < "$LOG")" -eq "$FAIL_AT" ]; then exit 42; fi
 if [ "$WARNING" = 1 ]; then echo 'warning: injected'; fi
 ''')
-        for name in ('assert_doltlite_artifacts.sh', 'amalgamation_vec1_option_test.sh'):
+        for name in ('assert_doltlite_artifacts.sh', 'amalgamation_vec1_option_test.sh',
+                     'amalgamation_blake3_simd_test.sh'):
             (root / 'test' / name).write_text('exit 0\n')
         env = dict(os.environ, PATH=f'{root / "bin"}:{os.environ["PATH"]}', LOG=str(root / 'commands'))
         for platform in ('ubuntu', 'macos'):

@@ -88,6 +88,7 @@ runs:
       DOLTLITE_CHECK_AMALGAMATION=0 \
         bash ../test/assert_doltlite_artifacts.sh .
       bash ../test/amalgamation_vec1_option_test.sh .
+      bash ../test/amalgamation_blake3_simd_test.sh .
       if grep -E "warning:" build.log; then
         echo "::error::compiler warnings in checked build"
         exit 1

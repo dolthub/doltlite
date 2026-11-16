@@ -133,6 +133,7 @@ ifeq ($(DOLTLITE_PROLLY),1)
     $(TOP)/ext/blake3/blake3.c $(TOP)/ext/blake3/blake3_portable.c \
     $(TOP)/ext/blake3/blake3_dispatch.c $(TOP)/ext/blake3/blake3.h \
     $(TOP)/ext/blake3/blake3_impl.h \
+    $(TOP)/ext/blake3/blake3_sse2.c $(TOP)/ext/blake3/blake3_neon.c \
     $(filter-out $(DOLTLITE_TSRC_EXCLUDE), \
       $(wildcard $(TOP)/src/doltlite*.c) $(wildcard $(TOP)/src/doltlite*.h) \
       $(wildcard $(TOP)/src/prolly_*.c) $(wildcard $(TOP)/src/prolly_*.h) \
