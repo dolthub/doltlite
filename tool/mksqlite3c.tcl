@@ -735,6 +735,13 @@ proc emit_blake3_baseline_kernels {} {
   global out srcdir
   set sse2_statics {round_fn compress_pre}
   puts $out "#ifndef DOLTLITE_BLAKE3_SIMD_OBJECTS"
+  puts $out "#if defined(__clang__)"
+  puts $out "#pragma clang diagnostic push"
+  puts $out "#pragma clang diagnostic ignored \"-Wdeclaration-after-statement\""
+  puts $out "#elif defined(__GNUC__)"
+  puts $out "#pragma GCC diagnostic push"
+  puts $out "#pragma GCC diagnostic ignored \"-Wdeclaration-after-statement\""
+  puts $out "#endif"
   puts $out "#if !defined(BLAKE3_NO_SSE2)"
   foreach name $sse2_statics {
     puts $out "#define $name ${name}_sse2"
@@ -749,6 +756,11 @@ proc emit_blake3_baseline_kernels {} {
   puts $out "#include <arm_neon.h>"
   copy_file $srcdir/blake3_neon.c
   puts $out "#endif /* BLAKE3_USE_NEON */"
+  puts $out "#if defined(__clang__)"
+  puts $out "#pragma clang diagnostic pop"
+  puts $out "#elif defined(__GNUC__)"
+  puts $out "#pragma GCC diagnostic pop"
+  puts $out "#endif"
   puts $out "#endif /* DOLTLITE_BLAKE3_SIMD_OBJECTS */"
 }
 
