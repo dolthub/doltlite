@@ -215,8 +215,15 @@ int csIndexSpoolFinish(ChunkIndexSpool *p){
     p->nRun = nRun;
   }
   p->nEntry = p->nRun ? (int)((p->iWrite-8)/sizeof(ChunkIndexEntry)) : 0;
+  for(i=0; i<CS_SPOOL_CACHE; i++) p->aCache[i] = -1;
+  p->ready = 1;
+  return SQLITE_OK;
+}
+
+static int csSpoolInitFences(ChunkIndexSpool *p){
   if( p->nEntry>0 ){
     int nBlock = (p->nEntry-1)/CS_SPOOL_BLOCK+1;
+    int i, rc;
     p->nFenceStep = ((nBlock-1)/CS_SPOOL_BUFFER+1)*CS_SPOOL_BLOCK;
     p->nFence = (p->nEntry-1)/p->nFenceStep+1;
     p->aFence = sqlite3_malloc64((sqlite3_uint64)p->nFence*sizeof(ProllyHash));
@@ -231,8 +238,6 @@ int csIndexSpoolFinish(ChunkIndexSpool *p){
       }
     }
   }
-  for(i=0; i<CS_SPOOL_CACHE; i++) p->aCache[i] = -1;
-  p->ready = 1;
   return SQLITE_OK;
 }
 
@@ -259,8 +264,13 @@ int csIndexSpoolGet(ChunkIndexSpool *p, int i, ChunkIndexEntry *e){
 }
 
 int csIndexSpoolFind(ChunkIndexSpool *p, const ProllyHash *h, int *pi){
-  int lo = 0, hi = p->nFence-1;
+  int lo = 0, hi;
   *pi = -1;
+  if( !p->aFence ){
+    int rc = csSpoolInitFences(p);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  hi = p->nFence-1;
   while( lo<=hi ){
     int mid = lo+(hi-lo)/2;
     if( prollyHashCompare(&p->aFence[mid], h)<=0 ) lo = mid+1;
