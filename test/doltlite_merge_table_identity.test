@@ -81,4 +81,70 @@ foreach tables {ordinary system same-rows} {
   }
 }
 
+# A commit that changes a table's schema and its rows is applied across a
+# rename of that table. Row-only commits cross the rename; a schema change
+# must not be applied without its rows.
+foreach {kind change applies} {
+  rows   {UPDATE t SET b='changed' WHERE id=2; DELETE FROM t WHERE id=1;
+          INSERT INTO t VALUES(7,70,'b7')} 1
+  add    {ALTER TABLE t ADD COLUMN x INT; UPDATE t SET b='changed' WHERE id=2;
+          DELETE FROM t WHERE id=1; INSERT INTO t VALUES(7,70,'b7',700)} 0
+  drop   {ALTER TABLE t DROP COLUMN a; UPDATE t SET b='changed' WHERE id=2} 0
+} {
+  foreach operation {cherry_pick revert} {
+    reset_db
+    execsql {
+      CREATE TABLE t(id INT PRIMARY KEY, a INT, b TEXT);
+      INSERT INTO t VALUES(1,10,'b1'),(2,20,'b2'),(3,30,'b3');
+      SELECT dolt_commit('-Am','base');
+    }
+    if {$operation eq "cherry_pick"} {
+      execsql {SELECT dolt_branch('side'); SELECT dolt_checkout('side')}
+      execsql $change
+      execsql {
+        SELECT dolt_commit('-Am','change');
+        SELECT dolt_checkout('main');
+        ALTER TABLE t RENAME TO t2;
+        SELECT dolt_commit('-Am','rename');
+      }
+      set sql {SELECT dolt_cherry_pick('side')}
+    } else {
+      execsql $change
+      execsql {
+        SELECT dolt_commit('-Am','change');
+        ALTER TABLE t RENAME TO t2;
+        SELECT dolt_commit('-Am','rename');
+      }
+      set sql {SELECT dolt_revert('HEAD~1')}
+    }
+    set prefix renamed-table-$kind-$operation
+    set head [db one {SELECT dolt_hashof('HEAD')}]
+    set before [execsql {SELECT * FROM t2 ORDER BY id}]
+    if {$applies} {
+      do_test $prefix.applied {lindex [catchsql $sql] 0} 0
+      if {$operation eq "cherry_pick"} {
+        set after {2 20 changed 3 30 b3 7 70 b7}
+      } else {
+        set after {1 10 b1 2 20 b2 3 30 b3}
+      }
+      do_execsql_test $prefix.rows {
+        SELECT * FROM t2 ORDER BY id;
+        PRAGMA integrity_check;
+      } [list {*}$after ok]
+    } else {
+      do_test $prefix.refused {
+        set result [catchsql $sql]
+        list [lindex $result 0] \
+             [string match {*schema conflict on table 't'*renamed to 't2'*} \
+                  [lindex $result 1]]
+      } {1 1}
+      do_test $prefix.unchanged {
+        list [expr {[execsql {SELECT * FROM t2 ORDER BY id}] eq $before}] \
+             [expr {[db one {SELECT dolt_hashof('HEAD')}] eq $head}] \
+             [execsql {SELECT count(*) FROM dolt_status; PRAGMA integrity_check}]
+      } {1 1 {0 ok}}
+    }
+  }
+}
+
 finish_test
