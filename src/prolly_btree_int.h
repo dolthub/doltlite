@@ -874,6 +874,8 @@ void refreshCursorRoot(BtCursor*);
 int applyMutMapToTableRoot(BtShared*, struct TableEntry*, ProllyMutMap*);
 void doltliteBtreeCarryNocaseNulMemo(struct TableEntry*, ProllyMutMap*,
                                      const ProllyHash*);
+void doltliteBtreeCarryNumericDescMemo(struct TableEntry*, ProllyMutMap*,
+                                       const ProllyHash*);
 int doltliteBtreeNocaseNulInsert(BtCursor*, const u8*, int);
 int flushAllPending(Btree*, BtShared*, Pgno);
 void doltliteBtreeReleasePresence(Btree *p);

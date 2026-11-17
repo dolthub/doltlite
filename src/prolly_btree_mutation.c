@@ -37,6 +37,7 @@ int applyMutMapToTableRoot(
   if( rc!=SQLITE_OK ) return rc;
 
   doltliteBtreeCarryNocaseNulMemo(pTE, pMap, &mut.newRoot);
+  doltliteBtreeCarryNumericDescMemo(pTE, pMap, &mut.newRoot);
   pTE->root = mut.newRoot;
   return SQLITE_OK;
 }

@@ -337,6 +337,43 @@ fi
 
 assert_ratio "nocase_plan_50_to_800_statements" "$T_NC_50" "$T_NC_800" 3
 
+
+# The same question is asked of an index with an ASC column ahead of a DESC
+# one, and both answers have to hold while the transaction's own inserts
+# accumulate: asking must not walk them. Linear growth is 8x here.
+echo ""
+echo "Index planning inside a growing transaction..."
+plan_txn_ms() {
+  local kind="$1" n="$2"
+  rm -f "$DB_NC"
+  python3 -c "
+q = chr(39)
+kind, n = '$kind', $n
+if kind == 'nocase':
+    print('CREATE TABLE u(id INTEGER PRIMARY KEY, name TEXT COLLATE NOCASE, b INT);')
+    print('CREATE INDEX un ON u(name);')
+else:
+    print('CREATE TABLE u(id INTEGER PRIMARY KEY, a INT, b INT);')
+    print('CREATE INDEX un ON u(a, b DESC);')
+print('BEGIN;')
+for i in range(n):
+    if kind == 'nocase':
+        print(f'INSERT INTO u VALUES({i},{q}n{i}{q},{i});')
+        print(f'SELECT count(*) FROM u WHERE name={q}n{i//2}{q};')
+    else:
+        print(f'INSERT INTO u VALUES({i},{i%100},{i});')
+        print(f'SELECT count(*) FROM u WHERE a={(i//2)%100} AND b={i//2};')
+print('COMMIT;')
+" > "$NC_SQL"
+  time_ms "\"$DOLTLITE\" '$DB_NC' < '$NC_SQL'"
+}
+for kind in nocase desc; do
+  T_PT_SMALL=$(plan_txn_ms $kind 2500)
+  T_PT_LARGE=$(plan_txn_ms $kind 20000)
+  echo "  $kind: 2500 pairs ${T_PT_SMALL}ms, 20000 pairs ${T_PT_LARGE}ms"
+  assert_ratio "plan_in_txn_${kind}_2500_to_20000" "$T_PT_SMALL" "$T_PT_LARGE" 20
+done
+
 rm -f "$DB_NC" "$NC_SQL"
 
 echo ""
