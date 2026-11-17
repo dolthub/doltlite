@@ -650,6 +650,33 @@ do_execsql_test nonlocal-attach-after.detach {
   INSERT INTO nl VALUES(4,'after detach');
   SELECT group_concat(id) FROM nl;
 } {1,2,3,4}
+# Whole-database maintenance statements act on the session's own schemas.
+# The branch a rule reaches is another session's to maintain, and a tag or
+# commit target cannot be written at all.
+foreach {name target} {branch main tag v1} {
+  nl_reset
+  do_test nonlocal-maintenance-$name.run {
+    db eval {
+      CREATE INDEX notes_body ON notes(body);
+      INSERT INTO notes VALUES(1,'n');
+      INSERT INTO dolt_nonlocal_tables VALUES('users',$target,NULL,'immediate');
+      SELECT dolt_commit('-Am','rule');
+    }
+    db eval {SELECT count(*) FROM users}
+    set r {}
+    foreach sql {ANALYZE {PRAGMA optimize} REINDEX} {
+      lappend r [catch {db eval $sql} msg]
+    }
+    lappend r [db eval {SELECT count(*) FROM sqlite_stat1 WHERE tbl='notes'}]
+  } {0 0 0 1}
+  do_test nonlocal-maintenance-$name.target-clean {
+    nl_disk main {
+      SELECT count(*) FROM dolt_status;
+      SELECT count(*) FROM sqlite_schema WHERE name='sqlite_stat1';
+    }
+  } {0 0}
+}
+
 nl_reset
 db eval {INSERT INTO dolt_nonlocal_tables VALUES('np','main','cfg','immediate')}
 foreach {name sql} {

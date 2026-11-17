@@ -1480,6 +1480,11 @@ void sqlite3Analyze(Parse *pParse, Token *pName1, Token *pName2){
     /* Form 1:  Analyze everything */
     for(i=0; i<db->nDb; i++){
       if( i==1 ) continue;  /* Do not analyze the TEMP database */
+#ifdef DOLTLITE_PROLLY
+      /* Another branch reached through a nonlocal rule is not this
+      ** session's to maintain, and may be read-only. */
+      if( doltliteNonlocalIsSchema(db->aDb[i].zDbSName) ) continue;
+#endif
       analyzeDatabase(pParse, i);
     }
   }else if( pName2->n==0 && (iDb = sqlite3FindDb(db, pName1))>=0 ){
