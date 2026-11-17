@@ -1,0 +1,39 @@
+set testdir [file join [file dirname [info script]] .. test]
+source [file join $testdir tester.tcl]
+set testprefix doltlite_working_ref_fresh_branch
+
+# A branch made by dolt_branch has no working-set record until something
+# writes or checks it out. WORKING on a connection addressing it is HEAD.
+reset_db
+db eval {
+  CREATE TABLE t(a INTEGER PRIMARY KEY, b);
+  INSERT INTO t VALUES(1,'one');
+  SELECT dolt_commit('-Am','c1');
+  SELECT dolt_branch('br');
+}
+db close
+sqlite3 db [file normalize test.db]/br
+
+do_execsql_test 1.0 {
+  SELECT active_branch(), * FROM t;
+} {br 1 one}
+do_execsql_test 1.1 {
+  SELECT count(*) FROM dolt_diff_t('HEAD','WORKING');
+  SELECT count(*) FROM dolt_diff_stat('HEAD','WORKING');
+  SELECT count(*) FROM dolt_blame_t;
+  SELECT dolt_hashof_db('WORKING')=dolt_hashof_db('HEAD');
+} {0 0 1 1}
+do_test 1.2 {
+  forcedelete dump.sql
+  set r [db eval {SELECT dolt_dump('--file-name', 'dump.sql')}]
+  set fd [open dump.sql]
+  set txt [read $fd]
+  close $fd
+  list $r [regexp {INSERT INTO [^\n]*'one'} $txt]
+} {0 1}
+do_execsql_test 1.3 {
+  INSERT INTO t VALUES(2,'two');
+  SELECT count(*) FROM dolt_diff_t('HEAD','WORKING');
+} {1}
+
+finish_test
