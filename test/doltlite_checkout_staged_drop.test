@@ -110,4 +110,38 @@ foreach storage {file memory} {
   }
 }
 
+# An uncommitted view that took a dropped table's name gives it back when
+# the table is restored, along with the view's own trigger.
+foreach {name op} {
+  dot {SELECT dolt_checkout('.')}
+  table {SELECT dolt_checkout('t')}
+} {
+  foreach staged {0 1} {
+    reset_db
+    db eval {
+      CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+      CREATE INDEX tv ON t(v);
+      INSERT INTO t VALUES(1,'base');
+      SELECT dolt_commit('-Am','base');
+    }
+    if {$staged} {db eval {UPDATE t SET v='staged'; SELECT dolt_add('.')}}
+    do_test checkout-name-taken-by-view.$name.$staged {
+      db eval {
+        CREATE TABLE other(id INTEGER PRIMARY KEY);
+        DROP TABLE t;
+        CREATE VIEW t AS SELECT id FROM other;
+        CREATE TRIGGER t_ins INSTEAD OF INSERT ON t BEGIN
+          INSERT INTO other VALUES(new.id);
+        END;
+      }
+      db eval $op
+      db eval {
+        SELECT type||':'||name FROM sqlite_schema ORDER BY 1;
+        SELECT id, v FROM t;
+        PRAGMA integrity_check;
+      }
+    } [list index:tv table:other table:t 1 [expr {$staged ? "staged" : "base"}] ok]
+  }
+}
+
 finish_test
