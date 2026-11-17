@@ -111,7 +111,8 @@ dltest_assert_int_in "foreign_zero_tail_reclaimed" "$(size)" "$base" $((base+TAI
 
 # The fill is optional. Under a file-size limit below the tail the commits
 # themselves still fit, whether the limit raises SIGXFSZ or returns an error.
-if ( ulimit -f 512 ) 2>/dev/null; then
+# A coverage build writes its profile at exit, which the same limit stops.
+if [ -z "${LLVM_PROFILE_FILE:-}" ] && ( ulimit -f 512 ) 2>/dev/null; then
   for sig in default ignored; do
     seed
     got=$( { [ "$sig" = ignored ] && trap '' XFSZ
