@@ -966,7 +966,10 @@ static int mergePass1BothSides(
   ** Its rows merge across the rename, but every schema step below looks
   ** the three sides up under one name and would drop the row changes. */
   if( !c->bBranchMerge && zName && ancEntry->zName
-   && strcmp(ancEntry->zName, zName)!=0 && theirSchemaChanged ){
+   && strcmp(ancEntry->zName, zName)!=0
+   && (theirSchemaChanged || doltliteIndexSchemaRowsDifferForTable(
+         c->aAncSchema, c->nAncSchema, c->aTheirsSchema, c->nTheirsSchema,
+         ancEntry->zName)) ){
     if( c->pzErrMsg && !*c->pzErrMsg ){
       *c->pzErrMsg = sqlite3_mprintf(
           "schema conflict on table '%s': it was renamed to '%s' and the"
