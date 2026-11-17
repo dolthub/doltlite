@@ -657,9 +657,15 @@ void csAdoptPeerCloseMarker(ChunkStore *cs){
   int lockHeld = cs->lockDepth>0;
   if( cs->isMemory || cs->isBuffer || cs->isSharedMemory || cs->readOnly
    || cs->movedReadOnly || cs->corruptMidStream || !cs->file.pFile
-   || !cs->file.zFilename || cs->wal.iWalOffset<=0 || cs->wal.cleanCloseMarker
+   || !cs->file.zFilename || cs->wal.iWalOffset<=0 || cs->wal.nWalData<=0
+   || cs->wal.cleanCloseMarker
    || cs->staging.nPending>0 || cs->staging.nRecentUncommitted>0
    || prollyHashCompare(&cs->refs.refsHash, &cs->refs.committedRefsHash)!=0 ){
+    return;
+  }
+  /* Nothing past the logical end: no lock, and no lock file, to find out. */
+  if( sqlite3OsFileSize(cs->file.pFile, &physSize)!=SQLITE_OK
+   || physSize<=cs->file.iFileSize ){
     return;
   }
   if( !lockHeld
