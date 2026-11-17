@@ -700,7 +700,8 @@ int doltliteMutateRefsExpected(
     }
   }
 
-  bMask = !cs->bDeferPublish && doltliteTxnCheckoutOwnsGraphLock(db);
+  bMask = !cs->bDeferPublish
+       && (!db->autoCommit || doltliteTxnCheckoutOwnsGraphLock(db));
   if( rc==SQLITE_OK && bMask ){
     rc = chunkStoreCaptureWorkingSets(cs, &aMask, &nMask);
   }
