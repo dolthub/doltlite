@@ -191,7 +191,10 @@ int doltliteResolveCatalogHashForRef(sqlite3 *db, const char *zRef,
     if( dirty ){
       return doltliteFlushCatalogToHash(db, pCatHash);
     }
-    return doltliteGetPersistedWorkingCatalogHash(db, pCatHash);
+    /* A branch nobody has written or checked out has no working set. */
+    rc = doltliteGetPersistedWorkingCatalogHash(db, pCatHash);
+    if( rc==SQLITE_NOTFOUND ) rc = doltliteGetHeadCatalogHash(db, pCatHash);
+    return rc;
   }
   if( doltliteRefIsStaged(zRef) ){
     doltliteGetSessionStaged(db, pCatHash);
