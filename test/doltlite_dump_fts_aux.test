@@ -112,4 +112,49 @@ ifcapable fts3 {
   }
 }
 do_test dump-fts-aux.no-temp {glob -nocomplain *-dump-*} {}
+# A user table whose name looks like a shadow table's is created by its own
+# statement: nothing else creates it, so the script has to.
+ifcapable fts5 {
+  foreach {name setup query expected} {
+    external-content {
+      CREATE TABLE docs_content(id INTEGER PRIMARY KEY, body TEXT);
+      INSERT INTO docs_content VALUES(1,'alpha beta'),(2,'beta gamma');
+      CREATE VIRTUAL TABLE docs USING fts5(body, content='docs_content',
+                                           content_rowid='id');
+      INSERT INTO docs(docs) VALUES('rebuild');
+    } {
+      SELECT group_concat(id) FROM docs_content;
+      SELECT group_concat(rowid) FROM docs WHERE docs MATCH 'beta';
+    } {1,2 1,2}
+    absent-docsize {
+      CREATE VIRTUAL TABLE x USING fts5(body, columnsize=0);
+      INSERT INTO x(rowid,body) VALUES(1,'alpha beta');
+      CREATE TABLE x_docsize(a INTEGER PRIMARY KEY, b);
+      INSERT INTO x_docsize VALUES(7,'mine');
+    } {
+      SELECT a, b FROM x_docsize;
+      SELECT group_concat(rowid) FROM x WHERE x MATCH 'beta';
+    } {7 mine 1}
+  } {
+    reset_db
+    db eval $setup
+    db eval {SELECT dolt_commit('-Am','shadow-named')}
+    foreach format {sql sqlite} {
+      set path dump-shadow-named.$format
+      forcedelete $path
+      do_test dump-shadow-named-$name-$format {
+        db eval {SELECT dolt_dump('--file-name',$path,'-r',$format)}
+        if {$format eq "sql"} {
+          sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1
+          set fd [open $path rb]; set text [read $fd]; close $fd
+          out eval $text
+        } else {sqlite3 out file:$path?doltlite_engine=sqlite -uri 1}
+        set r [out eval $query]
+        out close
+        set r
+      } $expected
+    }
+  }
+}
+
 finish_test

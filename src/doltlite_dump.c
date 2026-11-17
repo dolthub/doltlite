@@ -11,6 +11,9 @@ struct DlDump {
   sqlite3 *db;
   sqlite3 *out;
   SchemaEntry *aSchema;
+  /* Per entry: created by its own statement, not by a virtual table. A
+  ** user table can carry a shadow-style name without being a shadow. */
+  u8 *aCreated;
   int nSchema;
   const char *zRef;
   char zHash[PROLLY_HASH_SIZE*2+1];
@@ -144,6 +147,9 @@ static int dumpCreate(DlDump *p, SchemaEntry *e){
 
 static int dumpSchema(DlDump *p){
   int pass, i, rc = SQLITE_OK;
+  p->aCreated = sqlite3_malloc64(p->nSchema+1);
+  if( !p->aCreated ) return SQLITE_NOMEM;
+  memset(p->aCreated, 0, p->nSchema+1);
   for(pass=0; pass<2 && rc==SQLITE_OK; pass++){
     for(i=0; i<p->nSchema && rc==SQLITE_OK; i++){
       SchemaEntry *e = &p->aSchema[i];
@@ -153,6 +159,7 @@ static int dumpSchema(DlDump *p){
       t = sqlite3FindTable(p->out, e->zName, "main");
       if( t && (t->tabFlags & TF_Shadow)!=0 ) continue;
       rc = dumpCreate(p, e);
+      p->aCreated[i] = 1;
     }
   }
   return rc;
@@ -862,7 +869,7 @@ static int dumpRun(DlDump *p){
        || !e->zSql[0] || dumpVirtual(e)!=(pass==0) ) continue;
       t = sqlite3FindTable(p->out,e->zName,"main");
       if( !t ) { rc = SQLITE_CORRUPT; break; }
-      if( (t->tabFlags & TF_Shadow)!=0 ){
+      if( !p->aCreated[i] ){
         z = sqlite3_mprintf("DELETE FROM main.\"%w\";\n",e->zName);
         if( z ) rc = dumpExec(p,e->zName,z);
       }else z = dumpStatement(e->zSql);
@@ -912,6 +919,7 @@ dump_done:
 #endif
   if( haveFk ) sqlite3_db_config(p->out,SQLITE_DBCONFIG_ENABLE_FKEY,fk,0);
   freeSchemaEntries(p->aSchema,p->nSchema);
+  sqlite3_free(p->aCreated);
   if( pinned ){
     doltliteEndReadSnapshot(p->db);
     if( ownedRead ) sqlite3BtreeCommit(bt);
