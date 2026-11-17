@@ -53,6 +53,18 @@ static int mergePass1CollectIndexes(
   if( !zName || !c->db ) return SQLITE_OK;
 
   pTab = sqlite3FindTable(c->db, zName, "main");
+  /* Ours renamed the table and the rename was lifted out of the merge:
+  ** the live table still carries the new name. */
+  if( !pTab && c->ppSchemaActions && c->pnSchemaActions ){
+    int i;
+    for(i=0; i<*c->pnSchemaActions && !pTab; i++){
+      SchemaMergeAction *pAct = &(*c->ppSchemaActions)[i];
+      if( pAct->zRenameTable && pAct->zTableName
+       && sqlite3_stricmp(pAct->zTableName, zName)==0 ){
+        pTab = sqlite3FindTable(c->db, pAct->zRenameTable, "main");
+      }
+    }
+  }
   if( !pTab ) return SQLITE_OK;
 
   for(pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext) nIdx++;
@@ -71,7 +83,7 @@ static int mergePass1CollectIndexes(
     if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY && !HasRowid(pTab) ) continue;
     oursIdx = findCatalogEntryBySchemaObject(
         c->aOurs, c->nOurs, c->aOursSchema, c->nOursSchema,
-        "index", pIdx->zName, pTab->zName);
+        "index", pIdx->zName, zName);
     if( oursIdx ){
       MergeIndexInfo *mi = &aIdxInfo[nIdxInfo];
       mi->iTable = oursIdx->iTable;
