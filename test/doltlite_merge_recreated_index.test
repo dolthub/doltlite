@@ -60,4 +60,59 @@ foreach {layout key} {rowid {INTEGER PRIMARY KEY} clustered {INT PRIMARY KEY}} {
   }
 }
 
+# Two same-typed columns trade places in the table text. A rebuild moved the
+# values with the names; a pair of renames left them where they were. Only
+# the rows tell the two apart when the other side left the table alone.
+foreach {how ours indexsql} {
+  rebuild {
+    CREATE TABLE n(id INTEGER PRIMARY KEY, d INT, a INT);
+    INSERT INTO n(id,d,a) SELECT id,d,a FROM t;
+    DROP TABLE t;
+    ALTER TABLE n RENAME TO t;
+    CREATE INDEX ia ON t(a);
+  } {CREATE INDEX ia ON t(a)}
+  rename {
+    ALTER TABLE t RENAME COLUMN a TO x;
+    ALTER TABLE t RENAME COLUMN d TO a;
+    ALTER TABLE t RENAME COLUMN x TO d;
+  } {CREATE INDEX ia ON t(d)}
+} {
+  foreach op {merge cherry_pick} {
+    reset_db
+    execsql {
+      CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, d INT);
+      CREATE INDEX ia ON t(a);
+      INSERT INTO t VALUES(1,10,100),(2,20,200),(3,30,300);
+      SELECT dolt_commit('-Am','base');
+      SELECT dolt_branch('br');
+    }
+    execsql $ours
+    set rows [execsql {SELECT id,a,d FROM t ORDER BY id}]
+    execsql {
+      SELECT dolt_commit('-Am','ours');
+      SELECT dolt_checkout('br');
+      CREATE TABLE other(x);
+      SELECT dolt_commit('-Am','theirs');
+      SELECT dolt_checkout('main');
+    }
+    set prefix traded-columns-$how-$op
+    do_test $prefix.run {
+      lindex [catchsql "SELECT dolt_${op}('br')"] 0
+    } 0
+    do_test $prefix.index {
+      execsql {
+        SELECT sql FROM sqlite_schema WHERE name='ia';
+        SELECT id,a,d FROM t ORDER BY id;
+        PRAGMA integrity_check;
+      }
+    } [list $indexsql {*}$rows ok]
+    do_execsql_test $prefix.lookup {
+      SELECT (SELECT count(*) FROM t WHERE a=100)
+          == (SELECT count(*) FROM t NOT INDEXED WHERE a=100),
+             (SELECT count(*) FROM t WHERE d=100)
+          == (SELECT count(*) FROM t NOT INDEXED WHERE d=100);
+    } {1 1}
+  }
+}
+
 finish_test

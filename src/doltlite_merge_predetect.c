@@ -1531,8 +1531,18 @@ int mergePreNormalizeRenamedDependents(
       struct TableEntry *pOther = doltliteFindTableByName(
           i ? aOurs : aTheirs, i ? nOurs : nTheirs, pAncT->zName);
       int bEvidence;
-      if( !(i ? nRenT : nRenO) || !pAnc || !pOther
-       || prollyHashCompare(&pAnc->root, &pOther->root)==0 ) continue;
+      if( !(i ? nRenT : nRenO) || !pAnc || !pOther ) continue;
+      if( prollyHashCompare(&pAnc->root, &pOther->root)==0 ){
+        /* Names that trade places read the same whether the columns were
+        ** renamed or the table was rebuilt in another column order. Only
+        ** rows that kept their slot show a rename. */
+        if( !mergePairsReuseAncestorName(pAncT->zSql, i ? azRenT : azRenO,
+                                         i ? nRenT : nRenO) ) continue;
+        rc = mergeRenameHasEvidence(db, pAnc, pSideEnt, 0, pAncT->zSql,
+                                    pSide->zSql, pAncT->zName, &bEvidence);
+        if( rc!=SQLITE_OK || !bEvidence ) goto table_done;
+        continue;
+      }
       rc = mergeRenameHasEvidence(db, pAnc, pSideEnt, pOther, pAncT->zSql,
                                   pSide->zSql, pAncT->zName, &bEvidence);
       if( rc!=SQLITE_OK ) goto table_done;
