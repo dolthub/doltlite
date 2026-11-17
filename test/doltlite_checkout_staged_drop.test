@@ -1,0 +1,113 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc checkout_staged_drop_seed {storage key} {
+  reset_db
+  if {$storage eq "memory"} {db close; sqlite3 db :memory:}
+  db eval "CREATE TABLE t(id $key PRIMARY KEY,v TEXT)"
+  db eval {
+    CREATE INDEX tv ON t(v);
+    CREATE TABLE u(id INT PRIMARY KEY,v TEXT);
+    INSERT INTO t VALUES(1,'base');
+    INSERT INTO u VALUES(1,'base');
+    SELECT dolt_commit('-Am','base');
+    DROP TABLE t;
+    UPDATE u SET v='staged';
+    SELECT dolt_add('.');
+    UPDATE u SET v='working';
+  }
+}
+
+foreach storage {file memory} {
+  foreach key {INTEGER INT} {
+    foreach {mode sql uvalue} {
+      single {SELECT dolt_checkout('t')} working
+      separator {SELECT dolt_checkout('--','t')} working
+      multiple {SELECT dolt_checkout('t','u')} staged
+      reversed {SELECT dolt_checkout('u','t')} staged
+      recreated {SELECT dolt_checkout('t')} working
+    } {
+      checkout_staged_drop_seed $storage $key
+      set prefix checkout-staged-drop-$storage-$key-$mode
+      set staged [db one {SELECT dolt_hashof_db('STAGED')}]
+      if {$mode eq "recreated"} {
+        db eval {
+          CREATE TABLE t(id INT PRIMARY KEY,v TEXT,extra INT);
+          CREATE INDEX tx ON t(extra);
+          INSERT INTO t VALUES(2,'replacement',9);
+        }
+      }
+      do_test $prefix.result {catchsql $sql} {0 0}
+      do_execsql_test $prefix.rows {
+        SELECT id,v FROM t;
+        SELECT id FROM t INDEXED BY tv WHERE v='base';
+        SELECT group_concat(name) FROM pragma_table_info('t');
+        SELECT count(*) FROM sqlite_schema WHERE name='tx';
+        SELECT v FROM u;
+      } [list 1 base 1 id,v 0 $uvalue]
+      do_execsql_test $prefix.status {
+        SELECT table_name,staged,status FROM dolt_status ORDER BY table_name,staged;
+      } [concat {t 0 {new table} t 1 deleted} \
+          [expr {$uvalue eq "working" ? {u 0 modified u 1 modified} : {u 1 modified}}]]
+      do_test $prefix.staging-kept {db one {SELECT dolt_hashof_db('STAGED')}} $staged
+      do_execsql_test $prefix.integrity {PRAGMA integrity_check} ok
+      if {$storage eq "file"} {
+        db close
+        sqlite3 db test.db
+        do_execsql_test $prefix.reopen {
+          SELECT id,v FROM t;
+          SELECT id FROM t INDEXED BY tv WHERE v='base';
+          SELECT v FROM u;
+          SELECT table_name,staged,status FROM dolt_status WHERE table_name='t' ORDER BY staged;
+          PRAGMA integrity_check;
+        } [list 1 base 1 $uvalue t 0 {new table} t 1 deleted ok]
+      }
+      do_execsql_test $prefix.commit-staged {
+        SELECT length(dolt_commit('-m','drop'));
+        SELECT id,v FROM t;
+        SELECT id FROM t INDEXED BY tv WHERE v='base';
+        SELECT table_name,staged,status FROM dolt_status WHERE table_name='t';
+        PRAGMA integrity_check;
+      } {40 1 base 1 t 0 {new table} ok}
+    }
+
+    checkout_staged_drop_seed $storage $key
+    set prefix checkout-staged-drop-$storage-$key-missing
+    set staged [db one {SELECT dolt_hashof_db('STAGED')}]
+    do_catchsql_test $prefix.result {
+      SELECT dolt_checkout('t','missing');
+    } {1 {no such branch or table: missing}}
+    do_execsql_test $prefix.unchanged {
+      SELECT count(*) FROM sqlite_schema WHERE name='t';
+      SELECT v FROM u;
+      SELECT table_name,staged,status FROM dolt_status WHERE table_name='t';
+    } {0 working t 1 deleted}
+    do_test $prefix.staging-kept {db one {SELECT dolt_hashof_db('STAGED')}} $staged
+
+    foreach boundary {rollback savepoint} {
+      checkout_staged_drop_seed $storage $key
+      set prefix checkout-staged-drop-$storage-$key-$boundary
+      set staged [db one {SELECT dolt_hashof_db('STAGED')}]
+      db eval {BEGIN; SAVEPOINT before_restore}
+      do_execsql_test $prefix.restore {
+        SELECT dolt_checkout('t');
+        SELECT id,v FROM t;
+      } {0 1 base}
+      if {$boundary eq "savepoint"} {
+        do_catchsql_test $prefix.savepoint {
+          ROLLBACK TO before_restore;
+        } {1 {no such savepoint: before_restore}}
+      }
+      db eval ROLLBACK
+      do_execsql_test $prefix.persisted {
+        SELECT id,v FROM t;
+        SELECT v FROM u;
+        SELECT table_name,staged,status FROM dolt_status WHERE table_name='t' ORDER BY staged;
+        PRAGMA integrity_check;
+      } {1 base working t 0 {new table} t 1 deleted ok}
+      do_test $prefix.staging-kept {db one {SELECT dolt_hashof_db('STAGED')}} $staged
+    }
+  }
+}
+
+finish_test

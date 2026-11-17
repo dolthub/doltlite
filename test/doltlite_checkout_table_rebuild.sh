@@ -100,4 +100,37 @@ t
 t2|0|new table
 1|1" "$DB"
 
+for mode in single multiple; do
+  DB="$ROOT/staged_drop_$mode.db"
+  "$DOLTLITE" "$DB" "
+CREATE TABLE t(id INTEGER PRIMARY KEY,v TEXT);
+CREATE INDEX tv ON t(v);
+CREATE TABLE u(id INTEGER PRIMARY KEY,v TEXT);
+INSERT INTO t VALUES(1,'base');
+INSERT INTO u VALUES(1,'base');
+SELECT dolt_commit('-Am','base');
+DROP TABLE t;
+UPDATE u SET v='staged';
+SELECT dolt_add('.');
+UPDATE u SET v='working';" >/dev/null
+  checkout="'t'"
+  uvalue=working
+  if [ "$mode" = multiple ]; then checkout="'t','u'"; uvalue=staged; fi
+  staged=$("$DOLTLITE" "$DB" "SELECT dolt_hashof_db('STAGED');")
+  run_test "checkout_staged_drop_$mode" "
+SELECT dolt_checkout($checkout);
+SELECT id,v FROM t;
+SELECT id FROM t INDEXED BY tv WHERE v='base';
+SELECT v FROM u;
+SELECT table_name,staged,status FROM dolt_status WHERE table_name='t' ORDER BY staged;
+SELECT dolt_hashof_db('STAGED')='$staged';
+" "0
+1|base
+1
+$uvalue
+t|0|new table
+t|1|deleted
+1" "$DB"
+done
+
 dltest_finish

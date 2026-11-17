@@ -16,6 +16,7 @@ typedef struct CheckoutSchemaInfo CheckoutSchemaInfo;
 struct CheckoutSchemaInfo {
   int hasCurrent;
   int hasSource;
+  int fromHead;
   int rebuilt;
   int isSchemas;
   int isDatabase;
@@ -1042,9 +1043,13 @@ static int checkoutTablesInTxn(
   ProllyHash newWorkingHash;
   CheckoutSchemaInfo *aSchema = 0;
   struct TableEntry *aWorking = 0, *aSource = 0;
+  struct TableEntry *aHeadSource = 0;
   SchemaEntry *aSourceSchema = 0, *aWorkSchema = 0;
+  SchemaEntry *aHeadSchema = 0;
   int nWorking = 0, nSource = 0;
   int nSourceSchema = 0, nWorkSchema = 0;
+  int nHeadSource = 0, nHeadSchema = 0;
+  int sourceIsStaged = 0, headLoaded = 0;
   int fkeys = 0;
   int restoreDatabase = 0;
   int i, j;
@@ -1077,6 +1082,7 @@ static int checkoutTablesInTxn(
   }else{
     doltliteGetSessionStaged(db, &stagedHash);
     if( !prollyHashIsEmpty(&stagedHash) ){
+      sourceIsStaged = 1;
       memcpy(&sourceCatHash, &stagedHash, sizeof(ProllyHash));
     }else{
       rc = doltliteGetHeadCatalogHash(db, &headCatHash);
@@ -1094,7 +1100,7 @@ static int checkoutTablesInTxn(
   }
 
   rc = doltliteLoadCatalog(db, &sourceCatHash, &aSource, &nSource, 0);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ) goto checkout_tables_done;
 
   if( zSourceRef ){
     for(i=0; i<nNames; i++){
@@ -1116,14 +1122,11 @@ static int checkoutTablesInTxn(
                                         &hasVtab, &zSql);
         if( rc==SQLITE_OK && !doltliteCheckoutSqlIsVtab(zSql) ) hasVtab = 0;
         sqlite3_free(zSql);
-        if( rc!=SQLITE_OK ){
-          doltliteFreeCatalog(aSource, nSource);
-          return rc;
-        }
+        if( rc!=SQLITE_OK ) goto checkout_tables_done;
         if( !hasVtab && !bDropIfAbsent ){
           if( pzMissing ) *pzMissing = zName;
-          doltliteFreeCatalog(aSource, nSource);
-          return SQLITE_NOTFOUND;
+          rc = SQLITE_NOTFOUND;
+          goto checkout_tables_done;
         }
       }
     }
@@ -1131,8 +1134,8 @@ static int checkoutTablesInTxn(
 
   aSchema = sqlite3_malloc64((sqlite3_uint64)nNames * sizeof(CheckoutSchemaInfo));
   if( !aSchema ){
-    doltliteFreeCatalog(aSource, nSource);
-    return SQLITE_NOMEM;
+    rc = SQLITE_NOMEM;
+    goto checkout_tables_done;
   }
   memset(aSchema, 0, (size_t)nNames * sizeof(CheckoutSchemaInfo));
 
@@ -1155,33 +1158,50 @@ static int checkoutTablesInTxn(
                                       &aSchema[i].hasSource,
                                       &aSchema[i].zSourceSql);
     }
+    if( rc==SQLITE_OK && sourceIsStaged && !bDropIfAbsent
+     && !aSchema[i].hasSource ){
+      if( !headLoaded ){
+        rc = doltliteGetHeadCatalogHash(db, &headCatHash);
+        if( rc==SQLITE_OK ){
+          rc = doltliteLoadCatalog(db, &headCatHash,
+                                   &aHeadSource, &nHeadSource, 0);
+        }
+        if( rc==SQLITE_OK ){
+          rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db),
+                                      &headCatHash, &aHeadSchema, &nHeadSchema);
+        }
+        headLoaded = 1;
+      }
+      if( rc==SQLITE_OK ){
+        rc = checkoutLoadSourceTableSql(db, aHeadSource, nHeadSource, zName,
+                                        &aSchema[i].hasSource,
+                                        &aSchema[i].zSourceSql);
+        aSchema[i].fromHead = aSchema[i].hasSource;
+      }
+    }
     if( rc==SQLITE_OK && !bDropIfAbsent
      && !aSchema[i].hasCurrent && !aSchema[i].hasSource ){
       if( pzMissing ) *pzMissing = zName;
       rc = SQLITE_NOTFOUND;
     }
-    if( rc!=SQLITE_OK ){
-      checkoutSchemaInfoClear(aSchema, nNames);
-      doltliteFreeCatalog(aSource, nSource);
-      return rc;
-    }
+    if( rc!=SQLITE_OK ) goto checkout_tables_done;
   }
 
   rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), &sourceCatHash,
                              &aSourceSchema, &nSourceSchema);
-  if( rc!=SQLITE_OK ){
-    checkoutSchemaInfoClear(aSchema, nNames);
-    doltliteFreeCatalog(aSource, nSource);
-    return rc;
-  }
+  if( rc!=SQLITE_OK ) goto checkout_tables_done;
 
   rc = doltliteSuspendForeignKeys(db, &fkeys);
   /* Virtual tables go first: they create and drop their own shadow tables,
   ** which the rebuild of a named shadow then leaves alone. */
   for(j=0; rc==SQLITE_OK && j<2*nNames; j++){
     const char *zName;
+    SchemaEntry *aRestoreSchema;
+    int nRestoreSchema;
     int bSchemaChanged;
     i = j % nNames;
+    aRestoreSchema = aSchema[i].fromHead ? aHeadSchema : aSourceSchema;
+    nRestoreSchema = aSchema[i].fromHead ? nHeadSchema : nSourceSchema;
     zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
     if( !zName || aSchema[i].isDatabase ) continue;
     if( (j<nNames)!=(doltliteCheckoutSqlIsVtab(aSchema[i].zSourceSql)
@@ -1209,10 +1229,10 @@ static int checkoutTablesInTxn(
       aSchema[i].rebuilt = 1;
     }
     if( aSchema[i].hasSource ){
-      rc = checkoutReconcileTableIndexes(db, aSourceSchema, nSourceSchema, zName);
+      rc = checkoutReconcileTableIndexes(db, aRestoreSchema, nRestoreSchema, zName);
       if( rc==SQLITE_OK ){
-        rc = checkoutReconcileVtabShadowIndexes(db, aSourceSchema,
-                                                nSourceSchema, zName);
+        rc = checkoutReconcileVtabShadowIndexes(db, aRestoreSchema,
+                                                nRestoreSchema, zName);
       }
       if( rc!=SQLITE_OK ){
         if( rc==SQLITE_ERROR ){
@@ -1223,36 +1243,23 @@ static int checkoutTablesInTxn(
     }
   }
   rc = doltliteResumeForeignKeys(db, fkeys, rc);
-  if( rc!=SQLITE_OK ){
-    freeSchemaEntries(aSourceSchema, nSourceSchema);
-    checkoutSchemaInfoClear(aSchema, nNames);
-    doltliteFreeCatalog(aSource, nSource);
-    return rc;
-  }
+  if( rc!=SQLITE_OK ) goto checkout_tables_done;
 
   rc = doltliteFlushCatalogToHash(db, &workingHash);
-  if( rc!=SQLITE_OK ){
-    freeSchemaEntries(aSourceSchema, nSourceSchema);
-    checkoutSchemaInfoClear(aSchema, nNames);
-    doltliteFreeCatalog(aSource, nSource);
-    return rc;
-  }
+  if( rc!=SQLITE_OK ) goto checkout_tables_done;
   rc = doltliteLoadCatalog(db, &workingHash, &aWorking, &nWorking, 0);
-  if( rc!=SQLITE_OK ){
-    freeSchemaEntries(aSourceSchema, nSourceSchema);
-    checkoutSchemaInfoClear(aSchema, nNames);
-    doltliteFreeCatalog(aSource, nSource);
-    return rc;
-  }
+  if( rc!=SQLITE_OK ) goto checkout_tables_done;
 
   for(i=0; i<nNames; i++){
     const char *zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
+    struct TableEntry *aRestore = aSchema[i].fromHead ? aHeadSource : aSource;
+    int nRestore = aSchema[i].fromHead ? nHeadSource : nSource;
     int srcIdx = -1, workIdx = -1;
     if( !zName ) continue;
     if( aSchema[i].isSchemas || aSchema[i].isDatabase ) continue;
 
-    for(j=0; j<nSource; j++){
-      if( aSource[j].zName && sqlite3_stricmp(aSource[j].zName, zName)==0 ){
+    for(j=0; j<nRestore; j++){
+      if( aRestore[j].zName && sqlite3_stricmp(aRestore[j].zName, zName)==0 ){
         srcIdx = j; break;
       }
     }
@@ -1269,11 +1276,8 @@ static int checkoutTablesInTxn(
       if( doltliteCheckoutSqlIsVtab(aSchema[i].zSourceSql)
        || doltliteCheckoutSqlIsVtab(aSchema[i].zCurrentSql) ) continue;
       if( pzMissing ) *pzMissing = zName;
-      freeSchemaEntries(aSourceSchema, nSourceSchema);
-      checkoutSchemaInfoClear(aSchema, nNames);
-      doltliteFreeCatalog(aWorking, nWorking);
-      doltliteFreeCatalog(aSource, nSource);
-      return SQLITE_NOTFOUND;
+      rc = SQLITE_NOTFOUND;
+      goto checkout_tables_done;
     }
 
     if( srcIdx<0 ){
@@ -1285,47 +1289,32 @@ static int checkoutTablesInTxn(
       nWorking--;
     }else{
       rc = checkoutInstallSourceEntry(&aWorking, &nWorking,
-                                      &aSource[srcIdx],
-                                      aSource[srcIdx].zName, workIdx);
-      if( rc!=SQLITE_OK ){
-        freeSchemaEntries(aSourceSchema, nSourceSchema);
-        checkoutSchemaInfoClear(aSchema, nNames);
-        doltliteFreeCatalog(aWorking, nWorking);
-        doltliteFreeCatalog(aSource, nSource);
-        return rc;
-      }
+                                      &aRestore[srcIdx],
+                                      aRestore[srcIdx].zName, workIdx);
+      if( rc!=SQLITE_OK ) goto checkout_tables_done;
     }
   }
 
   rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), &workingHash,
                              &aWorkSchema, &nWorkSchema);
-  if( rc!=SQLITE_OK ){
-    freeSchemaEntries(aSourceSchema, nSourceSchema);
-    checkoutSchemaInfoClear(aSchema, nNames);
-    doltliteFreeCatalog(aWorking, nWorking);
-    doltliteFreeCatalog(aSource, nSource);
-    return rc;
-  }
+  if( rc!=SQLITE_OK ) goto checkout_tables_done;
   for(i=0; i<nNames; i++){
     const char *zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
+    struct TableEntry *aRestore = aSchema[i].fromHead ? aHeadSource : aSource;
+    int nRestore = aSchema[i].fromHead ? nHeadSource : nSource;
+    SchemaEntry *aRestoreSchema = aSchema[i].fromHead ? aHeadSchema : aSourceSchema;
+    int nRestoreSchema = aSchema[i].fromHead ? nHeadSchema : nSourceSchema;
     if( !zName ) continue;
     checkoutAdoptSourceIndexRoots(aWorking, nWorking,
                                   aWorkSchema, nWorkSchema,
-                                  aSource, nSource,
-                                  aSourceSchema, nSourceSchema, zName);
+                                  aRestore, nRestore,
+                                  aRestoreSchema, nRestoreSchema, zName);
     rc = checkoutAdoptVtabShadows(db, &aWorking, &nWorking,
-                                  aSource, nSource,
+                                  aRestore, nRestore,
                                   aWorkSchema, nWorkSchema,
-                                  aSourceSchema, nSourceSchema,
+                                  aRestoreSchema, nRestoreSchema,
                                   zName);
-    if( rc!=SQLITE_OK ){
-      freeSchemaEntries(aSourceSchema, nSourceSchema);
-      freeSchemaEntries(aWorkSchema, nWorkSchema);
-      checkoutSchemaInfoClear(aSchema, nNames);
-      doltliteFreeCatalog(aWorking, nWorking);
-      doltliteFreeCatalog(aSource, nSource);
-      return rc;
-    }
+    if( rc!=SQLITE_OK ) goto checkout_tables_done;
   }
 
   {
@@ -1367,6 +1356,9 @@ static int checkoutTablesInTxn(
     }
   }
 
+checkout_tables_done:
+  freeSchemaEntries(aHeadSchema, nHeadSchema);
+  doltliteFreeCatalog(aHeadSource, nHeadSource);
   freeSchemaEntries(aSourceSchema, nSourceSchema);
   freeSchemaEntries(aWorkSchema, nWorkSchema);
   checkoutSchemaInfoClear(aSchema, nNames);
