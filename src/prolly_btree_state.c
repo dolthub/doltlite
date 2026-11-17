@@ -1902,6 +1902,7 @@ int doltliteMarkTxnCheckout(
     sqlite3_free(zKey);
   }
   p->txnArrivalCatalog = *pArrival;
+  p->txnArrivalStaged = p->vc.stagedCatalog;
   p->bTxnCheckout = 1;
   return SQLITE_OK;
 }
@@ -1933,6 +1934,10 @@ int doltliteTxnCheckoutSplitsCommit(sqlite3 *db){
   }
   if( nOther==0 ) return 0;
   if( bCurrent || nOther>1 ) return 1;
+  /* Staging is a write to this branch's working set too. */
+  if( prollyHashCompare(&p->vc.stagedCatalog, &p->txnArrivalStaged)!=0 ){
+    return 1;
+  }
   {
     u8 *data = 0;
     int nData = 0;

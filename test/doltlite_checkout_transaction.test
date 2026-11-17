@@ -376,6 +376,35 @@ foreach {name pre cmd probe durable} {
   }
 }
 
+# Staging counts as a write to the branch arrived on: the branch left holds
+# the transaction's rows, and committing here would publish them.
+checkout_txn_reset
+db eval {
+  SELECT dolt_checkout('f');
+  INSERT INTO t VALUES(9,'f-before');
+  SELECT dolt_checkout('main');
+}
+do_test commit-one-branch.staged-only.refused {
+  db eval {
+    BEGIN;
+    INSERT INTO t VALUES(1,'main');
+    SELECT dolt_checkout('f');
+    SELECT dolt_add('.');
+  }
+  catchsql {SELECT dolt_commit('-m','c')}
+} {1 {Cannot commit changes on more than one branch / database}}
+do_test commit-one-branch.staged-only.rollback {
+  db eval ROLLBACK
+  db close
+  list [checkout_txn_branch main {
+    SELECT count(*) FROM t; SELECT count(*) FROM dolt_log;
+  }] [checkout_txn_branch f {
+    SELECT group_concat(id) FROM t; SELECT count(*) FROM dolt_log;
+    SELECT count(*) FROM dolt_status WHERE staged;
+  }]
+} {{0 2} {9 2 0}}
+sqlite3 db test.db
+
 # As in Dolt, dolt_commit commits one branch: it is refused while the
 # transaction holds uncommitted writes on more than one branch, whether the
 # other branch was written before or after a checkout.
