@@ -238,6 +238,10 @@ static int nonlocalAttach(sqlite3 *db, DoltliteNonlocal *p, const char *zRef){
     sqlite3_free(zSchema);
     return rc;
   }
+  /* The attachment is this connection reaching another branch, not a
+  ** database the application opened: it is no more writable than main. */
+  rc = sqlite3FindDbName(db, zSchema);
+  if( rc>=0 ) doltliteBtreeInheritReadonly(db->aDb[0].pBt, db->aDb[rc].pBt);
   aNew = sqlite3_realloc64(p->aAttach, sizeof(*aNew)*(p->nAttach+1));
   if( !aNew ){
     sqlite3_free(zTarget);
