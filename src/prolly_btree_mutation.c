@@ -1445,9 +1445,14 @@ int flushScanDeletes(BtCursor *pCur){
   /* Charge compaction to repeated tombstone scans, not point misses. */
   if( !pMap || pMap->nScanSkip<64
    || pMap->nScanSkip<(u64)pMap->nEntries*2 ) return SQLITE_OK;
+  /* A read must leave a positioned sibling alone: the VDBE compares against
+  ** it and holds its payload without restoring it first. */
   for(p=pCur->pBt->pCursor; p; p=p->pNext){
-    if( p!=pCur && p->pBtree==pCur->pBtree
-     && p->pgnoRoot==pCur->pgnoRoot && p->isPinned ) return SQLITE_OK;
+    if( p!=pCur && p->pBtree==pCur->pBtree && p->pgnoRoot==pCur->pgnoRoot
+     && (p->isPinned || p->eState==CURSOR_VALID
+         || p->eState==CURSOR_SKIPNEXT) ){
+      return SQLITE_OK;
+    }
   }
   rc = syncBtreeSavepoints(pCur->pBtree);
   if( rc!=SQLITE_OK ) return rc;
