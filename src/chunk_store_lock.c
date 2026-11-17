@@ -1140,6 +1140,7 @@ static int csRefreshIfChangedReadLocked(
   ChunkStore *cs, int *pChanged, int bBusyFails
 ){
   int rc, rc2;
+  int nTry;
   CsReadLock readLock = {0, 0};
   int locked = cs->file.pFile && !cs->isBuffer
             && !cs->noReadLock && cs->lockDepth==0;
@@ -1154,6 +1155,11 @@ static int csRefreshIfChangedReadLocked(
     }
   }
   rc = csRefreshIfChanged(cs, pChanged);
+  /* As at open: an unlocked reader raced a writer's tail trim. */
+  for(nTry=1; rc==SQLITE_IOERR_SHORT_READ && cs->noReadLock
+              && nTry<CS_NOLOCK_READ_RETRIES; nTry++){
+    rc = csRefreshIfChanged(cs, pChanged);
+  }
   if( rc==SQLITE_OK && *pChanged ) cs->refreshGen++;
   if( locked ){
     rc2 = csReadUnlock(cs, &readLock);
