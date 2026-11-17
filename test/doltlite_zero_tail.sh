@@ -86,6 +86,21 @@ dltest_assert_int_in "crash_tail_reclaimed" "$(size)" "$base" $((base+TAIL))
 run_test "rows_after_crash_recovery" "SELECT count(*) FROM t; PRAGMA integrity_check;" "22
 ok" "$DB"
 
+# The file is put back from a snapshot under an idle connection (same
+# inode). Its close must not write a marker or truncate at a logical end
+# the restored file does not have.
+seed
+out=$( { inserts 1 10
+         echo ".shell cp '$DB' '$ROOT/snap.db'"
+         inserts 11 20
+         echo ".shell cp '$ROOT/snap.db' '$DB'"
+         echo ".shell cp '$DB' '$ROOT/before_close.db'"
+       } | "$DOLTLITE" "$DB" 2>&1 )
+dltest_assert_equal "restored_file_untouched_by_idle_close" \
+  "$(cmp "$ROOT/before_close.db" "$DB" 2>&1 | head -1)" ""
+run_test "restored_file_reads" "SELECT count(*) FROM t; PRAGMA integrity_check;" "11
+ok" "$DB"
+
 seed
 base=$(size)
 dd if=/dev/zero bs=65536 count=16 2>/dev/null >>"$DB"
