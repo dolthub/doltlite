@@ -1069,6 +1069,31 @@ void chunkStoreRestoreRefsSnapshot(
   memset(pSnapshot, 0, sizeof(*pSnapshot));
 }
 
+/* Put back what a transaction owns: each branch's working set and the id
+** counters. Branch tips, tags, remotes and tracking refs written since the
+** snapshot are durable and stay. */
+void chunkStoreRestoreSnapshotWorkingSets(
+  ChunkStore *cs,
+  ChunkStoreRefsSnapshot *pSnapshot
+){
+  SavedRefsState *pSaved = &pSnapshot->state;
+  SequenceRef *aSeq = cs->refs.aSequences;
+  int nSeq = cs->refs.nSequences;
+  int i;
+  for(i=0; i<pSaved->nBranches; i++){
+    int j = pSaved->aBranches[i].zName
+          ? findBranchIdx(cs, pSaved->aBranches[i].zName) : -1;
+    if( j>=0 ){
+      cs->refs.aBranches[j].workingSetHash = pSaved->aBranches[i].workingSetHash;
+    }
+  }
+  cs->refs.aSequences = pSaved->aSequences;
+  cs->refs.nSequences = pSaved->nSequences;
+  pSaved->aSequences = aSeq;
+  pSaved->nSequences = nSeq;
+  chunkStoreDiscardRefsSnapshot(pSnapshot);
+}
+
 void chunkStoreDiscardRefsSnapshot(ChunkStoreRefsSnapshot *pSnapshot){
   csFreeSavedRefsState(&pSnapshot->state);
   memset(pSnapshot, 0, sizeof(*pSnapshot));

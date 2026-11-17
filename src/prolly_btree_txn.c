@@ -2798,7 +2798,7 @@ static int rollbackSavepointBranches(
   int nCatData = 0;
   int rc;
 
-  chunkStoreRestoreRefsSnapshot(cs, &pState->refs);
+  chunkStoreRestoreSnapshotWorkingSets(cs, &pState->refs);
   pState->bRefs = 0;
   if( strcmp(zCur, pState->zBranch)==0 ){
     chunkStoreAdoptWorkingSetBasis(cs, zCur);
