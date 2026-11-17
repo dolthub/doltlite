@@ -100,4 +100,76 @@ do_test unique-constraint-revert {
   lappend r [lindex [catchsql {INSERT INTO t VALUES(8,80,'x','z')}] 0]
 } {0 {0 ok} 0}
 
+# Theirs adds a UNIQUE constraint by rebuild while ours renames a column,
+# renames the table, or retypes a column. The first two merge, as they do
+# with the sides swapped; the third is a conflict that leaves ours intact.
+proc uq_theirs_rebuild {} {
+  execsql {
+    CREATE TABLE new_t(id INTEGER PRIMARY KEY, a INT, c TEXT, UNIQUE(c));
+    INSERT INTO new_t SELECT id,a,c FROM t;
+    DROP TABLE t;
+    ALTER TABLE new_t RENAME TO t;
+    CREATE INDEX ia ON t(a);
+  }
+}
+foreach {name ours tbl col merges} {
+  rename-column {ALTER TABLE t RENAME COLUMN a TO a2} t a2 1
+  rename-table  {ALTER TABLE t RENAME TO t2} t2 a 1
+  retype-column {
+    CREATE TABLE new_t(id INTEGER PRIMARY KEY, a TEXT, c TEXT);
+    INSERT INTO new_t SELECT id,a,c FROM t;
+    DROP TABLE t;
+    ALTER TABLE new_t RENAME TO t;
+    CREATE INDEX ia ON t(a);
+  } t a 0
+} {
+  foreach side {ours-first theirs-first} {
+    reset_db
+    execsql {
+      CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, c TEXT);
+      CREATE INDEX ia ON t(a);
+      INSERT INTO t VALUES(1,10,'c1'),(2,20,'c2'),(3,30,'c3');
+      SELECT dolt_commit('-Am','base');
+      SELECT dolt_branch('br');
+    }
+    if {$side eq "ours-first"} {
+      execsql $ours
+      execsql {SELECT dolt_commit('-Am','ours'); SELECT dolt_checkout('br')}
+      uq_theirs_rebuild
+    } else {
+      uq_theirs_rebuild
+      execsql {SELECT dolt_commit('-Am','ours'); SELECT dolt_checkout('br')}
+      execsql $ours
+    }
+    execsql {SELECT dolt_commit('-Am','theirs'); SELECT dolt_checkout('main')}
+    set prefix unique-vs-$name-$side
+    if {$merges} {
+      do_test $prefix.merge {
+        lindex [catchsql {SELECT dolt_merge('br')}] 0
+      } 0
+      do_test $prefix.state {
+        set r [execsql "
+          SELECT group_concat(id||':'||$col||':'||c, ' ')
+            FROM (SELECT * FROM $tbl ORDER BY id);
+          SELECT count(*) FROM $tbl INDEXED BY ia WHERE $col=20;
+          SELECT count(*) FROM sqlite_schema
+           WHERE name LIKE 'sqlite_autoindex_%';
+          PRAGMA integrity_check;
+        "]
+        lappend r [lindex [catchsql "INSERT INTO $tbl VALUES(9,90,'c1')"] 0]
+      } {{1:10:c1 2:20:c2 3:30:c3} 1 1 ok 1}
+    } elseif {$side eq "ours-first"} {
+      do_test $prefix.conflict {
+        set r [catchsql {SELECT dolt_merge('br')}]
+        list [lindex $r 0] [string match {*conflicts detected*} [lindex $r 1]]
+      } {1 1}
+      do_execsql_test $prefix.intact {
+        SELECT typeof(a) FROM t WHERE id=1;
+        SELECT count(*) FROM sqlite_schema WHERE name LIKE 'sqlite_autoindex_%';
+        PRAGMA integrity_check;
+      } {text 0 ok}
+    }
+  }
+}
+
 finish_test

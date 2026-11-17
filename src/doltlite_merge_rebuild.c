@@ -244,7 +244,7 @@ static int retargetRelayoutIndexBeforeActions(
         pSource = findSchemaEntry(aSource, nSource, pIndex->zTblName);
         if( !pSource || !pSource->zSql ){ rc = SQLITE_CORRUPT; goto done; }
         rc = parseColumns(pSource->zSql, &aSrcCol, &nSrcCol);
-        if( rc!=SQLITE_OK || nSrcCol==nCol ) goto done;
+        if( rc!=SQLITE_OK ) goto done;
         rc = sqlite3_open(":memory:", &tmp);
         if( rc==SQLITE_OK ) rc = sqlite3_exec(tmp, pSource->zSql, 0, 0, 0);
         if( rc!=SQLITE_OK ) goto done;
@@ -320,6 +320,26 @@ static int appendMergedSchemaCatalogRecord(
   return rc;
 }
 
+/* A UNIQUE constraint's autoindex exists only while the table definition
+** declares the constraint. The merged table may be the other side's, or
+** ours kept through a schema conflict, and then the row would name an
+** index the schema cannot load. Unknown when the definition does not
+** compile on its own. */
+static int tableSqlLacksIndex(const char *zSql, const char *zIndex){
+  sqlite3 *tmp = 0;
+  int bLacks = 0;
+  if( sqlite3_open(":memory:", &tmp)==SQLITE_OK
+   && sqlite3_exec(tmp, zSql, 0, 0, 0)==SQLITE_OK
+   && sqlite3_exec(tmp, "SELECT 1 FROM sqlite_schema LIMIT 1", 0, 0, 0)
+        ==SQLITE_OK ){
+    sqlite3_mutex_enter(tmp->mutex);
+    bLacks = sqlite3FindIndex(tmp, zIndex, "main")==0;
+    sqlite3_mutex_leave(tmp->mutex);
+  }
+  sqlite3_close(tmp);
+  return bLacks;
+}
+
 static int appendMergedHiddenIndexRow(
   sqlite3 *db,
   ProllyHash *pRoot,
@@ -334,6 +354,7 @@ static int appendMergedHiddenIndexRow(
   const char *zName
 ){
   SchemaEntry *pSe;
+  SchemaEntry *pTblSe;
   Pgno iRootpage;
   struct TableEntry *pTable;
 
@@ -357,6 +378,14 @@ static int appendMergedHiddenIndexRow(
   }
   pTable = doltliteFindTableByName(aMerged, nMerged, pSe->zTblName);
   if( iRootpage==pTable->iTable ) return SQLITE_OK;
+  pTblSe = mergedSchemaChoice(aAncSchema, nAncSchema,
+                              aOursSchema, nOursSchema,
+                              aTheirsSchema, nTheirsSchema,
+                              aConflictTables, nConflictTables,
+                              pSe->zTblName);
+  if( pTblSe && pTblSe->zSql && tableSqlLacksIndex(pTblSe->zSql, zName) ){
+    return SQLITE_OK;
+  }
   return appendMergedSchemaCatalogRecord(db, pRoot, flags, (*piNextRowid)++, pSe, iRootpage);
 }
 

@@ -1283,6 +1283,38 @@ int doltliteRebuildVirtualTables(
   return rc;
 }
 
+/* A constraint's autoindex is named after its table, so a table rename
+** applied with the schema actions renames it too. */
+static int mergeReindexFollowTableRenames(
+  SchemaMergeAction *aActions, int nActions, char **azReindex, int nReindex
+){
+  int i, j;
+  for(i=0; i<nActions; i++){
+    char *zOld;
+    int nOld;
+    if( !aActions[i].zRenameTable || !aActions[i].zTableName ) continue;
+    zOld = sqlite3_mprintf("sqlite_autoindex_%s_", aActions[i].zTableName);
+    if( !zOld ) return SQLITE_NOMEM;
+    nOld = sqlite3Strlen30(zOld);
+    for(j=0; j<nReindex; j++){
+      char *zNew;
+      if( !azReindex[j] || sqlite3_strnicmp(azReindex[j], zOld, nOld)!=0 ){
+        continue;
+      }
+      zNew = sqlite3_mprintf("sqlite_autoindex_%s_%s",
+                             aActions[i].zRenameTable, azReindex[j]+nOld);
+      if( !zNew ){
+        sqlite3_free(zOld);
+        return SQLITE_NOMEM;
+      }
+      sqlite3_free(azReindex[j]);
+      azReindex[j] = zNew;
+    }
+    sqlite3_free(zOld);
+  }
+  return SQLITE_OK;
+}
+
 static int mergeRefInstallMergedCatalog(
   sqlite3 *db,
   const ProllyHash *pAncCat,
@@ -1318,6 +1350,10 @@ static int mergeRefInstallMergedCatalog(
     rc = doltliteApplyMergeSchemaActions(db, pAncCat, pTheirCat,
                                          *paSchemaActions, *pnSchemaActions,
                                          pWorkingCat, pzErr);
+  }
+  if( rc==SQLITE_OK ){
+    rc = mergeReindexFollowTableRenames(*paSchemaActions, *pnSchemaActions,
+                                        *pazReindex, *pnReindex);
   }
   freeSchemaMergeActions(*paSchemaActions, *pnSchemaActions);
   *paSchemaActions = 0;
