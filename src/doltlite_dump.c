@@ -679,8 +679,11 @@ static int dumpValidatePrepare(DlDump *p, Table *table, const char *sql){
   sqlite3_stmt *q = 0;
   int rc = sqlite3_prepare_v2(p->out,sql,-1,&q,0);
   sqlite3_finalize(q);
+  /* A definition left stale by a later schema change is still exported as
+  ** written; what it may not do is reach a DoltLite object. */
   if( rc==SQLITE_ERROR
-   && sqlite3_strnicmp(sqlite3_errmsg(p->out),"no such table:",14)==0 ){
+   && (sqlite3_strnicmp(sqlite3_errmsg(p->out),"no such table:",14)==0
+    || sqlite3_strnicmp(sqlite3_errmsg(p->out),"no such column:",15)==0) ){
     rc = dumpValidateDependencies(p,table);
   }
   return rc;

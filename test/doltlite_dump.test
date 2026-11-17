@@ -433,6 +433,45 @@ do_test dump-normal-view-still-dumps.rows {
 do_test dump-normal-view-still-dumps.no-temp {glob -nocomplain *-dump-*} {}
 out close
 
+# A view or trigger left stale by a later schema change (a column it names
+# is gone) is exported as written, like one over a dropped table. It still
+# may not reach a DoltLite object.
+reset_db
+db eval {
+  CREATE TABLE t(a,b); INSERT INTO t VALUES(1,2);
+  CREATE TABLE u(x);
+  CREATE VIEW v AS SELECT a,b FROM t;
+  CREATE TRIGGER tr AFTER INSERT ON u BEGIN UPDATE t SET b=new.x; END;
+  DROP TABLE t; CREATE TABLE t(a,c); INSERT INTO t VALUES(1,2);
+}
+foreach format {sql sqlite} {
+  forcedelete dump-stale.$format
+  do_test dump-stale-column-$format {
+    set r [db eval {SELECT dolt_dump('--file-name','dump-stale.'||$format,'-r',$format)}]
+    if {$format eq "sql"} {
+      sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1
+      set fd [open dump-stale.sql rb]; set text [read $fd]; close $fd
+      out eval $text
+    } else {sqlite3 out file:dump-stale.sqlite?doltlite_engine=sqlite -uri 1}
+    lappend r {*}[out eval {
+      SELECT a, c FROM t;
+      SELECT type||':'||name FROM sqlite_schema WHERE type IN ('view','trigger')
+       ORDER BY 1;
+    }]
+    out close
+    set r
+  } {0 1 2 trigger:tr view:v}
+}
+do_test dump-stale-column-doltlite-object {
+  db eval {
+    DROP VIEW v;
+    CREATE VIEW v AS SELECT a, missing, (SELECT count(*) FROM dolt_branches) FROM t;
+  }
+  forcedelete dump-stale.sql
+  catchsql {SELECT dolt_dump('--file-name','dump-stale.sql')}
+} {1 {dolt_dump: v: not authorized to use table: dolt_branches}}
+do_test dump-stale-column.no-temp {glob -nocomplain *-dump-*} {}
+
 # A keyless table can already occupy every result column. Rowid has to be
 # copied by a follow-up update so the export stays within that limit.
 reset_db
