@@ -77,4 +77,42 @@ foreach {shape schema suffix extra} {
   oracle close
 }
 
+foreach suffix {{} {WITHOUT ROWID}} {
+  reset_db
+  forcedelete returning-real-oracle.db
+  sqlite3 oracle {file:returning-real-oracle.db?doltlite_engine=sqlite} -uri 1
+  set schema {CREATE TABLE t(a REAL NOT NULL,b INT,PRIMARY KEY(a))}
+  db eval "$schema $suffix"
+  oracle eval "$schema $suffix"
+  foreach {kind value} {
+    positive-large 1e300
+    negative-large -1e300
+    int64-upper 9223372036854775808.0
+    int64-upper-inside 9223372036854774784.0
+    int64-lower -9223372036854775808.0
+    int64-lower-outside -9223372036854777856.0
+    largest-finite 1.7976931348623157e308
+    smallest-finite -1.7976931348623157e308
+    positive-infinity 9e999
+    negative-infinity -9e999
+    positive-fraction 0.5
+    negative-fraction -0.5
+    subnormal 5e-324
+    zero 0.0
+    exact-integer 1.0
+  } {
+    set prefix real-key-$suffix-$kind
+    foreach {operation statement} [list \
+      insert "INSERT INTO t VALUES($value,1) RETURNING a,typeof(a),b" \
+      update {UPDATE t SET b=2 RETURNING a,typeof(a),b} \
+      lookup "SELECT a,typeof(a),b FROM t WHERE a=$value" \
+      delete {DELETE FROM t RETURNING a,typeof(a),b} \
+    ] {
+      do_test $prefix-$operation [list db eval $statement] [oracle eval $statement]
+    }
+  }
+  do_execsql_test real-key-$suffix-integrity {PRAGMA integrity_check} ok
+  oracle close
+}
+
 finish_test

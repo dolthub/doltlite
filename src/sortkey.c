@@ -769,17 +769,17 @@ static SQLITE_INLINE void decodeNumericSortKeyToRecord(
     | ((u64)buf[6] << 8)  | (u64)buf[7];
   memcpy(&d, &x, 8);
 
-  {
+  if( d >= -9223372036854775808.0 && d < 9223372036854775808.0 ){
     i64 iv = (i64)d;
-    if( d >= -9223372036854775808.0 && d < 9223372036854775808.0 && (double)iv == d ){
+    if( (double)iv == d ){
       dlIpkSerialType(iv, pType, pLen);
       dlIpkWriteBE(pOut, iv, (int)*pLen);
-    }else{
-      *pType = 7;
-      *pLen = 8;
-      memcpy(pOut, buf, 8);
+      return;
     }
   }
+  *pType = 7;
+  *pLen = 8;
+  memcpy(pOut, buf, 8);
 }
 
 static void decodeNumericSortKeyField(
