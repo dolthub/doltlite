@@ -56,6 +56,7 @@ int csTailHasRecordAt(ChunkStore *cs, i64 iOff, i64 physSize, int *pHas);
 int csTailHasSealedRoot(ChunkStore *cs, i64 iFrom, i64 physSize,
                         int sectorSize, int *pHas);
 int csTailIsZero(ChunkStore *cs, i64 iFrom, i64 iEnd, int *pZero);
+#define CS_NOLOCK_READ_RETRIES 5
 int csContentFileSize(ChunkStore *cs, i64 *pSize);
 void csAdoptPeerCloseMarker(ChunkStore *cs);
 int csScrubFailedRoot(ChunkStore *cs);

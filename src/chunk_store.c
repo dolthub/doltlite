@@ -857,8 +857,17 @@ static int csOpenUnlocked(
   int deferBusy
 ){
   CsReadLock readLock = {0, 0};
-  int rc = csOpen(cs, pVfs, zFilename, flags, deferBusy, &readLock);
-  int rc2 = csReadUnlock(cs, &readLock);
+  int nTry = 0;
+  int rc, rc2;
+  /* A reader that takes no lock can measure the file just before a writer's
+  ** close trims the zero tail, and then reads past the new end. The trim
+  ** is brief and the file is whole again once it is done. */
+  do{
+    rc = csOpen(cs, pVfs, zFilename, flags, deferBusy, &readLock);
+    rc2 = csReadUnlock(cs, &readLock);
+  }while( rc==SQLITE_IOERR_SHORT_READ && ++nTry<CS_NOLOCK_READ_RETRIES
+       && (flags & SQLITE_OPEN_URI)!=0 && (flags & SQLITE_OPEN_READONLY)!=0
+       && sqlite3_uri_boolean(zFilename, "nolock", 0) );
   if( rc==SQLITE_OK && rc2!=SQLITE_OK ){
     rc = rc2;
     chunkStoreClose(cs);

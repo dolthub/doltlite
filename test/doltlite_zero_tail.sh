@@ -90,6 +90,28 @@ dltest_assert_equal "writer_sees_peer_commits" "$out" "43"
 run_test "peer_writer_rows" "SELECT count(*), sum(k>=1000) FROM t; PRAGMA integrity_check;" "43|2
 ok" "$DB"
 
+# A reader opened with nolock=1 takes no lock, so a writer's close can trim
+# the tail while the reader is sizing the file. The writer only appends
+# commits; every such read has to succeed. Not on Windows, where the shell's
+# path is not a file: URI path.
+if [ "${OS:-}" != "Windows_NT" ]; then
+seed
+( for i in $(seq 1 60); do
+    "$REAL" "$DB" "INSERT INTO t VALUES(1000+$i,'w'); INSERT INTO t VALUES(2000+$i,'w');" >/dev/null 2>&1
+  done ) &
+writer=$!
+nolock_reads=0
+nolock_failed=0
+while kill -0 $writer 2>/dev/null; do
+  got=$("$REAL" "file:$DB?mode=ro&nolock=1" "SELECT count(*) FROM t;" 2>&1)
+  nolock_reads=$((nolock_reads+1))
+  case "$got" in ''|*[!0-9]*) nolock_failed=$((nolock_failed+1));; esac
+done
+wait $writer
+dltest_assert_int_ge "nolock_reader_ran" "$nolock_reads" 10
+dltest_assert_equal "nolock_reader_never_fails" "$nolock_failed" "0"
+fi
+
 seed
 base=$(size)
 { inserts 1 20
