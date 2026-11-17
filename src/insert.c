@@ -1987,6 +1987,18 @@ static Index *indexIteratorNext(IndexIterator *pIter, int *pIx){
   }
 }
  
+#ifdef DOLTLITE_PROLLY
+/* The insert overwrites the entry whose stored key bytes match. Keys equal
+** under another collation can differ in those bytes, so only a BINARY key
+** may rely on the overwrite to replace. */
+static int doltliteIndexKeyIsBinary(Index *pIdx){
+  int i;
+  for(i=0; i<pIdx->nKeyCol; i++){
+    if( sqlite3StrICmp(pIdx->azColl[i], sqlite3StrBINARY)!=0 ) return 0;
+  }
+  return 1;
+}
+#endif
 /*
 ** Generate code to do constraint checks prior to an INSERT or an UPDATE
 ** on table pTab.
@@ -2715,6 +2727,7 @@ void sqlite3GenerateConstraintChecks(
      && onError==OE_Replace                         /* Condition 1 */
 #ifdef DOLTLITE_PROLLY
      && !isUpdate
+     && doltliteIndexKeyIsBinary(pIdx)
 #endif
      && ( 0==(db->flags&SQLITE_RecTriggers) ||      /* Condition 4 */
           0==sqlite3TriggersExist(pParse, pTab, TK_DELETE, 0, 0))

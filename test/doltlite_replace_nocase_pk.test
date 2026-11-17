@@ -1,0 +1,33 @@
+set testdir [file join [file dirname [info script]] .. test]
+source [file join $testdir tester.tcl]
+set testprefix doltlite_replace_nocase_pk
+
+# REPLACE on a WITHOUT ROWID table with no secondary index skips collision
+# detection and relies on the insert overwriting the equal key. Keys equal
+# under NOCASE can differ in their stored bytes after a NUL.
+do_execsql_test 1.0 {
+  CREATE TABLE u(k TEXT COLLATE NOCASE PRIMARY KEY, v) WITHOUT ROWID;
+  INSERT INTO u VALUES('a'||char(0)||'b',1);
+  INSERT OR REPLACE INTO u VALUES('A'||char(0)||'d',2);
+  REPLACE INTO u VALUES('a'||char(0)||'e',3);
+  SELECT hex(k), v FROM u;
+  SELECT count(*), count(DISTINCT k) FROM u;
+  PRAGMA integrity_check;
+} {610065 3 1 1 ok}
+do_catchsql_test 1.1 {
+  INSERT INTO u VALUES('a'||char(0)||'f',4);
+} {1 {UNIQUE constraint failed: u.k}}
+do_execsql_test 1.2 {
+  REPLACE INTO u VALUES('ABC',5);
+  REPLACE INTO u VALUES('abc',6);
+  SELECT hex(k), v FROM u ORDER BY v;
+} {610065 3 616263 6}
+do_execsql_test 2.0 {
+  CREATE TABLE w(a TEXT COLLATE NOCASE, b INT, v, PRIMARY KEY(b, a))
+    WITHOUT ROWID;
+  INSERT INTO w VALUES('x'||char(0)||'1',1,'old');
+  REPLACE INTO w VALUES('X'||char(0)||'2',1,'new');
+  SELECT hex(a), b, v FROM w;
+} {580032 1 new}
+
+finish_test
