@@ -454,4 +454,46 @@ foreach {name sql expected} {
   }
 }
 
+# Refs written after the checkout are durable: ROLLBACK TO puts working sets
+# back, not tags or remotes.
+foreach end {COMMIT ROLLBACK} {
+  checkout_txn_reset
+  db eval {SELECT dolt_tag('old')}
+  do_test savepoint.refs.$end.run {
+    db eval {
+      BEGIN;
+      SAVEPOINT s1;
+      INSERT INTO t VALUES(1,'main');
+      SELECT dolt_checkout('f');
+      INSERT INTO t VALUES(2,'f');
+      SELECT dolt_tag('v1');
+      SELECT dolt_tag('-d','old');
+      SELECT dolt_remote('add','origin','file:///nonexistent/remote');
+      ROLLBACK TO s1;
+    }
+    db eval {
+      SELECT active_branch();
+      SELECT group_concat(id) FROM t;
+      SELECT group_concat(tag_name) FROM dolt_tags;
+      SELECT count(*) FROM dolt_remotes;
+    }
+  } {f {} v1 1}
+  do_test savepoint.refs.$end.end {
+    db eval $end
+    sqlite3_get_autocommit db
+  } 1
+  db close
+  do_test savepoint.refs.$end.disk {
+    checkout_txn_branch main {
+      SELECT group_concat(id) FROM t;
+      SELECT group_concat(tag_name) FROM dolt_tags;
+      SELECT count(*) FROM dolt_remotes;
+    }
+  } {{} v1 1}
+  do_test savepoint.refs.$end.f {
+    checkout_txn_branch f {SELECT group_concat(id) FROM t}
+  } {{}}
+  sqlite3 db test.db
+}
+
 finish_test

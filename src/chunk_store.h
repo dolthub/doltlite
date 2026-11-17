@@ -515,6 +515,10 @@ void chunkStoreRestoreRefsSnapshot(
   ChunkStore *cs,
   ChunkStoreRefsSnapshot *pSnapshot
 );
+void chunkStoreRestoreSnapshotWorkingSets(
+  ChunkStore *cs,
+  ChunkStoreRefsSnapshot *pSnapshot
+);
 void chunkStoreDiscardRefsSnapshot(ChunkStoreRefsSnapshot *pSnapshot);
 
 int chunkStoreHasMany(ChunkStore *cs, const ProllyHash *aHash, int nHash, u8 *aResult);
