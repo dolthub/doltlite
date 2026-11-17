@@ -57,6 +57,7 @@ int csTailHasSealedRoot(ChunkStore *cs, i64 iFrom, i64 physSize,
                         int sectorSize, int *pHas);
 int csTailIsZero(ChunkStore *cs, i64 iFrom, i64 iEnd, int *pZero);
 int csContentFileSize(ChunkStore *cs, i64 *pSize);
+void csAdoptPeerCloseMarker(ChunkStore *cs);
 int csScrubFailedRoot(ChunkStore *cs);
 int csVerifyStoredHits(ChunkStore *cs);
 void csFillChunkHdr(u8 *p, const ProllyHash *pHash, u32 size);

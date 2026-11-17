@@ -62,6 +62,23 @@ dltest_assert_int_in "tail_trimmed_on_close" "$closed" "$base" $((during-TAIL))
 run_test "rows_after_close" "SELECT count(*) FROM t; PRAGMA integrity_check;" "36
 ok" "$DB"
 
+# A reader that comes and goes after the writer's last commit leaves its
+# own clean-close marker in the tail. The writer's close has to recognize
+# it, or the tail stays until some later writer-only session.
+for round in 1 2; do
+  [ "$round" = 1 ] && seed
+  base=$(size)
+  out=$( { inserts $((round*100)) $((round*100+20))
+           echo ".shell sh $ROOT/size.sh"
+           echo ".shell sh $ROOT/peer.sh 'SELECT count(*) FROM t'"
+         } | "$DOLTLITE" "$DB" 2>&1 )
+  during=$(printf '%s\n' "$out" | sed -n 1p)
+  dltest_assert_int_ge "tail_present_before_reader_$round" "$during" $((base+TAIL))
+  dltest_assert_int_in "tail_trimmed_after_reader_$round" "$(size)" "$base" $((during-TAIL))
+  run_test "rows_after_reader_$round" "SELECT count(*) FROM t; PRAGMA integrity_check;" "$((round*21+1))
+ok" "$DB"
+done
+
 seed
 out=$( { inserts 1 20
          echo ".shell sh $ROOT/peer.sh \"INSERT INTO t VALUES(1000,'peer')\""

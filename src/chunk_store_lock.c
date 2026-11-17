@@ -645,6 +645,35 @@ static int csAdoptMatchingCloseMarker(
   return SQLITE_OK;
 }
 
+/* A peer that only read can leave a clean-close marker at this handle's
+** logical end. It records the state this handle already holds; left
+** unrecognized it reads as a peer's append, and the close then writes no
+** marker of its own and keeps the zero tail. */
+void csAdoptPeerCloseMarker(ChunkStore *cs){
+  CsFileLock lockFd = CS_FILE_LOCK_INIT;
+  char *lockName = 0;
+  i64 physSize = 0;
+  int adopted = 0;
+  int lockHeld = cs->lockDepth>0;
+  if( cs->isMemory || cs->isBuffer || cs->isSharedMemory || cs->readOnly
+   || cs->movedReadOnly || cs->corruptMidStream || !cs->file.pFile
+   || !cs->file.zFilename || cs->wal.iWalOffset<=0 || cs->wal.cleanCloseMarker
+   || cs->staging.nPending>0 || cs->staging.nRecentUncommitted>0
+   || prollyHashCompare(&cs->refs.refsHash, &cs->refs.committedRefsHash)!=0 ){
+    return;
+  }
+  if( !lockHeld
+   && csFileLock(cs->file.pVfs, cs->file.zFilename, 0, &lockFd, &lockName)
+        !=SQLITE_OK ){
+    return;
+  }
+  if( sqlite3OsFileSize(cs->file.pFile, &physSize)==SQLITE_OK
+   && physSize>cs->file.iFileSize ){
+    (void)csAdoptMatchingCloseMarker(cs, physSize, &adopted);
+  }
+  if( !lockHeld ) csFileUnlock(lockFd, &lockName);
+}
+
 /* The replaced-file guard must hold at every write-intent moment, not
 ** ride on a reader statement having statted first: the pinned-snapshot
 ** early return in refresh skips detection under the lock. One fcntl.

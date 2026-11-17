@@ -1007,6 +1007,7 @@ int chunkStoreClose(ChunkStore *cs){
   /* Clean-close marker is optional; failures are silent, so malloc is benign. */
   sqlite3BeginBenignMalloc();
   (void)csScrubFailedRoot(cs);
+  csAdoptPeerCloseMarker(cs);
   csWriteCleanCloseMarker(cs);
   csTrimZeroTail(cs);
   sqlite3EndBenignMalloc();
