@@ -350,6 +350,7 @@ struct Btree {
   char *zTxnLeaving;
   u8 bTxnLeavingWrote;
   ProllyHash txnArrivalCatalog;
+  ProllyHash txnArrivalStaged;
   u8 bFilterSchemaPlaceholders;
   u8 bCatalogDropped;     /* OOM drop: empty committedCatalogHash is not a new db */
   u8 bForceCatalogReload; /* Invalidated: live catalog may lag committedCatalogHash */
