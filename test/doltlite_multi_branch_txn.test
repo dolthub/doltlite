@@ -523,4 +523,46 @@ do_test commit-all-io-errors-exercised {expr {$failed>0}} 1
 mbio delete
 sqlite3 db test.db
 
+# A second database file cannot join the commit, also when this file's
+# writes went only to a sibling branch and the session branch is clean.
+foreach {name sql refused} {
+  session-plus-file {
+    INSERT INTO t VALUES(60,'s'); INSERT INTO o.t VALUES(1);
+  } 1
+  sibling-plus-file {
+    INSERT INTO f.t VALUES(60,'s'); INSERT INTO o.t VALUES(1);
+  } 1
+  file-plus-sibling {
+    INSERT INTO o.t VALUES(1); INSERT INTO f.t VALUES(60,'s');
+  } 1
+  session-plus-sibling {
+    INSERT INTO t VALUES(60,'s'); INSERT INTO f.t VALUES(61,'s');
+  } 0
+  file-only {
+    INSERT INTO o.t VALUES(1);
+  } 0
+} {
+  mb_reset
+  db close
+  forcedelete other.db
+  sqlite3 db test.db
+  db eval {ATTACH 'other.db' AS o; CREATE TABLE o.t(a);}
+  db eval "ATTACH '[file normalize test.db]/feat' AS f"
+  do_test multi-file-$name {
+    db eval BEGIN
+    db eval $sql
+    set rc [catch {db eval COMMIT} msg]
+    catch {db eval ROLLBACK}
+    list $rc [expr {$rc ? $msg : ""}]
+  } [list $refused [expr {$refused
+      ? "atomic commit across multiple file-backed databases is not supported"
+      : ""}]]
+  if {$refused} {
+    do_test multi-file-$name-nothing {
+      list [mb_disk main] [mb_disk feat] [db eval {SELECT count(*) FROM o.t}]
+    } {{1:base ok} {1:base ok} 0}
+  }
+}
+catch {db eval {DETACH o}}
+
 finish_test
