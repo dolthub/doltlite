@@ -876,6 +876,23 @@ int chunkStoreOpenDeferred(ChunkStore *cs, sqlite3_vfs *pVfs,
   return csOpenUnlocked(cs, pVfs, zFilename, flags, 1);
 }
 
+/* The last record this handle knows ends in a sealed root. A file put back
+** under an idle handle (restored from a snapshot, same inode) has something
+** else there, and zeros where this handle's logical end was: a close that
+** wrote its marker or truncated there would damage the restored file. */
+static int csLogicalEndIsOurs(ChunkStore *cs){
+  u8 aRoot[1 + CHUNK_MANIFEST_SIZE];
+  i64 iOff = cs->wal.iWalOffset + cs->wal.nWalData - (i64)sizeof(aRoot);
+  if( cs->wal.iWalOffset<=0 || cs->wal.nWalData<(i64)sizeof(aRoot) ) return 1;
+  if( sqlite3OsRead(cs->file.pFile, aRoot, (int)sizeof(aRoot), iOff)
+        !=SQLITE_OK ){
+    return 0;
+  }
+  return aRoot[0]==CS_WAL_TAG_ROOT
+      && csManifestHashState(aRoot+1, iOff)==CS_MANIFEST_HASH_OK
+      && csValidateWalRootManifest(cs, aRoot+1, iOff)==SQLITE_OK;
+}
+
 /* Give the zero tail back on close. A peer's append under the commit lock
 ** would land in it and readers may be probing it, so the trim needs that
 ** lock, no record past the logical end, and an uncontended publish lock. */
@@ -898,7 +915,7 @@ static void csTrimZeroTail(ChunkStore *cs){
   if( sqlite3OsFileSize(cs->file.pFile, &physSize)==SQLITE_OK
    && physSize>cs->file.iFileSize
    && csTailHasRecord(cs, physSize, &bRecord)==SQLITE_OK
-   && !bRecord ){
+   && !bRecord && csLogicalEndIsOurs(cs) ){
     if( sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_SHARED)==SQLITE_OK
      && sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_RESERVED)==SQLITE_OK
      && sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_EXCLUSIVE)==SQLITE_OK ){
@@ -949,6 +966,7 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
     rc = csContentFileSize(cs, &fileSize);
     if( rc!=SQLITE_OK ) goto done;
     if( fileSize!=cs->file.iFileSize ) goto done;
+    if( !csLogicalEndIsOurs(cs) ) goto done;
   }
 
   if( (sqlite3OsDeviceCharacteristics(cs->file.pFile)
