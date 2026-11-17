@@ -3000,7 +3000,8 @@ static int vdbeCommit(sqlite3 *db, Vdbe *p){
         if( zFilename && zFilename[0] && sqlite3BtreeHasPendingChanges(pBt) ){
           int j;
           for(j=0; j<i; j++){
-            if( doltliteBtreeSameStore(db->aDb[j].pBt, pBt)
+            if( sqlite3BtreeTxnState(db->aDb[j].pBt)==SQLITE_TXN_WRITE
+             && doltliteBtreeSameStore(db->aDb[j].pBt, pBt)
              && sqlite3BtreeHasPendingChanges(db->aDb[j].pBt) ){
               break;
             }
