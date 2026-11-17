@@ -90,11 +90,14 @@ foreach {kind change applies} {
   add    {ALTER TABLE t ADD COLUMN x INT; UPDATE t SET b='changed' WHERE id=2;
           DELETE FROM t WHERE id=1; INSERT INTO t VALUES(7,70,'b7',700)} 0
   drop   {ALTER TABLE t DROP COLUMN a; UPDATE t SET b='changed' WHERE id=2} 0
+  index  {CREATE INDEX ia ON t(a)} 0
+  index-and-rows {CREATE INDEX ia ON t(a); UPDATE t SET b='changed' WHERE id=2} 0
 } {
   foreach operation {cherry_pick revert} {
     reset_db
     execsql {
       CREATE TABLE t(id INT PRIMARY KEY, a INT, b TEXT);
+      CREATE INDEX ib ON t(b);
       INSERT INTO t VALUES(1,10,'b1'),(2,20,'b2'),(3,30,'b3');
       SELECT dolt_commit('-Am','base');
     }
@@ -120,6 +123,9 @@ foreach {kind change applies} {
     set prefix renamed-table-$kind-$operation
     set head [db one {SELECT dolt_hashof('HEAD')}]
     set before [execsql {SELECT * FROM t2 ORDER BY id}]
+    set indexes {SELECT name, tbl_name, sql FROM sqlite_schema
+                 WHERE type='index' ORDER BY name}
+    set beforeIndexes [execsql $indexes]
     if {$applies} {
       do_test $prefix.applied {lindex [catchsql $sql] 0} 0
       if {$operation eq "cherry_pick"} {
@@ -140,9 +146,10 @@ foreach {kind change applies} {
       } {1 1}
       do_test $prefix.unchanged {
         list [expr {[execsql {SELECT * FROM t2 ORDER BY id}] eq $before}] \
+             [expr {[execsql $indexes] eq $beforeIndexes}] \
              [expr {[db one {SELECT dolt_hashof('HEAD')}] eq $head}] \
              [execsql {SELECT count(*) FROM dolt_status; PRAGMA integrity_check}]
-      } {1 1 {0 ok}}
+      } {1 1 1 {0 ok}}
     }
   }
 }
