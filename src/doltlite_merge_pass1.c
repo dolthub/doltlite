@@ -950,6 +950,19 @@ static int mergePass1BothSides(
         zSchemaMergeName);
   }
 
+  /* A cherry-pick or revert pairs a table ours renamed with its old name.
+  ** Its rows merge across the rename, but every schema step below looks
+  ** the three sides up under one name and would drop the row changes. */
+  if( !c->bBranchMerge && zName && ancEntry->zName
+   && strcmp(ancEntry->zName, zName)!=0 && theirSchemaChanged ){
+    if( c->pzErrMsg && !*c->pzErrMsg ){
+      *c->pzErrMsg = sqlite3_mprintf(
+          "schema conflict on table '%s': it was renamed to '%s' and the"
+          " change being applied alters its schema", ancEntry->zName, zName);
+    }
+    return SQLITE_ERROR;
+  }
+
   /* Untouched theirs keeps ours verbatim; PKs need not agree. */
   if( zName && (ourSchemaChanged || theirSchemaChanged)
    && (theirsChanged || theirSchemaChanged) ){
