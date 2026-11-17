@@ -47,9 +47,25 @@ do_test 1.3 {
   list [lindex $res 0] [regexp {CREATE TABLE} [lindex $res 1]]
 } {1 0}
 
+# .clone makes the same flat copy and is refused the same way.
+do_test 2.1 {
+  forcedelete cloned.db
+  set res [catchcmd "bound.db" {.clone cloned.db}]
+  list [lindex $res 0] \
+       [regexp {dolt_nonlocal_tables binds tables to another branch} [lindex $res 1]] \
+       [file exists cloned.db]
+} {1 1 0}
+
 sqlite3 dbd bound.db
 dbd eval { DELETE FROM dolt_nonlocal_tables }
 dbd close
+do_test 2.2 {
+  forcedelete cloned.db
+  set res [catchcmd "bound.db" {.clone cloned.db}]
+  list [lindex $res 0] [catchcmd "cloned.db" {SELECT id, v FROM shared ORDER BY id;
+SELECT id, v FROM loc;}]
+} {0 {0 {1|main-shared
+1|main-loc}}}
 do_test 1.4 {
   set fd [open dump.sql w]
   puts $fd [lindex [catchcmd "bound.db" {.dump}] 1]
