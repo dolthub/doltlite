@@ -1100,6 +1100,9 @@ static void doltliteCommitNamedBranch(
   sqlite3_result_text(context, hex, -1, SQLITE_TRANSIENT);
 }
 
+static int commitAllSessionEmpty(sqlite3_context*, DoltliteCommitOptions*,
+                                 int*);
+
 static void doltliteCommitFuncImpl(
   sqlite3_context *context,
   int argc,
@@ -1157,6 +1160,19 @@ static void doltliteCommitFuncImpl(
     }
     chunkStoreUnlock(cs);
     doltliteInvalidateSessionWorkingState(db);
+  }
+
+  /* A commit made here would end the transaction and publish the rows it
+  ** wrote on a branch it has since left. With nothing to commit the
+  ** statement fails below instead, and those rows stay as written. */
+  if( parseRc==SQLITE_OK && doltliteTxnCheckoutLeftOtherDirty(db) ){
+    int bEmpty = 0;
+    if( commitAllSessionEmpty(context, &opts, &bEmpty)!=SQLITE_OK ) return;
+    if( !bEmpty ){
+      sqlite3_result_error(context,
+          "Cannot commit changes on more than one branch / database", -1);
+      return;
+    }
   }
 
   /* Seal top-level SAVEPOINT before option validation: Dolt keeps that

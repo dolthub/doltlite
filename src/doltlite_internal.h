@@ -2058,6 +2058,7 @@ int doltliteMarkTxnCheckout(sqlite3 *db,
                             const ProllyHash *pLeftCatalog,
                             const ProllyHash *pArrival);
 int doltliteTxnCheckoutSplitsCommit(sqlite3 *db);
+int doltliteTxnCheckoutLeftOtherDirty(sqlite3 *db);
 int doltliteSavepointsNoteCheckout(sqlite3 *db);
 int doltliteTxnCheckoutOwnsGraphLock(sqlite3 *db);
 int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch);

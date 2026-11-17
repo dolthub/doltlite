@@ -405,6 +405,40 @@ do_test commit-one-branch.staged-only.rollback {
 } {{0 2} {9 2 0}}
 sqlite3 db test.db
 
+# The transaction wrote one branch and moved to another that it has not
+# touched. A commit that would succeed there (changes staged or pending from
+# before, or --allow-empty) would end the transaction and publish the rows
+# left behind, so it is refused; Dolt accepts it and discards those rows.
+foreach {name pre commit} {
+  prestaged   {INSERT INTO t VALUES(9,'f-before'); SELECT dolt_add('.')}
+              {SELECT dolt_commit('-m','c')}
+  am-earlier  {INSERT INTO t VALUES(9,'f-before')}
+              {SELECT dolt_commit('-am','c')}
+  allow-empty {} {SELECT dolt_commit('--allow-empty','-m','c')}
+} {
+  checkout_txn_reset
+  db eval {SELECT dolt_checkout('f')}
+  db eval $pre
+  db eval {SELECT dolt_checkout('main')}
+  do_test commit-one-branch.left-only.$name.refused {
+    db eval {
+      BEGIN;
+      INSERT INTO t VALUES(1,'main');
+      SELECT dolt_checkout('f');
+    }
+    catchsql $commit
+  } {1 {Cannot commit changes on more than one branch / database}}
+  do_test commit-one-branch.left-only.$name.rollback {
+    set r [sqlite3_get_autocommit db]
+    db eval ROLLBACK
+    db close
+    lappend r [checkout_txn_branch main {
+      SELECT count(*) FROM t; SELECT count(*) FROM dolt_log;
+    }] [checkout_txn_branch f {SELECT count(*) FROM dolt_log}]
+  } {0 {0 2} 2}
+  sqlite3 db test.db
+}
+
 # As in Dolt, dolt_commit commits one branch: it is refused while the
 # transaction holds uncommitted writes on more than one branch, whether the
 # other branch was written before or after a checkout.

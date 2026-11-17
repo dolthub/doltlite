@@ -1951,6 +1951,25 @@ int doltliteTxnCheckoutSplitsCommit(sqlite3 *db){
   return prollyHashCompare(&live, &p->txnArrivalCatalog)!=0;
 }
 
+/* The transaction left uncommitted writes on a branch other than the one
+** it is on. */
+int doltliteTxnCheckoutLeftOtherDirty(sqlite3 *db){
+  Btree *p = db && db->nDb>0 ? db->aDb[0].pBt : 0;
+  const char *zCur;
+  const char *z;
+  if( !p || !p->bTxnCheckout || !p->zTxnLeftDirty ) return 0;
+  zCur = p->zBranch ? p->zBranch : "main";
+  for(z=p->zTxnLeftDirty+1; *z; ){
+    const char *zEnd = strchr(z, '\n');
+    if( !zEnd ) break;
+    if( (size_t)(zEnd-z)!=strlen(zCur) || memcmp(z, zCur, zEnd-z)!=0 ){
+      return 1;
+    }
+    z = zEnd+1;
+  }
+  return 0;
+}
+
 int doltliteTxnCheckoutOwnsGraphLock(sqlite3 *db){
   Btree *p = db && db->nDb>0 ? db->aDb[0].pBt : 0;
   return p && p->bTxnCheckout && p->inTrans==TRANS_WRITE
