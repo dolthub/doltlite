@@ -694,6 +694,26 @@ static int btreeStoreSiblingReadOnly(BtShared *pBt){
   return bRead;
 }
 
+/* The refresh that adopted a peer's refs spent the change signal the
+** store's other views would have reloaded on. */
+static void btreeMarkStaleSiblings(BtShared *pBt){
+  sqlite3 *db = pBt->db;
+  int i;
+  for(i=0; db && i<db->nDb; i++){
+    Btree *q = db->aDb[i].pBt;
+    const char *zBranch;
+    ProllyHash tip;
+    if( !q || !q->pBt || q->pBt==pBt || q->pBt->pStore!=pBt->pStore
+     || q->isDetached ) continue;
+    zBranch = q->zBranch ? q->zBranch : "main";
+    if( (chunkStoreFindBranch(pBt->pStore, zBranch, &tip)==SQLITE_OK
+         && prollyHashCompare(&tip, &q->headCommit)!=0)
+     || chunkStoreWorkingSetMovedFromBasis(pBt->pStore, zBranch) ){
+      q->iLoadedWorkingStateVersion = q->pBt->iWorkingStateVersion - 1;
+    }
+  }
+}
+
 int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
   BtShared *pBt = p->pBt;
   int rc;
@@ -839,6 +859,7 @@ int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
         chunkStoreUnlock(pBt->pStore);
         return rc;
       }
+      btreeMarkStaleSiblings(pBt);
       bStoreChanged = 1;
     }
 
