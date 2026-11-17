@@ -109,4 +109,19 @@ ok" "$DB"
 run_test "foreign_zero_tail_writes" "INSERT INTO t VALUES(1,'one'); SELECT count(*) FROM t;" "2" "$DB"
 dltest_assert_int_in "foreign_zero_tail_reclaimed" "$(size)" "$base" $((base+TAIL))
 
+# The fill is optional. Under a file-size limit below the tail the commits
+# themselves still fit, whether the limit raises SIGXFSZ or returns an error.
+if ( ulimit -f 512 ) 2>/dev/null; then
+  for sig in default ignored; do
+    seed
+    got=$( { [ "$sig" = ignored ] && trap '' XFSZ
+             ulimit -f 512
+             inserts 1 12 | "$REAL" "$DB" 2>&1
+             echo "exit=$?"; } 2>&1 | tr '\n' ' ' )
+    dltest_assert_equal "file_size_limit_commits_$sig" "$got" "exit=0 "
+    run_test "file_size_limit_rows_$sig" "SELECT count(*) FROM t; PRAGMA integrity_check;" "13
+ok" "$DB"
+  done
+fi
+
 dltest_finish

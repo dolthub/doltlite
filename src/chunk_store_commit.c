@@ -5,6 +5,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#if SQLITE_OS_UNIX && !defined(__EMSCRIPTEN__)
+# include <sys/resource.h>
+#endif
 
 void doltliteTestPause(const char *zEnv);
 #ifdef SQLITE_TEST
@@ -70,6 +73,21 @@ static int csRollbackFailedAppend(
     return SQLITE_OK;
   }
   return rc==SQLITE_OK ? SQLITE_IOERR_TRUNCATE : rc;
+}
+
+/* Writing past the process's file-size limit raises SIGXFSZ, which kills a
+** process that has not arranged otherwise before any error is returned. */
+static int csZeroFillWithinLimit(i64 iEnd){
+#if SQLITE_OS_UNIX && !defined(__EMSCRIPTEN__)
+  struct rlimit lim;
+  if( getrlimit(RLIMIT_FSIZE, &lim)==0 && lim.rlim_cur!=RLIM_INFINITY
+   && (u64)lim.rlim_cur<(u64)iEnd ){
+    return 0;
+  }
+#else
+  (void)iEnd;
+#endif
+  return 1;
 }
 
 /* Caller holds the commit lock. A record past the failed append's end is
@@ -564,6 +582,8 @@ static int csCommitToFile(
       }else if( physFileSize<batchStart+nNeed ){
         if( cs->nTailStreak==0 ){
           cs->nTailStreak = 1;
+        }else if( !csZeroFillWithinLimit(batchStart + CS_ZERO_TAIL_BYTES) ){
+          cs->bTailFull = 1;
         }else{
           static const u8 aZeroTail[65536];
           i64 iZero = physFileSize>batchStart ? physFileSize : batchStart;
@@ -573,8 +593,9 @@ static int csCommitToFile(
             rc = sqlite3OsWrite(cs->file.pFile, aZeroTail, n, iZero);
             iZero += n;
           }
-          if( rc==SQLITE_FULL ){
-            /* The commit itself may still fit. */
+          if( rc!=SQLITE_OK ){
+            /* The fill is optional and the commit itself may still fit: a
+            ** quota or file-size limit reports an I/O error, not FULL. */
             cs->bTailFull = 1;
             rc = sqlite3OsTruncate(cs->file.pFile, physFileSize);
           }
