@@ -453,6 +453,8 @@ void chunkStoreFollowWorkingSetBasis(ChunkStore *cs, const char *zBranch);
 void chunkStoreFreeWsBranches(ChunkStore *cs);
 void chunkStoreReadoptWorkingSetBasis(ChunkStore *cs);
 int chunkStoreWorkingSetMovedFromBasis(ChunkStore *cs, const char *zBranch);
+int chunkStoreWorkingSetReplacedByBatch(ChunkStore *cs, const char *zBranch,
+                                        const ProllyHash *pHash);
 int csCheckWorkingSetReplace(ChunkStore *cs);
 void chunkStoreGetWorkingSetBasis(ChunkStore *cs, const char *zBranch,
                                   ProllyHash *pHash);

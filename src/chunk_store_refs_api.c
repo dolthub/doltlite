@@ -440,6 +440,25 @@ int chunkStoreWorkingSetSelfPublished(
   return 0;
 }
 
+/* pHash is what this unpublished batch replaced on zBranch after reading
+** it: the session's basis has moved on to its own pending write. */
+int chunkStoreWorkingSetReplacedByBatch(
+  ChunkStore *cs,
+  const char *zBranch,
+  const ProllyHash *pHash
+){
+  CsWsSession *w;
+  if( !zBranch ) return 0;
+  for(w=&cs->wsMain; w; w=w->pNext){
+    if( w->bWsReplacing && csWsTracks(w, zBranch)
+     && prollyHashCompare(&w->wsReplaced, pHash)==0
+     && prollyHashCompare(&w->wsReplaced, &w->wsReplacedBasis)==0 ){
+      return 1;
+    }
+  }
+  return 0;
+}
+
 /* The published working set, ignoring refs this connection changed but has
 ** not committed; ReadDisk returns those when the tail has not moved. */
 int chunkStoreReadPublishedBranchWorkingSet(

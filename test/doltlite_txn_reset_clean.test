@@ -1,0 +1,66 @@
+set testdir [file join [file dirname [info script]] .. test]
+source [file join $testdir tester.tcl]
+set testprefix doltlite_txn_reset_clean
+
+proc txn_reset_db {} {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INT PRIMARY KEY,v TEXT);
+    INSERT INTO t VALUES(1,'a');
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('f');
+  }
+  db close
+  sqlite3 db test.db
+}
+proc txn_branch {branch sql} {
+  sqlite3 observer [file normalize test.db]/$branch -readonly 1
+  set r [observer eval $sql]
+  observer close
+  return $r
+}
+set state {
+  SELECT group_concat(id) FROM (SELECT id FROM t ORDER BY id);
+  SELECT group_concat(table_name||'/'||staged, ' ')
+    FROM (SELECT * FROM dolt_status ORDER BY table_name);
+}
+
+# The transaction's own pending working set, from dolt_add or an
+# in-transaction checkout, is not a peer write. The connection is fresh: one
+# that published the base working set itself recognizes it as its own.
+foreach {name sql branch expect} {
+  reset {
+    INSERT INTO t VALUES(3,'x'); SELECT dolt_add('.'); SELECT dolt_reset();
+  } main {1,3 t/0}
+  reset-soft {
+    INSERT INTO t VALUES(3,'x'); SELECT dolt_add('.');
+    SELECT dolt_reset('--soft','HEAD');
+  } main {1,3 t/1}
+  clean {
+    INSERT INTO t VALUES(3,'x'); SELECT dolt_add('.');
+    CREATE TABLE junk(a); SELECT dolt_clean();
+  } main {1,3 t/1}
+  checkout {
+    INSERT INTO t VALUES(3,'x'); SELECT dolt_add('.');
+    SELECT dolt_checkout('f'); SELECT dolt_checkout('main');
+  } main {1,3 t/1}
+  checkout-reset {
+    SELECT dolt_checkout('f'); INSERT INTO t VALUES(3,'x');
+    SELECT dolt_add('.'); SELECT dolt_reset();
+  } f {1,3 t/0}
+  checkout-clean {
+    SELECT dolt_checkout('f'); INSERT INTO t VALUES(3,'x');
+    CREATE TABLE junk(a); SELECT dolt_clean();
+  } f {1,3 t/0}
+} {
+  txn_reset_db
+  do_test $name.run {
+    db eval BEGIN
+    db eval $sql
+    db eval COMMIT
+    sqlite3_get_autocommit db
+  } 1
+  do_test $name.state {txn_branch $branch $state} $expect
+}
+
+finish_test
