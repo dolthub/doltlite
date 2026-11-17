@@ -360,6 +360,22 @@ static int nonlocalCheckRefs(sqlite3 *db, DoltliteNonlocal *p){
   return SQLITE_OK;
 }
 
+/* A view caches its column list from the tables its names resolved to.
+** Once the redirects or their targets change, that list may describe the
+** shadowed local table. */
+static void nonlocalResetViews(sqlite3 *db){
+  int i;
+  for(i=0; i<db->nDb; i++){
+    Schema *pSchema = db->aDb[i].pSchema;
+    HashElem *k;
+    if( !pSchema ) continue;
+    for(k=sqliteHashFirst(&pSchema->tblHash); k; k=sqliteHashNext(k)){
+      Table *pTab = (Table*)sqliteHashData(k);
+      if( IsView(pTab) && pTab->nCol>0 ) sqlite3DeleteColumnNames(db, pTab);
+    }
+  }
+}
+
 /* Around a top-level statement's compile: reload the rules when the
 ** rules table changed, check the refs they target when the refs moved,
 ** and attach each target that resolves. Returns nonzero when the
@@ -398,6 +414,7 @@ static int nonlocalSync(sqlite3 *db){
       nonlocalRulesClear(p);
       nonlocalMissingClear(p);
       nonlocalDetachUnused(db, p);
+      nonlocalResetViews(db);
       p->bSyncing = 0;
       return 1;
     }
@@ -427,6 +444,8 @@ static int nonlocalSync(sqlite3 *db){
          || !p->zBranch || strcmp(p->zBranch, doltliteGetSessionBranch(db))!=0;
   if( !bReload
    && (p->nRule==0 || prollyHashCompare(&p->refsSeen, pRefs)==0) ){
+    /* The refresh above reloads a target's schema without moving refs. */
+    if( p->nRule>0 ) nonlocalResetViews(db);
     return 0;
   }
   p->bSyncing = 1;
@@ -452,6 +471,7 @@ static int nonlocalSync(sqlite3 *db){
       nDetached = nonlocalDetachUnused(db, p);
     }
   }
+  nonlocalResetViews(db);
   p->bSyncing = 0;
   if( bReload ) return !bPending || db->nDb!=nAttach || nDetached>0;
   return db->nDb!=nAttach || nDetached>0 || nMissing!=0 || p->nMissing!=0;

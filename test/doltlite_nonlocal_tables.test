@@ -1318,4 +1318,41 @@ do_execsql_test nonlocal-fk-parent-verify.rows {
   SELECT id, uid FROM orders ORDER BY id;
 } {1 1 3 5}
 
+# A view over a redirected name takes its columns from the target, also
+# when the view is the first thing a connection compiles (the rules load
+# after that compile) and after a peer alters the target.
+reset_db
+db eval {
+  CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT, email TEXT);
+  INSERT INTO users VALUES(1,'alice','alice@example.com');
+  SELECT dolt_commit('-Am','init');
+  SELECT dolt_checkout('-b','exp');
+  DROP TABLE users;
+  CREATE TABLE users(email TEXT, name TEXT, id INTEGER PRIMARY KEY);
+  INSERT INTO users VALUES('local@example.com','local',9);
+  CREATE VIEW v AS SELECT * FROM users;
+  SELECT dolt_commit('-Am','exp');
+  INSERT INTO dolt_nonlocal_tables VALUES('users','main',NULL,'immediate');
+  SELECT dolt_commit('-Am','rule');
+}
+db close
+sqlite3 db [file normalize test.db]/exp
+do_execsql_test view-columns-first-statement {
+  SELECT id, name, email FROM v;
+  SELECT count(*) FROM v WHERE email LIKE '%@%';
+} {1 alice alice@example.com 1}
+do_test view-columns-peer-alter {
+  sqlite3 peer [file normalize test.db]/main
+  peer eval {ALTER TABLE users ADD COLUMN extra INT DEFAULT 0}
+  peer close
+  db eval {SELECT * FROM v}
+} {1 alice alice@example.com 0}
+db close
+sqlite3 db [file normalize test.db]/exp
+do_execsql_test view-columns-first-statement-wider {
+  SELECT * FROM v;
+} {1 alice alice@example.com 0}
+db close
+sqlite3 db test.db
+
 finish_test
