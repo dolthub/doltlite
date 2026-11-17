@@ -19,6 +19,16 @@ db eval {
 }
 db close
 file copy -force test.db checkout-io-base.db
+sqlite3 db test.db
+db eval {
+  DROP TABLE t;
+  SELECT dolt_add('t');
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+  CREATE INDEX tv ON t(v);
+  INSERT INTO t VALUES(1,'base'),(2,'staged'),(2001,'precious');
+}
+db close
+file copy -force test.db checkout-io-fallback.db
 
 set armed 0
 proc checkout_error {method filename args} {
@@ -45,19 +55,24 @@ set state {
   PRAGMA integrity_check;
 }
 set failed 0
-foreach source {staged ref multiple dot} {
+foreach source {staged ref multiple dot fallback} {
   switch $source {
     staged {set sql {SELECT dolt_checkout('t')}}
     ref {set sql {SELECT dolt_checkout('feat','t')}}
     multiple {set sql {SELECT dolt_checkout('t','u')}}
     dot {set sql {SELECT dolt_checkout('.')}}
+    fallback {set sql {SELECT dolt_checkout('t')}}
   }
   foreach next {insert commit retry} {
     foreach kind {xWrite xSync} {
       foreach width {1 3 8} {
         for {set fault 1} {$fault<=100} {incr fault} {
           forcedelete test.db
-          file copy -force checkout-io-base.db test.db
+          if {$source eq "fallback"} {
+            file copy -force checkout-io-fallback.db test.db
+          } else {
+            file copy -force checkout-io-base.db test.db
+          }
           sqlite3 db test.db -vfs checkoutio
           set before [db eval $state]
           set calls 0
@@ -152,5 +167,6 @@ foreach next {insert commit} {
 }
 do_test checkout-peer-acknowledged {expr {$acknowledged>0}} 1
 forcedelete checkout-io-base.db
+forcedelete checkout-io-fallback.db
 sqlite3 db test.db
 finish_test

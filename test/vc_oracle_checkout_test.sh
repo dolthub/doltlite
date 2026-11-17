@@ -1725,4 +1725,32 @@ UPDATE t SET v = 9;
 SELECT dolt_checkout('.');
 "
 
+for checkout in "'t'" "'--','t'" "'t','u'" "'u','t'"; do
+  staged_drop_case=$(( ${staged_drop_case:-0} + 1 ))
+  oracle "checkout_staged_drop_$staged_drop_case" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE INDEX tv ON t(v);
+CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+INSERT INTO u VALUES(1,'base');
+SELECT dolt_commit('-Am','base');
+DROP TABLE t;
+UPDATE u SET v='staged';
+SELECT dolt_add('.');
+UPDATE u SET v='working';
+SELECT dolt_checkout($checkout);
+"
+done
+
+oracle "checkout_staged_drop_recreated" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-Am','base');
+DROP TABLE t;
+SELECT dolt_add('.');
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, extra INT);
+INSERT INTO t VALUES(2,'replacement',9);
+SELECT dolt_checkout('t');
+"
+
 vc_oracle_finish
