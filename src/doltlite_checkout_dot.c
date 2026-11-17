@@ -413,19 +413,26 @@ int doltliteCheckoutRebuildTable(
   const char *zSourceSql
 ){
   KeptDependents kept;
+  Table *pCurrent;
+  int bView;
   int rc = SQLITE_OK;
   memset(&kept, 0, sizeof(kept));
   /* A shadow table belongs to its virtual table, which was restored or
   ** dropped before it and took the shadow along. */
   if( sqlite3ShadowTableName(db, zName, "main") ) return SQLITE_OK;
-  if( !sqlite3FindTable(db, zName, "main") ) hasCurrent = 0;
+  pCurrent = sqlite3FindTable(db, zName, "main");
+  if( !pCurrent ) hasCurrent = 0;
+  /* A view that took the table's name gives it back; its triggers are not
+  ** the table's and go with it. */
+  bView = pCurrent && IsView(pCurrent);
+  if( bView ) hasCurrent = 1;
   if( hasCurrent ){
     char *zDrop;
-    if( zSourceSql ){
+    if( zSourceSql && !bView ){
       rc = keepTableDependents(db, zName, &kept);
       if( rc!=SQLITE_OK ) return rc;
     }
-    zDrop = sqlite3_mprintf("DROP TABLE \"%w\"", zName);
+    zDrop = sqlite3_mprintf("DROP %s \"%w\"", bView ? "VIEW" : "TABLE", zName);
     if( !zDrop ){
       keptClear(&kept);
       return SQLITE_NOMEM;
