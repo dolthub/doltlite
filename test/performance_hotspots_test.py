@@ -115,7 +115,7 @@ class HotspotTests(unittest.TestCase):
 
     def test_main_measures_only_remaining_workloads_for_all_arms(self):
         paths = list((hotspots.TEST_DIR/'performance-hotspot-corpus').glob('*.json'))
-        self.assertEqual([path.name for path in paths], ['issue_4955.json'])
+        self.assertEqual(sorted(path.name for path in paths), ['issue_4955.json', 'issue_5010.json'])
 
         with tempfile.TemporaryDirectory() as directory:
             result = Path(directory) / "results.tsv"
@@ -148,7 +148,9 @@ class HotspotTests(unittest.TestCase):
                 hotspots.main(["--baseline", "base", "--candidate", "candidate",
                                "--stock", "stock", "--runs", "2"])
             prepare_retained.assert_called_once()
-            self.assertEqual(sql.call_count, 0)
+            self.assertEqual(sql.call_count, 3)
+            self.assertEqual([call.args[0].name for call in sql.call_args_list],
+                             ['base', 'candidate', 'stock'])
             bucket_fixture, measure_bucket = bucket["bucket_fixture"], bucket["measure_bucket"]
             fixtures = hotspots.bucket_fixture_names()
             self.assertEqual(bucket_fixture.call_count, 3 * len(fixtures))
@@ -186,10 +188,10 @@ class HotspotTests(unittest.TestCase):
             self.assertIn("Add Column With Default", report.getvalue())
             self.assertIn("### Wide Row Trade-offs", report.getvalue())
             self.assertNotIn("### Wide Row Fetches", report.getvalue())
-            self.assertEqual(report.getvalue().count("### "), 6)
+            self.assertEqual(report.getvalue().count("### "), 7)
             self.assertIn("### Uncached Reads\n", report.getvalue())
             self.assertIn("https://github.com/dolthub/doltlite/issues/3408", report.getvalue())
-            self.assertNotIn("### In Transaction with Mutations", report.getvalue())
+            self.assertIn("### In Transaction with Mutations", report.getvalue())
             self.assertNotIn("### Small Cache", report.getvalue())
             self.assertNotIn("### Index Row Fetches", report.getvalue())
             self.assertNotIn("### Bulk Writes", report.getvalue())
@@ -199,22 +201,36 @@ class HotspotTests(unittest.TestCase):
                           "Pending Edit Map"):
                 self.assertIn(f"### {title}\n", report.getvalue())
             for call in measure_retained.call_args_list:
-                self.assertEqual(len(call.args[2]), 1)
-                name, bundle, databases = call.args[2][0]
+                self.assertEqual(len(call.args[2]), 2)
+                retained = {bundle['issue']: (name, bundle, databases)
+                            for name, bundle, databases in call.args[2]}
+                self.assertEqual(set(retained), {4955, 5010})
+                name, bundle, databases = retained[4955]
                 self.assertEqual(name, 'retained_4955_pending_edits_wide_text_update_memory_x1')
                 self.assertEqual(bundle['issue'], 4955)
                 self.assertEqual(bundle['category'], 'pending_edits')
                 self.assertTrue(bundle['profile']['memory'])
                 self.assertGreater(bundle['profile']['rows'] * bundle['profile']['payload'], 64 << 20)
                 self.assertEqual(set(databases.values()), {':memory:'})
+                name, bundle, databases = retained[5010]
+                self.assertEqual(name, 'retained_5010_in_transaction_mutations_text_pk_range_after_update_x4')
+                self.assertEqual(bundle['category'], 'in_transaction_mutations')
+                self.assertFalse(bundle['profile']['memory'])
+                self.assertEqual(bundle['profile']['rows'], 60000)
+                self.assertEqual(bundle['repeats'], 4)
+                self.assertEqual(bundle['case']['prepare'], 'UPDATE t SET v=v+1 WHERE seq%8=0;')
+                self.assertEqual(len(set(databases.values())), 3)
+                self.assertTrue(all(isinstance(path, Path) for path in databases.values()))
             self.assertNotIn('https://github.com/dolthub/doltlite/issues/3427', report.getvalue())
             self.assertIn('[wide_text_update_memory_x1](https://github.com/dolthub/doltlite/issues/4955)',
                           report.getvalue())
+            self.assertIn('[text_pk_range_after_update_x4](https://github.com/dolthub/doltlite/issues/5010)',
+                          report.getvalue())
             self.assertEqual(report.getvalue().count('### Pending Edit Map\n'), 1)
             self.assertNotIn('retained_3427_', result.read_text())
-            self.assertEqual(len(result.read_text().splitlines()), 25)
+            self.assertEqual(len(result.read_text().splitlines()), 26)
             self.assertIn('add_column\tadd_column_default\t100000\t100000\n', result.read_text())
-            self.assertEqual(len(raw.read_text().splitlines()), 51)
+            self.assertEqual(len(raw.read_text().splitlines()), 53)
 
     def test_medians_raw_samples_and_stock_report(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -603,9 +619,9 @@ class HotspotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(hotspots, 'sql') as sql:
             fixtures = hotspots.prepare_retained(
                 {'baseline': 'base', 'candidate': 'new', 'stock': 'stock'}, Path(directory))
-            active = [fixture for fixture in fixtures
-                      if fixture[1]['category'] in ('in_transaction_mutations', 'after_deletes')]
-            self.assertEqual(active, [])
+            retained_active = [fixture for fixture in fixtures
+                               if fixture[1]['category'] in ('in_transaction_mutations', 'after_deletes')]
+            self.assertEqual([fixture[1]['issue'] for fixture in retained_active], [5010])
             retired = hotspots.prepare_retained(
                 {'baseline': 'base', 'candidate': 'new', 'stock': 'stock'},
                 Path(directory), hotspots.TEST_DIR/'performance-hotspot-seeds')
@@ -618,7 +634,7 @@ class HotspotTests(unittest.TestCase):
                          if fixture[1]['category'] == 'in_transaction_mutations']
             self.assertEqual(len(fixtures), 6)
             self.assertEqual(sum(b['profile']['memory'] for _, b, _ in fixtures), 2)
-            for name, bundle, databases in fixtures + active + bulk:
+            for name, bundle, databases in fixtures + retained_active + active + bulk:
                 self.assertEqual(hotspots.section_of(name), bundle['category'])
                 self.assertIn(bundle['category'], ('in_transaction_mutations', 'bulk_writes', 'after_deletes'))
                 self.assertEqual(bundle['profile']['memory'], databases['candidate']==':memory:')
