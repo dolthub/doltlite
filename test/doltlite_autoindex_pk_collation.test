@@ -47,4 +47,14 @@ do_execsql_test fixed.1 {
   SELECT a.c1, b.c0, b.c1 FROM t1 a JOIN t1 b ON a.c2 = b.c1 ORDER BY 3;
 } {z 1 A z 1 a}
 
+# Every column is used and every primary-key column is carried twice, so the
+# automatic index has more key columns than the table has columns. An assert
+# build used to abort here.
+reset_db
+do_execsql_test wide.1 {
+  CREATE TABLE t(a TEXT, b REAL, c, PRIMARY KEY(a,b)) WITHOUT ROWID;
+  INSERT INTO t VALUES('x',1.0,1.0),('y',2.0,1.0);
+  SELECT x.a, x.b, x.c, y.a FROM t y LEFT JOIN t x ON x.b = y.c ORDER BY 4;
+} {x 1.0 1.0 x x 1.0 1.0 y}
+
 finish_test

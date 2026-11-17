@@ -1144,7 +1144,13 @@ static SQLITE_NOINLINE void constructAutomaticIndex(
   }
 
   /* Construct the Index object to describe this index */
+#ifdef DOLTLITE_PROLLY
+  /* A primary-key column can be counted twice: as a join key and again as
+  ** itself. */
+  assert( nKeyCol <= 2*pTable->nCol + MAX(0, pTable->nCol - BMS + 1) );
+#else
   assert( nKeyCol <= pTable->nCol + MAX(0, pTable->nCol - BMS + 1) );
+#endif
   /* ^-- This guarantees that the number of index columns will fit in the u16 */
   pIdx = sqlite3AllocateIndexObject(pParse->db, nKeyCol+HasRowid(pTable),
                                     0, &zNotUsed);
