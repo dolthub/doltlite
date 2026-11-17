@@ -2054,6 +2054,12 @@ const char *sqlite3BtreeGetJournalname(Btree *p){
   return p->pOps->xGetJournalname(p);
 }
 
+void doltliteBtreeInheritReadonly(Btree *pFrom, Btree *p){
+  if( pFrom && p && (pFrom->pBt->btsFlags & BTS_READ_ONLY)!=0 ){
+    p->pBt->btsFlags |= BTS_READ_ONLY;
+  }
+}
+
 int prollyBtreeIsReadonly(Btree *p){
   return p->isDetached || (p->pBt->btsFlags & BTS_READ_ONLY) ? 1 : 0;
 }

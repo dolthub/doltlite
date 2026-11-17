@@ -5577,6 +5577,7 @@ void doltliteFinishOwnSchemaReload(sqlite3*);
 int sqlite3BtreeIsDeferred(Btree*);
 const char *doltliteBtreeMissingWriteBranch(Btree*);
 int doltliteBtreeSameStore(Btree*, Btree*);
+void doltliteBtreeInheritReadonly(Btree*, Btree*);
 const char *doltliteStoreSiblingBranch(sqlite3*, const char*, int);
 int doltliteStoreDirtyBranches(sqlite3*, Btree**);
 void doltliteBtreeSyncPresence(Btree*);

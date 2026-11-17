@@ -1355,4 +1355,43 @@ do_execsql_test view-columns-first-statement-wider {
 db close
 sqlite3 db test.db
 
+# A connection opened read-only reaches the target branch read-only too.
+reset_db
+db eval {
+  CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT);
+  CREATE TABLE loc(id INTEGER PRIMARY KEY, v);
+  INSERT INTO users VALUES(1,'a');
+  SELECT dolt_commit('-Am','init');
+  SELECT dolt_checkout('-b','exp');
+  INSERT INTO dolt_nonlocal_tables VALUES('users','main',NULL,'immediate');
+  SELECT dolt_commit('-Am','rule');
+}
+db close
+foreach {name open} {
+  uri-mode-ro {sqlite3 db file:[file normalize test.db]/exp?mode=ro -uri 1}
+  open-readonly {sqlite3 db [file normalize test.db]/exp -readonly 1}
+} {
+  eval $open
+  do_execsql_test readonly-$name.read {
+    SELECT id, name FROM users;
+  } {1 a}
+  foreach {op sql} {
+    local {INSERT INTO loc VALUES(10,'ro')}
+    insert {INSERT INTO users VALUES(10,'ro')}
+    delete {DELETE FROM users WHERE id=1}
+    update {UPDATE users SET name='ro' WHERE id=1}
+  } {
+    do_catchsql_test readonly-$name.$op $sql \
+      {1 {attempt to write a readonly database}}
+  }
+  db close
+  sqlite3 db [file normalize test.db]/main
+  do_execsql_test readonly-$name.target {
+    SELECT id, name FROM users;
+    SELECT count(*) FROM dolt_status;
+  } {1 a 0}
+  db close
+}
+sqlite3 db test.db
+
 finish_test
