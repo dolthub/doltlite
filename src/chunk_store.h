@@ -367,7 +367,7 @@ struct ChunkStore {
                           ** past the logical end but zeros. Live writers
                           ** keep that true; a reload forgets it. */
   u8 nTailStreak;         /* Consecutive small commits that grew the file */
-  u8 bTailFull;           /* Zero-fill hit SQLITE_FULL: stop trying */
+  u8 bTailFull;           /* Zero-fill hit a size limit: stop trying */
   u8 corruptHeader;       /* Header failed its seal or bounds: nothing was
                           ** served, so a reload must not adopt it as empty */
   u8 notADatabase;        /* Wrong/missing magic. Open succeeds; first use

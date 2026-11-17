@@ -5,6 +5,10 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#if SQLITE_OS_UNIX && !defined(__EMSCRIPTEN__)
+# include <sys/resource.h>
+# include <errno.h>
+#endif
 
 void doltliteTestPause(const char *zEnv);
 #ifdef SQLITE_TEST
@@ -70,6 +74,36 @@ static int csRollbackFailedAppend(
     return SQLITE_OK;
   }
   return rc==SQLITE_OK ? SQLITE_IOERR_TRUNCATE : rc;
+}
+
+/* Writing past the process's file-size limit raises SIGXFSZ, which kills a
+** process that has not arranged otherwise before any error is returned. */
+static int csZeroFillWithinLimit(i64 iEnd){
+#if SQLITE_OS_UNIX && !defined(__EMSCRIPTEN__)
+  struct rlimit lim;
+  if( getrlimit(RLIMIT_FSIZE, &lim)==0 && lim.rlim_cur!=RLIM_INFINITY
+   && (u64)lim.rlim_cur<(u64)iEnd ){
+    return 0;
+  }
+#else
+  (void)iEnd;
+#endif
+  return 1;
+}
+
+/* The file cannot grow that far, as opposed to the device failing. A quota
+** or file-size limit reaches here as a write error, not SQLITE_FULL. */
+static int csZeroFillHitLimit(ChunkStore *cs, int rc){
+  if( rc==SQLITE_FULL ) return 1;
+#if SQLITE_OS_UNIX && !defined(__EMSCRIPTEN__)
+  if( (rc&0xff)==SQLITE_IOERR ){
+    int e = sqlite3OsGetLastError(cs->file.pVfs);
+    return e==EFBIG || e==EDQUOT;
+  }
+#else
+  (void)cs;
+#endif
+  return 0;
 }
 
 /* Caller holds the commit lock. A record past the failed append's end is
@@ -564,6 +598,8 @@ static int csCommitToFile(
       }else if( physFileSize<batchStart+nNeed ){
         if( cs->nTailStreak==0 ){
           cs->nTailStreak = 1;
+        }else if( !csZeroFillWithinLimit(batchStart + CS_ZERO_TAIL_BYTES) ){
+          cs->bTailFull = 1;
         }else{
           static const u8 aZeroTail[65536];
           i64 iZero = physFileSize>batchStart ? physFileSize : batchStart;
@@ -573,7 +609,7 @@ static int csCommitToFile(
             rc = sqlite3OsWrite(cs->file.pFile, aZeroTail, n, iZero);
             iZero += n;
           }
-          if( rc==SQLITE_FULL ){
+          if( csZeroFillHitLimit(cs, rc) ){
             /* The commit itself may still fit. */
             cs->bTailFull = 1;
             rc = sqlite3OsTruncate(cs->file.pFile, physFileSize);
