@@ -1182,7 +1182,8 @@ int doltliteBranchWorkingSetUnmoved(
   rc = chunkStoreReadPublishedBranchWorkingSet(cs, zBranch, &wsNow, &haveNow);
   if( rc==SQLITE_OK && haveNow
    && prollyHashCompare(&wsNow, pExpected)!=0
-   && !chunkStoreWorkingSetSelfPublished(cs, zBranch, &wsNow) ){
+   && !chunkStoreWorkingSetSelfPublished(cs, zBranch, &wsNow)
+   && !chunkStoreWorkingSetReplacedByBatch(cs, zBranch, &wsNow) ){
     rc = SQLITE_BUSY;
   }
   return rc;
@@ -1193,7 +1194,10 @@ int doltliteConfirmWorkingSet(
   ChunkStore *cs,
   const ProllyHash *pExpectedWorkingSet
 ){
-  int rc = doltliteBranchWorkingSetUnmoved(
+  int rc;
+  /* A checkout in this write transaction left only our own refs. */
+  if( doltliteTxnCheckoutOwnsGraphLock(db) ) return SQLITE_OK;
+  rc = doltliteBranchWorkingSetUnmoved(
       cs, doltliteGetSessionBranch(db), pExpectedWorkingSet);
   if( rc!=SQLITE_OK ) doltliteInvalidateSessionWorkingState(db);
   return rc;
