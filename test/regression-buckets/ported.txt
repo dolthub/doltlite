@@ -225,6 +225,7 @@ doltlite_commit_active_write
 doltlite_commit_branch
 doltlite_ref_active_write
 doltlite_sqlite_encoding
+doltlite_index_order_memo
 doltlite_merge_reordered_drop
 doltlite_merge_schema_conflict_indexes
 doltlite_checkout_catalog_rollback

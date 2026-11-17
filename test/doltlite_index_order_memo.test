@@ -1,0 +1,89 @@
+set testdir [file join [file dirname [info script]] .. test]
+source [file join $testdir tester.tcl]
+set testprefix doltlite_index_order_memo
+
+# The planner asks whether an index holds a key its sort order cannot be
+# trusted for: a NOCASE text with a NUL, or a wide number ahead of a DESC
+# column. The answer is remembered, and an insert that changes it has to
+# drop it, with edits pending, across commits and across savepoints.
+proc same_as_scan {indexed scan} {
+  set a [db eval $indexed]
+  set b [db eval $scan]
+  if {$a eq $b} {return ok}
+  return "indexed {$a} scan {$b}"
+}
+set nocase {
+  {SELECT id FROM n ORDER BY s, id}
+  {SELECT id FROM n NOT INDEXED ORDER BY s, id}
+}
+set nocase_eq {
+  {SELECT id FROM n WHERE s='a'||char(0)||'zz' ORDER BY id}
+  {SELECT id FROM n NOT INDEXED WHERE s='a'||char(0)||'zz' ORDER BY id}
+}
+set wide {
+  {SELECT id FROM w WHERE a=9007199254740993 ORDER BY b DESC, id}
+  {SELECT id FROM w NOT INDEXED WHERE a=9007199254740993 ORDER BY b DESC, id}
+}
+set wide_range {
+  {SELECT id FROM w WHERE a>=9007199254740992 ORDER BY a, b DESC, id}
+  {SELECT id FROM w NOT INDEXED WHERE a>=9007199254740992
+   ORDER BY a, b DESC, id}
+}
+proc check {name} {
+  foreach q {nocase nocase_eq wide wide_range} {
+    do_test $name.$q [list same_as_scan {*}[set ::$q]] ok
+  }
+}
+proc bad_keys {base} {
+  db eval "
+    INSERT INTO n VALUES($base+1,'a'||char(0)||'b'),($base+2,'A'||char(0)||'c');
+    INSERT INTO w VALUES($base+1,9007199254740993,1),
+                        ($base+2,9007199254740992,2),
+                        ($base+3,9007199254740993,3);
+  "
+}
+
+foreach mode {txn autocommit savepoint} {
+  reset_db
+  db eval {
+    CREATE TABLE n(id INTEGER PRIMARY KEY, s TEXT COLLATE NOCASE);
+    CREATE INDEX n_s ON n(s);
+    CREATE TABLE w(id INTEGER PRIMARY KEY, a, b);
+    CREATE INDEX w_ab ON w(a, b DESC);
+    INSERT INTO n VALUES(1,'aa'),(2,'b');
+    INSERT INTO w VALUES(1,1,1),(2,2,2);
+  }
+  check $mode.clean
+  if {$mode ne "autocommit"} {db eval BEGIN}
+  db eval {
+    INSERT INTO n VALUES(3,'cc');
+    INSERT INTO w VALUES(3,3,3);
+  }
+  check $mode.pending-clean
+  if {$mode eq "savepoint"} {
+    db eval {SAVEPOINT s}
+    bad_keys 100
+    check $mode.in-savepoint
+    db eval {ROLLBACK TO s}
+    check $mode.rolled-back
+  }
+  bad_keys 10
+  check $mode.bad
+  db eval {
+    INSERT INTO n VALUES(20,'dd');
+    INSERT INTO w VALUES(20,4,4);
+  }
+  check $mode.bad-then-clean
+  if {$mode ne "autocommit"} {db eval COMMIT}
+  check $mode.committed
+  db eval {
+    DELETE FROM n WHERE id IN (11,12);
+    DELETE FROM w WHERE id IN (11,12,13);
+  }
+  check $mode.deleted
+  bad_keys 30
+  check $mode.bad-again
+  do_execsql_test $mode.integrity {PRAGMA integrity_check} ok
+}
+
+finish_test

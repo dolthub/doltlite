@@ -170,6 +170,15 @@ int sqlite3BtreeProllyIndexHasWideNumericDesc(
   int res;
   *pHas = 0;
   if( !pTE ) return SQLITE_CORRUPT;
+  /* A memo covers the edits pending when it was taken, and every insert
+  ** since has been checked on its way in: one bringing a wide key drops
+  ** the memo. Walking the pending edits again on each plan made a
+  ** transaction of writes and reads quadratic. */
+  if( pTE->numericDescState
+   && prollyHashCompare(&pTE->numericDescRoot, &pTE->root)==0 ){
+    *pHas = pTE->numericDescState==2;
+    return SQLITE_OK;
+  }
   pMap = (ProllyMutMap*)pTE->pPending;
   if( pMap ){
     for(i=0; i<pMap->nEntries; i++){
@@ -178,11 +187,6 @@ int sqlite3BtreeProllyIndexHasWideNumericDesc(
       rc = sortKeyHasWideNumericDesc(pEntry->pKey, pEntry->nKey, pHas);
       if( rc!=SQLITE_OK || *pHas ) return rc;
     }
-  }
-  if( pTE->numericDescState
-   && prollyHashCompare(&pTE->numericDescRoot, &pTE->root)==0 ){
-    *pHas = pTE->numericDescState==2;
-    return SQLITE_OK;
   }
   prollyCursorInit(
       &cur, pBtree->pBt->pStore, &pBtree->pBt->cache, &pTE->root, pTE->flags);
@@ -229,6 +233,15 @@ int sqlite3BtreeProllyIndexHasNocaseNul(
   if( !hasNocase ) return SQLITE_OK;
   pTE = findTable(pBtree, iTable);
   if( !pTE ) return SQLITE_CORRUPT;
+  /* The memo covers the edits pending when it was taken; an insert since
+  ** then that brings a NUL drops it on the way in. The planner asks once per
+  ** prepared statement, and a transaction that writes then reads would
+  ** otherwise rescan the index or walk its pending edits every time. */
+  if( pTE->nocaseNulState
+   && prollyHashCompare(&pTE->nocaseNulRoot, &pTE->root)==0 ){
+    *pHas = pTE->nocaseNulState==2;
+    return SQLITE_OK;
+  }
   pMap = (ProllyMutMap*)pTE->pPending;
   if( pMap ){
     for(i=0; i<pMap->nEntries; i++){
@@ -238,16 +251,6 @@ int sqlite3BtreeProllyIndexHasNocaseNul(
           pEntry->pVal, pEntry->nVal, nKeyCol, azColl, pHas);
       if( rc!=SQLITE_OK || *pHas ) return rc;
     }
-  }
-
-  /* The memo answers for the committed tree alone, which pending edits do not
-  ** move, so it stays good while they are outstanding; the planner asks once
-  ** per prepared statement and a transaction that writes then reads would
-  ** otherwise rescan the whole index every time. */
-  if( pTE->nocaseNulState
-   && prollyHashCompare(&pTE->nocaseNulRoot, &pTE->root)==0 ){
-    *pHas = pTE->nocaseNulState==2;
-    return SQLITE_OK;
   }
 
   prollyCursorInit(
@@ -313,6 +316,33 @@ void doltliteBtreeCarryNocaseNulMemo(
 drop:
   pTE->nocaseNulState = 0;
   pTE->nocaseNulMaskValid = 0;
+}
+
+/* As above for the wide-numeric memo, which the insert path keeps the same
+** way; without the carry every commit that touches the index costs the next
+** plan a scan of it. */
+void doltliteBtreeCarryNumericDescMemo(
+  struct TableEntry *pTE,
+  ProllyMutMap *pMap,
+  const ProllyHash *pNewRoot
+){
+  int i;
+  if( !pTE || pTE->numericDescState!=1
+   || prollyHashCompare(&pTE->numericDescRoot, &pTE->root)!=0 ){
+    if( pTE ) pTE->numericDescState = 0;
+    return;
+  }
+  for(i=0; pMap && i<pMap->nEntries; i++){
+    ProllyMutMapEntry *pEntry = &pMap->aEntries[i];
+    int has = 0;
+    if( pEntry->op!=PROLLY_EDIT_INSERT ) continue;
+    if( sortKeyHasWideNumericDesc(pEntry->pKey, pEntry->nKey, &has)!=SQLITE_OK
+     || has ){
+      pTE->numericDescState = 0;
+      return;
+    }
+  }
+  pTE->numericDescRoot = *pNewRoot;
 }
 
 static int btreeApplyChunkSourceError(
