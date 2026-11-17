@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #if SQLITE_OS_UNIX && !defined(__EMSCRIPTEN__)
 # include <sys/resource.h>
+# include <errno.h>
 #endif
 
 void doltliteTestPause(const char *zEnv);
@@ -88,6 +89,21 @@ static int csZeroFillWithinLimit(i64 iEnd){
   (void)iEnd;
 #endif
   return 1;
+}
+
+/* The file cannot grow that far, as opposed to the device failing. A quota
+** or file-size limit reaches here as a write error, not SQLITE_FULL. */
+static int csZeroFillHitLimit(ChunkStore *cs, int rc){
+  if( rc==SQLITE_FULL ) return 1;
+#if SQLITE_OS_UNIX && !defined(__EMSCRIPTEN__)
+  if( (rc&0xff)==SQLITE_IOERR ){
+    int e = sqlite3OsGetLastError(cs->file.pVfs);
+    return e==EFBIG || e==EDQUOT;
+  }
+#else
+  (void)cs;
+#endif
+  return 0;
 }
 
 /* Caller holds the commit lock. A record past the failed append's end is
@@ -593,9 +609,8 @@ static int csCommitToFile(
             rc = sqlite3OsWrite(cs->file.pFile, aZeroTail, n, iZero);
             iZero += n;
           }
-          if( rc!=SQLITE_OK ){
-            /* The fill is optional and the commit itself may still fit: a
-            ** quota or file-size limit reports an I/O error, not FULL. */
+          if( csZeroFillHitLimit(cs, rc) ){
+            /* The commit itself may still fit. */
             cs->bTailFull = 1;
             rc = sqlite3OsTruncate(cs->file.pFile, physFileSize);
           }
