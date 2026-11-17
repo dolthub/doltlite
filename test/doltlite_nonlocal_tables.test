@@ -196,6 +196,41 @@ do_execsql_test nonlocal-fk-verify {
   SELECT "table", num_violations FROM dolt_constraint_violations;
 } {1 uses_cfg 1}
 
+# The rule is on the child only: its rows reference the session's parent, as
+# in Dolt, not the parent on the branch the child lives on.
+do_test nonlocal-fk-child-rule.setup {
+  catch {db close}
+  forcedelete test.db
+  sqlite3 db test.db
+  db eval {
+    PRAGMA foreign_keys=ON;
+    CREATE TABLE p(id INTEGER PRIMARY KEY, v TEXT);
+    CREATE TABLE c(id INTEGER PRIMARY KEY, pid INT REFERENCES p(id));
+    INSERT INTO p VALUES(1,'p1'),(2,'p2');
+    SELECT dolt_commit('-Am','init');
+    SELECT dolt_checkout('-b','exp');
+    DELETE FROM p WHERE id=2;
+    INSERT INTO p VALUES(3,'exp-only');
+    SELECT dolt_commit('-Am','exp');
+    INSERT INTO dolt_nonlocal_tables VALUES('c','main',NULL,'immediate');
+  }
+  db eval {SELECT group_concat(id) FROM p}
+} {1,3}
+do_execsql_test nonlocal-fk-child-rule.session-parent {
+  INSERT INTO c VALUES(30,3);
+  SELECT id, pid FROM c;
+} {30 3}
+do_catchsql_test nonlocal-fk-child-rule.target-parent {
+  INSERT INTO c VALUES(20,2);
+} {1 {FOREIGN KEY constraint failed}}
+do_catchsql_test nonlocal-fk-child-rule.update {
+  UPDATE c SET pid=2 WHERE id=30;
+} {1 {FOREIGN KEY constraint failed}}
+do_execsql_test nonlocal-fk-child-rule.update-ok {
+  UPDATE c SET pid=1 WHERE id=30;
+  SELECT id, pid FROM c;
+} {30 1}
+
 nl_reset
 do_test nonlocal-pragma.setup {
   db eval {

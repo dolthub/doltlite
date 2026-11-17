@@ -1064,6 +1064,11 @@ void sqlite3FkCheck(
   iDb = sqlite3SchemaToIndex(db, pTab->pSchema);
   assert( iDb>=00 && iDb<db->nDb );
   zDb = db->aDb[iDb].zDbSName;
+#ifdef DOLTLITE_PROLLY
+  /* A child on another branch reached through a session name references
+  ** the session's parent, as the session's own rows do. */
+  if( doltliteNonlocalLocalName(pParse, pTab) ) zDb = db->aDb[0].zDbSName;
+#endif
 
   /* Loop through all the foreign key constraints for which pTab is the
   ** child table (the table that the foreign key definition is part of).  */
