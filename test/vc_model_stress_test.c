@@ -355,9 +355,7 @@ static int excuseFlags(int flags, const char *zBr){
   return strcmp(zBr, "?") ? flags : (flags | FG);
 }
 static char gVictim[128];
-/* Run zSql; when it rewrites history and no txn is open, half the time
-** capture the HEAD it replaces under BEGIN IMMEDIATE so the model knows
-** exactly which commit may legitimately vanish. */
+/* A hard rewind needs the HEAD it actually discards to account for lost rows. */
 static long long gVictimS;
 static void readVictim(Conn *c){
   sqlite3_stmt *st = 0;
@@ -374,15 +372,12 @@ static void readVictim(Conn *c){
   }
   sqlite3_finalize(st);
 }
-static int runOp(Conn *c, const char *zOp, const char *zSql, int wantVictim){
+static int runOp(Conn *c, const char *zOp, const char *zSql, int flags){
   int rc;
   snprintf(gVictim, sizeof(gVictim), "*");
   gVictimS = nowNs();
-  if( !wantVictim ) return ex(c, zOp, zSql);
-  if( c->inTxn ){
-    return ex(c, zOp, zSql);
-  }
-  if( rn(2) ){
+  if( !(flags & FM) || c->inTxn ) return ex(c, zOp, zSql);
+  if( !(flags & FW) && rn(2) ){
     readVictim(c);
     return ex(c, zOp, zSql);
   }
@@ -411,7 +406,7 @@ static int vc(Conn *c, const char *zOp, const char *zSql, int flags, const char 
   curBranch(c, br, sizeof(br));
   for(tries=0; tries<4; tries++){
     S = nowNs();
-    rc = runOp(c, zOp, zSql, (flags & FM) && !zTarget);
+    rc = runOp(c, zOp, zSql, zTarget ? 0 : flags);
     E = nowNs();
     if( c->inTxn ){
       pendToUnknown(c);
@@ -533,7 +528,7 @@ static void opCommit(Conn *c){
   for(tries=0; tries<4; tries++){
     int wasTxn = c->inTxn;
     S = nowNs();
-    rc = runOp(c, "commit_vc", sql, kind==3);
+    rc = runOp(c, "commit_vc", sql, kind==3 ? FM : 0);
     E = nowNs();
     if( c->inTxn ){
       pendToUnknown(c); c->tainted = 1;
@@ -1620,6 +1615,26 @@ static int replayPeerAtSeal(unsigned event, void *arg, void *stmt, void *elapsed
   return 0;
 }
 
+static int rewindPeerForHardReset(void *arg, int attempts){
+  sqlite3 *peer = arg;
+  long long s, e;
+  if( attempts ) return 0;
+  s = nowNs();
+  if( sqlite3_exec(peer, "SELECT dolt_reset('--soft','HEAD~1')", 0, 0, 0) ){
+    return 0;
+  }
+  logf_("X\t6\tmain\t%lld\t%lld\treset_soft_1\tm_top", s, nowNs());
+  s = nowNs();
+  if( sqlite3_exec(peer, "SELECT dolt_commit('-a','--amend','-m','m_amended')",
+                   0, 0, 0) ){
+    return 0;
+  }
+  e = nowNs();
+  logf_("X\t4\tmain\t%lld\t%lld\tamend\tm_protected\tm_amended", s, e);
+  logf_("C\tm_amended\tmain\t%lld\t%lld\t1", s, e);
+  return 1;
+}
+
 int main(int argc, char **argv){
   int w, ph, status;
   pid_t aPid[32];
@@ -1627,6 +1642,26 @@ int main(int argc, char **argv){
   int wedgeSec = 120;
   sqlite3_config(SQLITE_CONFIG_LOG, sqliteLog, 0);
   if( argc<3 ){ fprintf(stderr, "usage: %s SEED DIR [NPROC NCONN NPHASE OPS]\n", argv[0]); return 2; }
+  if( !strcmp(argv[1], "--record-hard-reset") && argc==3 ){
+    Conn *c = &aC[0];
+    sqlite3 *peer = 0;
+    int rc;
+    snprintf(zDb, sizeof(zDb), "%s/db.db", argv[2]);
+    gLog = stdout;
+    gDestructPct = 100;
+    rngState = 2;
+    rc = sqlite3_open(zDb, &c->db);
+    if( rc==SQLITE_OK ) rc = sqlite3_open(zDb, &peer);
+    if( rc==SQLITE_OK ) rc = sqlite3_exec(peer, "BEGIN IMMEDIATE", 0, 0, 0);
+    if( rc==SQLITE_OK ){
+      sqlite3_busy_handler(c->db, rewindPeerForHardReset, peer);
+      rc = vc(c, "reset_hard_1", "SELECT dolt_reset('--hard','HEAD~1')",
+              FW|FK|FM, 0);
+    }
+    sqlite3_close(c->db);
+    sqlite3_close(peer);
+    return rc!=SQLITE_OK;
+  }
   if( !strcmp(argv[1], "--ignore-policy") && argc==4 ){
     int rc;
     char path[700];

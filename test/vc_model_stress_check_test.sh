@@ -82,6 +82,24 @@ for swapped in 0 1; do
   done
 done
 
+d=$(newdir hard_reset_victim_after_lock)
+"$DOLTLITE" "$d/db.db" "INSERT INTO w VALUES(100000012,'acked');
+SELECT dolt_commit('-Am','m_protected'); SELECT dolt_commit('--allow-empty','-m','m_top');" >/dev/null
+printf '%s\n' $'I\t100000012\tmain\t1000\t1100' \
+  $'C\tm_protected\tmain\t2000\t2100\t1' > "$d/log.0"
+if "$BIN" --record-hard-reset "$d" >> "$d/log.0" \
+ && grep -Eq $'^X\t7\tmain\t[0-9]+\t[0-9]+\treset_hard_1\tm_amended$' "$d/log.0"; then
+  echo "ok hard_reset_records_victim_after_lock"
+else
+  echo "FAIL hard_reset_records_victim_after_lock"
+  cat "$d/log.0"
+  fails=$((fails+1))
+fi
+check hard_reset_accounts_for_removed_row 0 "$d"
+reset_end=$(awk -F '\t' '$1=="X" && $6=="reset_hard_1" {print $5}' "$d/log.0")
+printf 'I\t100000013\tmain\t%s\t%s\n' "$((reset_end + 1))" "$((reset_end + 2))" >> "$d/log.0"
+check hard_reset_still_detects_later_lost_write 1 "$d" 1 'LOST acked id 100000013'
+
 for soft_branch in main b1; do
   d=$(newdir "soft_reset_while_waiting_${soft_branch}")
   if [ "$soft_branch" = main ]; then
