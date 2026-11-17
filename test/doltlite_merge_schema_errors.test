@@ -87,4 +87,50 @@ foreach kind {generated foreign-key} {
   }
 }
 
+# One side rebuilt the table with two same-typed columns in the other
+# order; the other renamed a third column and edited a row.
+foreach direction {forward reverse} {
+  foreach op {merge cherry_pick} {
+    reset_db
+    execsql {
+      CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b TEXT, d INT);
+      INSERT INTO t VALUES(1,10,'b1',100),(2,20,'b2',200),(3,30,'b3',300);
+      SELECT dolt_commit('-Am','base');
+      SELECT dolt_branch('side');
+      CREATE TABLE n(id INTEGER PRIMARY KEY, d INT, b TEXT, a INT);
+      INSERT INTO n(id,d,b,a) SELECT id,d,b,a FROM t;
+      DROP TABLE t;
+      ALTER TABLE n RENAME TO t;
+      SELECT dolt_commit('-Am','reorder');
+      SELECT dolt_checkout('side');
+      ALTER TABLE t RENAME COLUMN b TO b2;
+      UPDATE t SET b2='T' WHERE id=2;
+      SELECT dolt_commit('-Am','rename');
+    }
+    set target main
+    if {$direction eq "forward"} {
+      execsql {SELECT dolt_checkout('main')}
+      set target side
+    }
+    set name merge-schema-errors-reorder-rename-$direction-$op
+    set before [execsql {SELECT * FROM t ORDER BY id}]
+    do_test $name-refused {
+      lindex [catchsql "SELECT dolt_${op}('$target')"] 0
+    } 1
+    if {$op eq "merge"} {
+      do_test $name-detail {
+        execsql BEGIN
+        catchsql "SELECT dolt_merge('$target')"
+        set detail [execsql {SELECT description FROM dolt_schema_conflicts}]
+        execsql ROLLBACK
+        string match {*renamed on one branch and columns reordered*} $detail
+      } 1
+    }
+    do_test $name-unchanged {
+      list [expr {$before eq [execsql {SELECT * FROM t ORDER BY id}]}] \
+           [execsql {SELECT a,d FROM t WHERE id=1; PRAGMA integrity_check}]
+    } {1 {10 100 ok}}
+  }
+}
+
 finish_test

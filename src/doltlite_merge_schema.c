@@ -1026,6 +1026,22 @@ static int schemaColumnChangesConflict(
   return rc;
 }
 
+/* Adopting a renaming side's schema keeps the other side's rows in the
+** ancestor's layout. A side whose surviving columns changed places, by a
+** rebuild or by trading names, has rows that layout does not describe. */
+static int schemaSideReordersAncestor(
+  ParsedColumn *aAnc, int nAnc, ParsedColumn *aSide, int nSide
+){
+  int i, iPrev = -1;
+  for(i=0; i<nSide; i++){
+    int iAnc = parsedColumnIndexByName(aAnc, nAnc, aSide[i].zName);
+    if( iAnc<0 ) continue;
+    if( iAnc<iPrev ) return 1;
+    iPrev = iAnc;
+  }
+  return 0;
+}
+
 int trySchemaColumnMerge(
   const char *zAncSql,
   const char *zOursSql,
@@ -1132,6 +1148,16 @@ int trySchemaColumnMerge(
              && parsedColumnDefinitionsMatch(&aTheirs[i], &aAnc[i]) ){
         ParsedColumn *ourAncestor = findColumn(
             aOurs, nOurs, aAnc[i].zName);
+        if( ourAncestor && strcmp(ourAncestor->zDef, aAnc[i].zDef)==0
+         && schemaSideReordersAncestor(aAnc, nAnc, aOurs, nOurs) ){
+          if( pzErrDetail ){
+            *pzErrDetail = sqlite3_mprintf(
+              "column '%s' renamed on one branch and columns reordered on"
+              " another", aAnc[i].zName);
+          }
+          rc = SQLITE_ERROR;
+          goto schema_merge_cleanup;
+        }
         if( ourAncestor && strcmp(ourAncestor->zDef, aAnc[i].zDef)==0 ){
           *pSchemaChoice = SCHEMA_MERGE_THEIRS;
         }else{
@@ -1206,6 +1232,16 @@ int trySchemaColumnMerge(
         continue;
       }
       theirAncestor = findColumn(aTheirs, nTheirs, aAnc[i].zName);
+      if( theirAncestor && strcmp(theirAncestor->zDef, aAnc[i].zDef)==0
+       && schemaSideReordersAncestor(aAnc, nAnc, aTheirs, nTheirs) ){
+        if( pzErrDetail ){
+          *pzErrDetail = sqlite3_mprintf(
+            "column '%s' renamed on one branch and columns reordered on"
+            " another", aAnc[i].zName);
+        }
+        rc = SQLITE_ERROR;
+        goto schema_merge_cleanup;
+      }
       if( theirAncestor && strcmp(theirAncestor->zDef, aAnc[i].zDef)==0 ){
         *pSchemaChoice = SCHEMA_MERGE_OURS;
       }else{
