@@ -133,6 +133,11 @@ foreach {name rd wr peerBranch main feat} {
   do_test multi-branch-pinned-sibling-$name-main {mb_disk main} $main
   do_test multi-branch-pinned-sibling-$name-feat {mb_disk feat} $feat
   do_test multi-branch-pinned-sibling-$name-refs {mb_refs} {feat,main,nb tg}
+  # The reading view's refresh signal was spent by the writer's lock.
+  do_test multi-branch-pinned-sibling-$name-reread {
+    db eval "SELECT group_concat(id||':'||v, ',')
+             FROM (SELECT * FROM $rd.t ORDER BY id)"
+  } [list [lindex [mb_disk [string map {f feat} $rd]] 0]]
 }
 
 # As in Dolt, version-control commands run while another branch has
