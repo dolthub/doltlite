@@ -333,6 +333,49 @@ foreach {name pre cmd probe durable} {
   }
 }
 
+# The same holds without a checkout: dolt_add also leaves a pending working
+# set in the refs, which a publishing ref command must not carry.
+foreach {name pre cmd probe durable} {
+  tag {} {SELECT dolt_tag('tg')}
+    {SELECT count(*) FROM dolt_tags WHERE tag_name='tg'} 1
+  tag-delete {SELECT dolt_tag('tg')} {SELECT dolt_tag('-d','tg')}
+    {SELECT count(*) FROM dolt_tags WHERE tag_name='tg'} 0
+  remote {} {SELECT dolt_remote('add','origin','file:///nonexistent/remote')}
+    {SELECT count(*) FROM dolt_remotes WHERE name='origin'} 1
+} {
+  foreach end {ROLLBACK COMMIT} {
+    checkout_txn_reset
+    db eval $pre
+    set prefix staged-ref-writer.$name.$end
+    set rows {
+      SELECT group_concat(id) FROM (SELECT id FROM t ORDER BY id);
+      SELECT count(*) FROM dolt_status WHERE staged;
+      PRAGMA integrity_check;
+    }
+    do_test $prefix.open {
+      db eval {
+        BEGIN;
+        INSERT INTO t VALUES(1,'main');
+        SELECT dolt_add('.');
+      }
+      db eval $cmd
+      list [checkout_txn_branch main $rows] [checkout_txn_branch main $probe]
+    } [list {{} 0 ok} $durable]
+    do_test $prefix.end {
+      db eval $end
+      sqlite3_get_autocommit db
+    } 1
+    db close
+    if {$end eq "ROLLBACK"} {
+      do_test $prefix.main {checkout_txn_branch main $rows} {{} 0 ok}
+    } else {
+      do_test $prefix.main {checkout_txn_branch main $rows} {1 1 ok}
+    }
+    do_test $prefix.durable {checkout_txn_branch main $probe} $durable
+    sqlite3 db test.db
+  }
+}
+
 # As in Dolt, dolt_commit commits one branch: it is refused while the
 # transaction holds uncommitted writes on more than one branch, whether the
 # other branch was written before or after a checkout.
