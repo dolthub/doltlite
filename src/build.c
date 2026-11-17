@@ -6379,6 +6379,9 @@ void sqlite3Reindex(Parse *pParse, Token *pName1, Token *pName2){
     for(iDb=0, pDb=db->aDb; iDb<db->nDb; iDb++, pDb++){
       assert( pDb!=0 );
       if( iReDb>=0 && iReDb!=iDb ) continue;
+#ifdef DOLTLITE_PROLLY
+      if( iReDb<0 && doltliteNonlocalIsSchema(pDb->zDbSName) ) continue;
+#endif
       for(k=sqliteHashFirst(&pDb->pSchema->tblHash); k; k=sqliteHashNext(k)){
         pTab = (Table*)sqliteHashData(k);
         if( IsVirtual(pTab) ) continue;

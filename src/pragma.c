@@ -2629,6 +2629,9 @@ void sqlite3Pragma(
     iTabCur = pParse->nTab++;
     for(iDbLast = zDb?iDb:db->nDb-1; iDb<=iDbLast; iDb++){
       if( iDb==1 ) continue;
+#ifdef DOLTLITE_PROLLY
+      if( !zDb && doltliteNonlocalIsSchema(db->aDb[iDb].zDbSName) ) continue;
+#endif
       sqlite3CodeVerifySchema(pParse, iDb);
       pSchema = db->aDb[iDb].pSchema;
       for(k=sqliteHashFirst(&pSchema->tblHash); k; k=sqliteHashNext(k)){
