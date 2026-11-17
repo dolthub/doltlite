@@ -216,7 +216,7 @@ done
 
 for key in INTEGER INT; do
   for op in revert cherry_pick; do
-    for mode in 0 1 2 3; do
+    for mode in 0 1 2 3 4; do
       d=$(newdir "removal_diff_${op}_${key}_$mode" "$key")
       "$DOLTLITE" "$d/db.db" "INSERT INTO w VALUES(100000001,'removed'),(100000002,'also removed');
 SELECT dolt_commit('-Am','inserted');" >/dev/null
@@ -228,11 +228,13 @@ DELETE FROM w; SELECT dolt_commit('-am','removed'); SELECT dolt_checkout('main')
       out=$("$BIN" --record-removals "$d" "$mode" "$op" 2>&1) || status=$?
       expected=$(printf 'D\t100000001\nD\t100000002')
       if [ "$mode" -eq 3 ]; then expected=; fi
+      name="removal_diff_with_peer_writer_${op}_${key}_$mode"
+      if [ "$mode" -eq 4 ]; then name="replay_seal_blocks_peer_until_receipt_${op}_$key"; fi
       receipts=$(printf '%s\n' "$out" | grep '^D')
       if [ "$status" -eq 0 ] && [ "$receipts" = "$expected" ]; then
-        echo "ok removal_diff_with_peer_writer_${op}_${key}_$mode"
+        echo "ok $name"
       else
-        echo "FAIL removal_diff_with_peer_writer_${op}_${key}_$mode: status=$status $out"
+        echo "FAIL $name: status=$status $out"
         fails=$((fails+1))
       fi
       printf '%s\n' $'I\t100000001\tmain\t1000\t1100' \

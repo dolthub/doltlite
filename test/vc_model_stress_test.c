@@ -33,6 +33,7 @@
 #include <sys/time.h>
 #include <poll.h>
 #include "sqlite3.h"
+#include "doltlite_internal.h"
 
 static char zDir[512], zDb[600];
 static int gBusyMax = 300;
@@ -475,14 +476,27 @@ static void collectRemoved(sqlite3 *reader, RemovedRows *p){
 
 static int replay(Conn *c, const char *zOp, const char *zSql, RemovedRows *p){
   int ownTxn = sqlite3_get_autocommit(c->db);
+  ChunkStore *cs;
   int rc;
   memset(p, 0, sizeof(*p));
   if( ownTxn ){
     rc = ex(c, "begin_replay", "BEGIN IMMEDIATE");
     if( rc!=SQLITE_OK ) return rc;
   }
-  rc = vc(c, zOp, zSql, 0, 0);
-  if( rc==SQLITE_OK ) collectRemoved(c->db, p);
+  /* A successful replay seals the SQL transaction before its receipt is read. */
+  cs = doltliteGetChunkStore(c->db);
+  alarm(gStmtWedgeSec);
+  rc = doltliteLockAndRefreshBusy(c->db, cs);
+  alarm(0);
+  if( rc==SQLITE_OK ){
+    rc = vc(c, zOp, zSql, 0, 0);
+    if( rc==SQLITE_OK ) collectRemoved(c->db, p);
+    chunkStoreUnlock(cs);
+  }else if( !isBusy(rc, 0) ){
+    logf_("COLLECT_ERROR\tlock for replay removal diff: rc=%d %s",
+          rc, sqlite3_errstr(rc));
+    _exit(11);
+  }
   if( ownTxn ){
     if( rc==SQLITE_OK ) rc = ex(c, "commit_replay", "COMMIT");
     if( !sqlite3_get_autocommit(c->db) ) ex(c, "rollback_replay", "ROLLBACK");
@@ -1589,6 +1603,23 @@ static int interruptCollector(void *p){
   return 1;
 }
 
+typedef struct ReplayPeer {
+  sqlite3 *db;
+  const char *zReplay;
+  int rc;
+} ReplayPeer;
+
+static int replayPeerAtSeal(unsigned event, void *arg, void *stmt, void *elapsed){
+  ReplayPeer *peer = arg;
+  const char *zSql = sqlite3_sql(stmt);
+  (void)event;
+  (void)elapsed;
+  if( zSql && !strcmp(zSql, peer->zReplay) ){
+    peer->rc = sqlite3_exec(peer->db, "BEGIN IMMEDIATE", 0, 0, 0);
+  }
+  return 0;
+}
+
 int main(int argc, char **argv){
   int w, ph, status;
   pid_t aPid[32];
@@ -1617,10 +1648,12 @@ int main(int argc, char **argv){
   }
   if( !strcmp(argv[1], "--record-removals") && (argc==4 || argc==5) ){
     Conn *c = &aC[0];
-    RemovedRows removed;
+    RemovedRows removed = {0};
     int up[2], down[2], rc, childStatus = 0;
     int mode = atoi(argv[3]);
     int cherryPick = argc==5 && !strcmp(argv[4], "cherry_pick");
+    const char *zReplay = cherryPick ? "SELECT dolt_cherry_pick('remove')"
+                                   : "SELECT dolt_revert('HEAD')";
     pid_t child;
     char ready = 'x';
     memset(c, 0, sizeof(*c));
@@ -1628,11 +1661,31 @@ int main(int argc, char **argv){
     snprintf(zDb, sizeof(zDb), "%s/db.db", argv[2]);
     gLog = stdout;
     rc = sqlite3_open(zDb, &c->db);
+    if( rc==SQLITE_OK && mode==4 ){
+      ReplayPeer peer = {0, zReplay, SQLITE_ERROR};
+      rc = sqlite3_open(zDb, &peer.db);
+      if( rc==SQLITE_OK ) rc = ex(c, "begin", "BEGIN IMMEDIATE");
+      if( rc==SQLITE_OK ){
+        sqlite3_trace_v2(c->db, SQLITE_TRACE_PROFILE, replayPeerAtSeal, &peer);
+        rc = replay(c, cherryPick ? "cherry_pick" : "revert", zReplay, &removed);
+        sqlite3_trace_v2(c->db, 0, 0, 0);
+      }
+      if( rc==SQLITE_OK && (peer.rc&0xff)!=SQLITE_BUSY ){
+        logf_("peer BEGIN at replay seal returned %d, expected SQLITE_BUSY", peer.rc);
+        rc = SQLITE_ERROR;
+      }
+      if( rc==SQLITE_OK ){
+        rc = sqlite3_exec(peer.db, "BEGIN IMMEDIATE; ROLLBACK", 0, 0, 0);
+      }
+      if( rc==SQLITE_OK ) logRemoved(&removed);
+      sqlite3_free(removed.aId);
+      sqlite3_close(peer.db);
+      sqlite3_close(c->db);
+      return rc!=SQLITE_OK;
+    }
     if( rc==SQLITE_OK ){
       if( mode==3 ) sqlite3_set_authorizer(c->db, denyReplayCommit, 0);
-      rc = replay(c, cherryPick ? "cherry_pick" : "revert",
-          cherryPick ? "SELECT dolt_cherry_pick('remove')"
-                     : "SELECT dolt_revert('HEAD')", &removed);
+      rc = replay(c, cherryPick ? "cherry_pick" : "revert", zReplay, &removed);
     }
     if( mode==3 ){
       sqlite3_set_authorizer(c->db, 0, 0);
