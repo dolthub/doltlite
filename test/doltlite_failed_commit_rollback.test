@@ -15,6 +15,14 @@ proc tvfs_cb {method file args} {
       if {$method eq "xSync"} { set ::stuck 1; return SQLITE_IOERR }
       if {$::stuck} { return SQLITE_IOERR }
     }
+    zero_once {
+      if {$method eq "xSync"} {
+        if {$::stuck==0} { set ::stuck 1 }
+        return SQLITE_IOERR
+      }
+      if {$method eq "xWrite" && $::stuck==1} { set ::stuck 2; return SQLITE_IOERR }
+      if {$method eq "xTruncate"} { return SQLITE_IOERR }
+    }
   }
   return SQLITE_OK
 }
@@ -129,6 +137,42 @@ for {set failAt 1} {$failAt <= 20} {incr failAt} {
     db eval {SELECT group_concat(k) FROM t; PRAGMA integrity_check}
   } [list $want ok]
 }
+
+# The zeroing write fails once and the truncate keeps failing. The retry has
+# to recognize its own failed append when the file extends past it with a
+# zero tail. This build does not write one, so the file is given one.
+tvfs script tvfs_cb
+setup
+do_test 4.1 {
+  db eval {INSERT INTO t VALUES(2,'b'); INSERT INTO t VALUES(3,'c')}
+  db close
+  set fd [open test.db a]
+  fconfigure $fd -translation binary
+  puts -nonewline $fd [string repeat \0 65536]
+  close $fd
+  sqlite3 db test.db -vfs tvfs
+  db eval {SELECT count(*) FROM t}
+  set ::mode zero_once
+  set r [catchsql {INSERT INTO t VALUES(1000,'failed')}]
+  set ::mode off
+  lindex $r 0
+} {1}
+do_execsql_test 4.2 {SELECT group_concat(k) FROM t} {1,2,3}
+do_test 4.3 {
+  sqlite3 db2 test.db
+  set r [db2 eval {SELECT group_concat(k) FROM t; PRAGMA integrity_check}]
+  db2 close
+  set r
+} {1,2,3 ok}
+do_execsql_test 4.4 {
+  INSERT INTO t VALUES(4,'d');
+  SELECT group_concat(k) FROM t;
+} {1,2,3,4}
+do_test 4.5 {
+  db close
+  sqlite3 db test.db
+  db eval {SELECT group_concat(k) FROM t; PRAGMA integrity_check}
+} {1,2,3,4 ok}
 
 catch {db close}
 tvfs delete

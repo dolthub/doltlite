@@ -72,14 +72,22 @@ static int csRollbackFailedAppend(
   return rc==SQLITE_OK ? SQLITE_IOERR_TRUNCATE : rc;
 }
 
-/* Caller holds the commit lock. Past the failed append's end a peer may
-** have adopted the root, and zeroing it would damage that peer's commit. */
+/* Caller holds the commit lock. A record past the failed append's end is
+** a peer's: it adopted the root, and zeroing it would damage that commit.
+** The file may extend past that end with nothing but the zero tail. */
 static int csScrubFailedRootLocked(ChunkStore *cs){
   u8 aZero[1 + CHUNK_MANIFEST_SIZE];
   i64 sz = -1;
+  int bPeer = 0;
   int rc = sqlite3OsFileSize(cs->file.pFile, &sz);
   if( rc!=SQLITE_OK ) return rc;
-  if( sz!=cs->iFailedTailEnd ){
+  if( sz<cs->iFailedTailEnd ){
+    bPeer = 1;
+  }else if( sz>cs->iFailedTailEnd ){
+    rc = csTailHasRecordAt(cs, cs->iFailedTailEnd, sz, &bPeer);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  if( bPeer ){
     cs->iFailedRootOff = 0;
     cs->iFailedTailEnd = 0;
     return SQLITE_OK;
