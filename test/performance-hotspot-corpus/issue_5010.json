@@ -1,0 +1,44 @@
+{
+  "seed": 440714258821,
+  "generator_version": 2,
+  "profile": {
+    "rows": 60000,
+    "payload": 32,
+    "key": "text",
+    "groups": 16,
+    "skew": true,
+    "cache_kib": 4096,
+    "stride": 8,
+    "lookups": 1000,
+    "target": 7,
+    "start": 21453,
+    "width": 15000,
+    "memory": false
+  },
+  "case": {
+    "name": "text_pk_range_after_update",
+    "sql": "UPDATE t SET id=printf('%016x', seq+60000) WHERE t.id BETWEEN printf('%016x', 21453) AND printf('%016x', 36452);",
+    "verify": "SELECT changes(),count(*),sum(v),sum(seq),min(id),max(id),sum(length(payload)),sum(length(tag)),sum(unicode(substr(tag,-1,1))),sum(unicode(substr(CAST(payload AS TEXT),-1,1))) FROM t;",
+    "prepare": "UPDATE t SET v=v+1 WHERE seq%8=0;",
+    "recipe": {
+      "source": "exists",
+      "predicate": "range",
+      "expression": "length",
+      "operator": "update_pk",
+      "indexes": "ordered",
+      "layout": "late",
+      "context": "after_update",
+      "direction": "ASC"
+    },
+    "warmup": ""
+  },
+  "setup": "setup.sql",
+  "setup_sql": "CREATE TABLE t(id TEXT PRIMARY KEY, seq INTEGER NOT NULL, grp INTEGER NOT NULL, v INTEGER NOT NULL, tag TEXT NOT NULL, payload BLOB NOT NULL);\nBEGIN;\nWITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<4096) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%16 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%032d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(4097) UNION ALL SELECT i+1 FROM c WHERE i<8192) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%16 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%032d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(8193) UNION ALL SELECT i+1 FROM c WHERE i<12288) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%16 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%032d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(12289) UNION ALL SELECT i+1 FROM c WHERE i<16384) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%16 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%032d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(16385) UNION ALL SELECT i+1 FROM c WHERE i<20480) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%16 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%032d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(20481) UNION ALL SELECT i+1 FROM c WHERE i<24576) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%16 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%032d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(24577) UNION ALL SELECT i+1 FROM c WHERE i<28672) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%16 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%032d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(28673) UNION ALL SELECT i+1 FROM c WHERE i<32768) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%16 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%032d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(32769) UNION ALL SELECT i+1 FROM c WHERE i<36864) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%16 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%032d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(36865) UNION ALL SELECT i+1 FROM c WHERE i<40960) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%16 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%032d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(40961) UNION ALL SELECT i+1 FROM c WHERE i<45056) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%16 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%032d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(45057) UNION ALL SELECT i+1 FROM c WHERE i<49152) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%16 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%032d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(49153) UNION ALL SELECT i+1 FROM c WHERE i<53248) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%16 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%032d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(53249) UNION ALL SELECT i+1 FROM c WHERE i<57344) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%16 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%032d',i) AS BLOB) FROM c;\nWITH RECURSIVE c(i) AS (VALUES(57345) UNION ALL SELECT i+1 FROM c WHERE i<60000) INSERT INTO t SELECT printf('%016x', i),i,CASE WHEN i%10<9 THEN 0 ELSE i%16 END,(i*7919)%1000000,printf('tag-%08x',i%10000),CAST(printf('%032d',i) AS BLOB) FROM c;\nCOMMIT;\nCREATE INDEX t_g ON t(grp);\nCREATE INDEX t_gv ON t(grp,v);\nANALYZE;\nCREATE TEMP TABLE hotspot_groups(seq INTEGER PRIMARY KEY,grp INTEGER);\nINSERT INTO hotspot_groups SELECT row_number() OVER (ORDER BY grp DESC,seq),grp FROM t;\nUPDATE t SET grp=(SELECT grp FROM hotspot_groups WHERE hotspot_groups.seq=t.seq);\nDROP TABLE hotspot_groups;\nCREATE INDEX t_s ON t(seq);\nCREATE TABLE u(id INTEGER PRIMARY KEY, grp INTEGER, v INTEGER);\nINSERT INTO u SELECT seq,grp,v FROM t WHERE seq%8=0;\nCREATE INDEX u_g ON u(grp);\nANALYZE;\n",
+  "expected": "15000|60000|29991577500|1800030000|0000000000000001|00000000000178c4|1920000|720000|4207500|3150000",
+  "repeats": 4,
+  "fingerprint": "134f12ec05c3f42de5b994a6",
+  "family": "f1d98a9b6d6db6bd7108403d",
+  "statement": "74dd1000185e3f87bf6ed0ea",
+  "issue": 5010,
+  "category": "in_transaction_mutations"
+}
