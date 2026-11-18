@@ -131,6 +131,7 @@ struct DiffTblCursor {
   /* Invalid side renders with the vtab's declared layout. */
   DoltliteSideCols fromSide;
   DoltliteSideCols toSide;
+  DoltliteDiffLayout layout;
   int    needFilter;
 
   AuditRow row;
@@ -712,6 +713,7 @@ static int buildRangeSpecDiffPair(
 }
 
 static void freePairCols(DiffTblCursor *pCur){
+  doltliteDiffLayoutClear(&pCur->layout);
   doltliteSideColsClear(&pCur->fromSide);
   doltliteSideColsClear(&pCur->toSide);
   pCur->needFilter = 0;
@@ -742,7 +744,7 @@ static int changeIsSchemaOnly(
       /* A new VIRTUAL column is not stored, and neither is a trailing
       ** NULL. A NULL stored ahead of a later value is a real field, as
       ** for a column only the from side has. */
-      if( toRec>=0 && toRec<toRi.nField ) return 0;
+      if( toRec>=0 && toRec<toRi.nField ) goto changed;
       continue;
     }
     fromRec = pFromCi->aColToRec ? pFromCi->aColToRec[fromIdx] : fromIdx;
@@ -750,25 +752,25 @@ static int changeIsSchemaOnly(
     ** not a record field. */
     if( toRec<0 && fromRec<0 ) continue;
     if( toRec<0 ){
-      if( fromRec<fromRi.nField && fromRi.aType[fromRec]!=0 ) return 0;
+      if( fromRec<fromRi.nField && fromRi.aType[fromRec]!=0 ) goto changed;
       continue;
     }
     if( fromRec<0 ){
-      if( toRec<toRi.nField && toRi.aType[toRec]!=0 ) return 0;
+      if( toRec<toRi.nField && toRi.aType[toRec]!=0 ) goto changed;
       continue;
     }
     if( toRec>=toRi.nField ){
-      if( fromRec<fromRi.nField && fromRi.aType[fromRec]!=0 ) return 0;
+      if( fromRec<fromRi.nField && fromRi.aType[fromRec]!=0 ) goto changed;
       continue;
     }
     if( fromRec>=fromRi.nField ){
-      if( toRi.aType[toRec]!=0 ) return 0;
+      if( toRi.aType[toRec]!=0 ) goto changed;
       continue;
     }
     if( !doltliteFieldValuesEqual(
             fromRi.aType[fromRec], pFromRec, nFromRec, fromRi.aOffset[fromRec],
             toRi.aType[toRec],     pToRec,   nToRec,   toRi.aOffset[toRec]) ){
-      return 0;
+      goto changed;
     }
   }
 
@@ -784,9 +786,15 @@ static int changeIsSchemaOnly(
     ** row change. A NULL stored ahead of a later value is a real field;
     ** removing it rewrites the row. A dropped VIRTUAL column was never
     ** stored. */
-    if( fromRec>=0 && fromRec<fromRi.nField ) return 0;
+    if( fromRec>=0 && fromRec<fromRi.nField ) goto changed;
   }
+  doltliteRecordInfoClear(&fromRi);
+  doltliteRecordInfoClear(&toRi);
   return 1;
+changed:
+  doltliteRecordInfoClear(&fromRi);
+  doltliteRecordInfoClear(&toRi);
+  return 0;
 }
 
 static int openNextPairIter(DiffTblCursor *pCur, sqlite3 *db){
@@ -796,6 +804,7 @@ static int openNextPairIter(DiffTblCursor *pCur, sqlite3 *db){
   int rc;
 
   pCur->needFilter = 0;
+  doltliteDiffLayoutClear(&pCur->layout);
 
   if( !cs ) return SQLITE_OK;
 
@@ -821,12 +830,6 @@ static int openNextPairIter(DiffTblCursor *pCur, sqlite3 *db){
     pCur->row.fromDate = p->fromDate;
     memcpy(pCur->row.zToCommit, p->zToCommit, PROLLY_HASH_SIZE*2+1);
     pCur->row.toDate = p->toDate;
-    rc = prollyDiffIterOpen(&pCur->diffIter, cs, pCache,
-                            &p->fromTblRoot, &p->toTblRoot,
-                            fromFlags, toFlags);
-    if( rc!=SQLITE_OK ) return rc;
-    pCur->diffIterOpen = 1;
-
     rc = doltliteSideColsLoad(db, &p->fromCatHash, &p->fromSchemaHash,
                               pCur->zSliceFromTable ? pCur->zSliceFromTable
                                                     : pVtab->zTableName,
@@ -845,7 +848,16 @@ static int openNextPairIter(DiffTblCursor *pCur, sqlite3 *db){
 
     pCur->needFilter = pCur->fromSide.valid && pCur->toSide.valid
         && prollyHashCompare(&p->fromSchemaHash, &p->toSchemaHash)!=0;
-    return SQLITE_OK;
+    if( pCur->needFilter ){
+      rc = doltliteDiffLayoutInit(&pCur->layout, &pCur->fromSide.ci,
+                                  &pCur->toSide.ci);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+    rc = prollyDiffIterOpenCompare(&pCur->diffIter, cs, pCache,
+          &p->fromTblRoot, &p->toTblRoot, fromFlags, toFlags,
+          pCur->layout.nSlot ? doltliteDiffRecordsEqual : 0, &pCur->layout);
+    pCur->diffIterOpen = 1;
+    return rc;
   }
 }
 

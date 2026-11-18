@@ -214,12 +214,15 @@ int prollyValuesEqual(
   return diffRecordsEqualFieldwise(pA, nA, pB, nB, pEqual, 0, 0);
 }
 
-static int diffValuesEqual(ProllyCursor *pOld, ProllyCursor *pNew,
-                           int *pEqual){
+static int diffValuesEqual(ProllyDiffIter *pIter, int *pEqual){
   const u8 *pOldVal; int nOldVal;
   const u8 *pNewVal; int nNewVal;
-  prollyCursorValue(pOld, &pOldVal, &nOldVal);
-  prollyCursorValue(pNew, &pNewVal, &nNewVal);
+  prollyCursorValue(pIter->pCurOld, &pOldVal, &nOldVal);
+  prollyCursorValue(pIter->pCurNew, &pNewVal, &nNewVal);
+  if( pIter->xEqual ){
+    return pIter->xEqual(pIter->pCompare, pOldVal, nOldVal,
+                         pNewVal, nNewVal, pEqual);
+  }
   return prollyValuesEqual(pOldVal, nOldVal, pNewVal, nNewVal, pEqual);
 }
 
@@ -612,14 +615,16 @@ static int diffIterAdvanceFrame(ProllyDiffIter *pIter){
   return SQLITE_OK;
 }
 
-int prollyDiffIterOpen(
+int prollyDiffIterOpenCompare(
   ProllyDiffIter *pIter,
   ChunkStore *pStore,
   ProllyCache *pCache,
   const ProllyHash *pOldRoot,
   const ProllyHash *pNewRoot,
   u8 oldFlags,
-  u8 newFlags
+  u8 newFlags,
+  ProllyDiffCompare xEqual,
+  void *pCompare
 ){
   int rc = SQLITE_OK;
 
@@ -631,6 +636,8 @@ int prollyDiffIterOpen(
   pIter->newFlags = newFlags;
   pIter->shapeMismatch =
       ((oldFlags ^ newFlags) & PROLLY_NODE_INTKEY)!=0;
+  pIter->xEqual = xEqual;
+  pIter->pCompare = pCompare;
 
   if( pStore->pChunkSource
    && prollyHashCompare(pOldRoot, pNewRoot)!=0 ){
@@ -651,7 +658,7 @@ int prollyDiffIterOpen(
     }
   }
 
-  if( pIter->shapeMismatch ){
+  if( pIter->shapeMismatch || xEqual ){
     rc = diffIterActivateRange(pIter, pOldRoot, pNewRoot, 0, 0);
   }else{
     rc = diffIterDescendPair(pIter, pOldRoot, pNewRoot);
@@ -672,6 +679,19 @@ int prollyDiffIterOpen(
   }
 
   return SQLITE_OK;
+}
+
+int prollyDiffIterOpen(
+  ProllyDiffIter *pIter,
+  ChunkStore *pStore,
+  ProllyCache *pCache,
+  const ProllyHash *pOldRoot,
+  const ProllyHash *pNewRoot,
+  u8 oldFlags,
+  u8 newFlags
+){
+  return prollyDiffIterOpenCompare(pIter, pStore, pCache, pOldRoot, pNewRoot,
+                                   oldFlags, newFlags, 0, 0);
 }
 
 int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
@@ -740,7 +760,7 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
         break;
       }else{
         int equal = 0;
-        pIter->rc = diffValuesEqual(pOld, pNew, &equal);
+        pIter->rc = diffValuesEqual(pIter, &equal);
         if( pIter->rc!=SQLITE_OK ) return pIter->rc;
         if( equal ){
           pIter->rc = prollyCursorNext(pOld);

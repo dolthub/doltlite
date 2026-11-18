@@ -6,6 +6,7 @@
 #include "doltlite_record.h"
 #include "doltlite_internal.h"
 #include "sortkey.h"
+#include "prolly_diff.h"
 #include "prolly_xxhash.h"
 #include <string.h>
 #include <stdio.h>
@@ -191,6 +192,84 @@ int doltliteFieldValuesEqual(
   if( aOff<0 || aOff+aLen>nA ) return 0;
   if( bOff<0 || bOff+aLen>nB ) return 0;
   return memcmp(pA+aOff, pB+bOff, aLen)==0;
+}
+
+int doltliteDiffLayoutInit(
+  DoltliteDiffLayout *pLayout,
+  const DoltliteColInfo *pFrom,
+  const DoltliteColInfo *pTo
+){
+  int i, j;
+  int moved = 0;
+  if( pFrom->nCol==0 || pTo->nCol==0 ) return SQLITE_OK;
+  pLayout->aSlot = sqlite3_malloc64(pTo->nCol * sizeof(*pLayout->aSlot));
+  if( !pLayout->aSlot ) return SQLITE_NOMEM;
+  for(i=0; i<pTo->nCol; i++){
+    int iTo = pTo->aColToRec ? pTo->aColToRec[i] : i;
+    if( iTo<0 || i==pTo->iPkCol || (!pTo->bHasRowid && iTo<pTo->nPk) ){
+      continue;
+    }
+    for(j=0; j<pFrom->nCol; j++){
+      int iFrom;
+      if( sqlite3_stricmp(pFrom->azName[j], pTo->azName[i])!=0 ) continue;
+      iFrom = pFrom->aColToRec ? pFrom->aColToRec[j] : j;
+      if( iFrom<0 || j==pFrom->iPkCol
+       || (!pFrom->bHasRowid && iFrom<pFrom->nPk) ) break;
+      pLayout->aSlot[pLayout->nSlot].iFrom = iFrom;
+      pLayout->aSlot[pLayout->nSlot].iTo = iTo;
+      pLayout->nSlot++;
+      moved |= iFrom!=iTo;
+      break;
+    }
+  }
+  if( !moved ) doltliteDiffLayoutClear(pLayout);
+  return SQLITE_OK;
+}
+
+void doltliteDiffLayoutClear(DoltliteDiffLayout *pLayout){
+  sqlite3_free(pLayout->aSlot);
+  memset(pLayout, 0, sizeof(*pLayout));
+}
+
+int doltliteDiffSharedValuesEqual(
+  void *pCompare,
+  const u8 *pFrom, int nFrom,
+  const u8 *pTo, int nTo,
+  int *pEqual
+){
+  const DoltliteDiffLayout *pLayout = pCompare;
+  DoltliteRecordInfo from = {0}, to = {0};
+  int i, rc = SQLITE_OK;
+
+  if( nFrom>0 ) rc = doltliteParseRecordStrict(pFrom, nFrom, &from);
+  if( rc==SQLITE_OK && nTo>0 ) rc = doltliteParseRecordStrict(pTo, nTo, &to);
+  *pEqual = rc==SQLITE_OK;
+  for(i=0; *pEqual && i<pLayout->nSlot; i++){
+    int f = pLayout->aSlot[i].iFrom;
+    int t = pLayout->aSlot[i].iTo;
+    *pEqual = doltliteFieldValuesEqual(
+        f<from.nField ? from.aType[f] : 0, pFrom, nFrom,
+        f<from.nField ? from.aOffset[f] : 0,
+        t<to.nField ? to.aType[t] : 0, pTo, nTo,
+        t<to.nField ? to.aOffset[t] : 0);
+  }
+  doltliteRecordInfoClear(&from);
+  doltliteRecordInfoClear(&to);
+  return rc;
+}
+
+int doltliteDiffRecordsEqual(
+  void *pCompare,
+  const u8 *pFrom, int nFrom,
+  const u8 *pTo, int nTo,
+  int *pEqual
+){
+  int rc = prollyValuesEqual(pFrom, nFrom, pTo, nTo, pEqual);
+  if( rc==SQLITE_OK && *pEqual ){
+    return doltliteDiffSharedValuesEqual(pCompare, pFrom, nFrom,
+                                         pTo, nTo, pEqual);
+  }
+  return rc;
 }
 
 typedef struct GenEval GenEval;

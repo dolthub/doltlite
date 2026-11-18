@@ -61,6 +61,7 @@ struct DiffIterFrame {
 };
 
 typedef struct ProllyDiffIter ProllyDiffIter;
+typedef int (*ProllyDiffCompare)(void*, const u8*, int, const u8*, int, int*);
 struct ProllyDiffIter {
   ChunkStore *pStore;
   ProllyCache *pCache;
@@ -69,6 +70,8 @@ struct ProllyDiffIter {
   u8 newFlags;
   /* Different key shapes: drain old as deletes, new as adds (drop+recreate). */
   u8 shapeMismatch;
+  ProllyDiffCompare xEqual;
+  void *pCompare;
 
   ProllyCursor *pCurOld;
   ProllyCursor *pCurNew;
@@ -101,6 +104,11 @@ int prollyDiffIterOpen(ProllyDiffIter *pIter, ChunkStore *pStore,
                        ProllyCache *pCache,
                        const ProllyHash *pOldRoot, const ProllyHash *pNewRoot,
                        u8 oldFlags, u8 newFlags);
+int prollyDiffIterOpenCompare(ProllyDiffIter *pIter, ChunkStore *pStore,
+                       ProllyCache *pCache,
+                       const ProllyHash *pOldRoot, const ProllyHash *pNewRoot,
+                       u8 oldFlags, u8 newFlags,
+                       ProllyDiffCompare xEqual, void *pCompare);
 int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange);
 void prollyDiffIterClose(ProllyDiffIter *pIter);
 

@@ -584,6 +584,7 @@ static int dsComputeTableStats(
   DoltliteColInfo fromCi, toCi;
   int nFromCols = 0, nToCols = 0;
   DsColMap colMap;
+  DoltliteDiffLayout layout = {0};
   i64 oldCount = 0, newCount = 0;
   i64 rowsMod = 0, rowsAdd = 0, rowsDel = 0;
   i64 cellsMod = 0, cellsAdd = 0, cellsDel = 0;
@@ -647,6 +648,10 @@ static int dsComputeTableStats(
   if( hasFrom && hasTo ){
     rc = dsBuildColMap(&fromCi, &toCi, &colMap);
     if( rc!=SQLITE_OK ) goto done;
+    if( schemaChanged && !pkChanged ){
+      rc = doltliteDiffLayoutInit(&layout, &fromCi, &toCi);
+      if( rc!=SQLITE_OK ) goto done;
+    }
   }
 
   if( !pkChanged && hasFrom ){
@@ -659,7 +664,7 @@ static int dsComputeTableStats(
   }
 
   if( !pkChanged && hasFrom && hasTo
-   && prollyHashCompare(&fromRoot, &toRoot)!=0 ){
+   && (layout.nSlot || prollyHashCompare(&fromRoot, &toRoot)!=0) ){
     ChunkStore *cs = doltliteGetChunkStore(db);
     ProllyCache *pCache = doltliteGetCache(db);
     ProllyDiffIter iter;
@@ -671,8 +676,12 @@ static int dsComputeTableStats(
       rc = SQLITE_ERROR;
       goto done;
     }
-    rc = prollyDiffIterOpen(&iter, cs, pCache, &fromRoot, &toRoot, ff, tf);
-    if( rc!=SQLITE_OK ) goto done;
+    rc = prollyDiffIterOpenCompare(&iter, cs, pCache, &fromRoot, &toRoot,
+          ff, tf, layout.nSlot ? doltliteDiffRecordsEqual : 0, &layout);
+    if( rc!=SQLITE_OK ){
+      prollyDiffIterClose(&iter);
+      goto done;
+    }
     while( (rc = prollyDiffIterStep(&iter, &pChange))==SQLITE_ROW && pChange ){
       switch( pChange->type ){
         case PROLLY_DIFF_ADD:
@@ -778,6 +787,7 @@ done:
   doltliteFreeColInfo(&fromCi);
   doltliteFreeColInfo(&toCi);
   dsFreeColMap(&colMap);
+  doltliteDiffLayoutClear(&layout);
   return rc;
 }
 
@@ -1479,6 +1489,7 @@ static int dssDataActuallyChanged(
 ){
   DoltliteColInfo fromCi, toCi;
   DsColMap colMap;
+  DoltliteDiffLayout layout = {0};
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
   ProllyDiffIter iter;
@@ -1499,15 +1510,20 @@ static int dssDataActuallyChanged(
   if( rc!=SQLITE_OK ) goto done;
   rc = dsBuildColMap(&fromCi, &toCi, &colMap);
   if( rc!=SQLITE_OK ) goto done;
+  if( prollyHashCompare(&pFromEntry->schemaHash, &pToEntry->schemaHash)!=0 ){
+    rc = doltliteDiffLayoutInit(&layout, &fromCi, &toCi);
+    if( rc!=SQLITE_OK ) goto done;
+  }
 
-  rc = prollyDiffIterOpen(&iter, cs, pCache, &pFromEntry->root,
+  rc = prollyDiffIterOpenCompare(&iter, cs, pCache, &pFromEntry->root,
                           &pToEntry->root,
                           pFromEntry->flags ? pFromEntry->flags
                                             : pToEntry->flags,
                           pToEntry->flags ? pToEntry->flags
-                                          : pFromEntry->flags);
-  if( rc!=SQLITE_OK ) goto done;
+                                          : pFromEntry->flags,
+                          layout.nSlot ? doltliteDiffRecordsEqual : 0, &layout);
   iterOpen = 1;
+  if( rc!=SQLITE_OK ) goto done;
 
   while( (rc = prollyDiffIterStep(&iter, &pChange))==SQLITE_ROW && pChange ){
     int nDiffer = 0, nModified = 0;
@@ -1531,6 +1547,7 @@ done:
   doltliteFreeColInfo(&fromCi);
   doltliteFreeColInfo(&toCi);
   dsFreeColMap(&colMap);
+  doltliteDiffLayoutClear(&layout);
   return rc;
 }
 
@@ -1551,8 +1568,9 @@ static int dssAppendTableChange(
 
   if( pFromEntry && pToEntry ){
     int rootsDiffer = prollyHashCompare(&pFromEntry->root, &pToEntry->root)!=0;
-    int schemasDiffer = prollyHashCompare(&pFromEntry->schemaHash,
-                                          &pToEntry->schemaHash)!=0;
+    int tableSchemaChanged = prollyHashCompare(&pFromEntry->schemaHash,
+                                               &pToEntry->schemaHash)!=0;
+    int schemasDiffer = tableSchemaChanged;
     /* Index catalog rows are not in schemaHash; CREATE/DROP INDEX is still
     ** a schema change on the parent table. */
     if( !schemasDiffer
@@ -1595,7 +1613,7 @@ static int dssAppendTableChange(
         return SQLITE_OK;
       }
     }
-    if( rootsDiffer && schemasDiffer ){
+    if( schemasDiffer && (rootsDiffer || tableSchemaChanged) ){
       rc = dssDataActuallyChanged(db, &c->fctx, zTableName,
                                   pFromEntry, pToEntry, &rootsDiffer);
       if( rc!=SQLITE_OK ) return rc;
