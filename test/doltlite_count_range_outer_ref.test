@@ -1,0 +1,56 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-count-range-outer-ref
+
+# The range-count shortcut applies to a BETWEEN over the counted table's
+# own column. The same table under an outer alias is constant per outer
+# row: the count is every inner row or none.
+do_execsql_test 1.0 {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, n INT);
+  CREATE INDEX ta ON t(a);
+  INSERT INTO t VALUES(1,10,1),(2,20,NULL),(3,30,3),(4,40,NULL),(5,50,5),(6,60,6);
+}
+
+do_execsql_test 1.1 {
+  SELECT (SELECT count(*) FROM t AS i WHERE o.id BETWEEN 1 AND 3)
+    FROM t AS o ORDER BY o.id;
+} {6 6 6 0 0 0}
+
+do_execsql_test 1.2 {
+  SELECT (SELECT count(*) FROM t AS i WHERE o.a BETWEEN 10 AND 40)
+    FROM t AS o ORDER BY o.id;
+} {6 6 6 6 0 0}
+
+# An aggregate over an outer column belongs to the outer query.
+do_execsql_test 1.3 {
+  SELECT (SELECT count(o.n) FROM t AS i WHERE i.id BETWEEN 1 AND 3)
+    FROM t AS o ORDER BY o.id;
+} {4}
+
+do_execsql_test 1.4 {
+  SELECT (SELECT count(o.n) FROM t AS i WHERE i.a BETWEEN 10 AND 40)
+    FROM t AS o ORDER BY o.id;
+} {4}
+
+do_execsql_test 1.5 {
+  SELECT o.id FROM t AS o
+   WHERE (SELECT count(*) FROM t AS i WHERE o.a BETWEEN 10 AND 40)>0
+   ORDER BY o.id;
+} {1 2 3 4}
+
+do_execsql_test 2.0 {
+  SELECT (SELECT count(*) FROM t AS i WHERE i.id BETWEEN 1 AND 3)
+    FROM t AS o ORDER BY o.id;
+  SELECT (SELECT count(*) FROM t AS i WHERE i.a BETWEEN 10 AND 40)
+    FROM t AS o LIMIT 1;
+  SELECT count(*) FROM t WHERE id BETWEEN 2 AND 5;
+  SELECT count(*) FROM t WHERE a BETWEEN 20 AND 50;
+  SELECT count(i.n) FROM t AS i WHERE i.id BETWEEN 1 AND 4;
+} {3 3 3 3 3 3 4 4 4 2}
+
+do_test 2.1 {
+  set ops [db eval {EXPLAIN SELECT count(*) FROM t WHERE a BETWEEN 20 AND 50}]
+  expr {[lsearch $ops CountIndexRange]>=0}
+} {1}
+
+finish_test
