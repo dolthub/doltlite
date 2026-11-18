@@ -1,0 +1,83 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-merge-table-to-view
+
+# Theirs replaces a table with a view of the same name while ours changes
+# the table. The merge keeps the table and reports a schema conflict; it
+# must not also carry the view into the merged schema.
+foreach {name ours} {
+  rows   {INSERT INTO t VALUES (3,30)}
+  alter  {ALTER TABLE t ADD COLUMN z}
+} {
+  reset_db
+  do_test $name-setup {
+    db eval {
+      CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+      INSERT INTO t VALUES (1,10),(2,20);
+      SELECT dolt_commit('-Am','base');
+      SELECT dolt_branch('br');
+    }
+    db eval $ours
+    db eval {
+      SELECT dolt_commit('-Am','ours');
+      SELECT dolt_checkout('br');
+      DROP TABLE t;
+      CREATE VIEW t AS SELECT 1 AS id;
+      SELECT dolt_commit('-Am','theirs');
+      SELECT dolt_checkout('main');
+    }
+    db one {SELECT active_branch()}
+  } {main}
+
+  do_test $name-autocommit {
+    set rc [catch {db eval {SELECT dolt_merge('br')}} msg]
+    list $rc [string match {cannot merge: conflicts detected*} $msg]
+  } {1 1}
+
+  do_execsql_test $name-intact {
+    SELECT type FROM sqlite_master WHERE name='t';
+    SELECT count(*) FROM dolt_status;
+    PRAGMA integrity_check;
+  } {table 0 ok}
+
+  do_test $name-in-txn {
+    db eval {BEGIN}
+    catch {db eval {SELECT dolt_merge('br')}}
+    db eval {
+      SELECT table_name FROM dolt_schema_conflicts;
+      SELECT type FROM sqlite_master WHERE name='t';
+    }
+  } {t table}
+
+  do_test $name-rollback {
+    db eval {
+      ROLLBACK;
+      SELECT type FROM sqlite_master WHERE name='t';
+      SELECT count(*) FROM t;
+      SELECT count(*) FROM dolt_status;
+      PRAGMA integrity_check;
+    }
+  } [list table [expr {$name eq "rows" ? 3 : 2}] 0 ok]
+}
+
+# Unchanged table on ours: theirs' replacement is adopted.
+reset_db
+do_execsql_test adopt-1.0 {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+  CREATE TABLE other(x);
+  SELECT dolt_commit('-Am','base') IS NOT NULL;
+  SELECT dolt_branch('br');
+  INSERT INTO other VALUES(1);
+  SELECT dolt_commit('-Am','ours') IS NOT NULL;
+  SELECT dolt_checkout('br');
+  DROP TABLE t;
+  CREATE VIEW t AS SELECT 1 AS id;
+  SELECT dolt_commit('-Am','theirs') IS NOT NULL;
+  SELECT dolt_checkout('main');
+  SELECT dolt_merge('br') IS NOT NULL;
+  SELECT type FROM sqlite_master WHERE name='t';
+  SELECT * FROM t;
+  PRAGMA integrity_check;
+} {1 0 1 0 1 0 1 view 1 ok}
+
+finish_test

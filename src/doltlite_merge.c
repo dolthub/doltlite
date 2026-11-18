@@ -1272,6 +1272,12 @@ int doltliteMergeCatalogs(
          && (pAnc->zSql==0 || strcmp(pAnc->zSql, pT->zSql)==0) ){
           continue;
         }
+        /* They put a view where the merge kept a table. Two rows of one
+        ** name do not load; the schema conflict on the table reports it. */
+        if( pT->zType && pT->zName && strcmp(pT->zType, "view")==0
+         && doltliteFindTableByName(aMerged, nMerged, pT->zName) ){
+          continue;
+        }
         /* Triggers follow their table: no merged table, no fallback row. */
         if( pT->zType && strcmp(pT->zType, "trigger")==0
          && pT->zTblName && pT->zName
