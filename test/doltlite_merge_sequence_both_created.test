@@ -1,0 +1,63 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-merge-sequence-both-created
+
+# Each branch creates its first AUTOINCREMENT table, so each creates
+# sqlite_sequence on its own. The counters belong to different tables and
+# merge by table name.
+foreach {op cmd} {
+  merge       {dolt_merge('br')}
+  cherry-pick {dolt_cherry_pick('br')}
+} {
+  reset_db
+  do_execsql_test $op-setup {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+    INSERT INTO t VALUES (1,1);
+    SELECT dolt_commit('-Am','base') IS NOT NULL;
+    SELECT dolt_branch('br');
+    CREATE TABLE s(id INTEGER PRIMARY KEY AUTOINCREMENT, a INT);
+    INSERT INTO s(a) VALUES (30);
+    SELECT dolt_commit('-Am','ours') IS NOT NULL;
+    SELECT dolt_checkout('br');
+    CREATE TABLE r(id INTEGER PRIMARY KEY AUTOINCREMENT, a INT);
+    INSERT INTO r(a) VALUES (40),(41),(42);
+    SELECT dolt_commit('-Am','theirs') IS NOT NULL;
+    SELECT dolt_checkout('main');
+  } {1 0 1 0 1 0}
+  do_test $op-apply {
+    db eval "SELECT $cmd IS NOT NULL"
+  } {1}
+  do_execsql_test $op-counters {
+    SELECT name, seq FROM sqlite_sequence ORDER BY name;
+    SELECT count(*) FROM dolt_status;
+    PRAGMA integrity_check;
+  } {r 3 s 1 0 ok}
+  do_execsql_test $op-next-id {
+    INSERT INTO r(a) VALUES (43);
+    INSERT INTO s(a) VALUES (31);
+    SELECT max(id) FROM r;
+    SELECT max(id) FROM s;
+  } {4 2}
+}
+
+# Both branches create the same AUTOINCREMENT table: the higher counter wins.
+reset_db
+do_execsql_test same-1.0 {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+  SELECT dolt_commit('-Am','base') IS NOT NULL;
+  SELECT dolt_branch('br');
+  CREATE TABLE s(id INTEGER PRIMARY KEY AUTOINCREMENT, a INT);
+  INSERT INTO s(a) VALUES (1);
+  SELECT dolt_commit('-Am','ours') IS NOT NULL;
+  SELECT dolt_checkout('br');
+  CREATE TABLE s(id INTEGER PRIMARY KEY AUTOINCREMENT, a INT);
+  INSERT INTO s(id,a) VALUES (5,5),(6,6);
+  SELECT dolt_commit('-Am','theirs') IS NOT NULL;
+  SELECT dolt_checkout('main');
+  SELECT dolt_merge('br') IS NOT NULL;
+  SELECT name, seq FROM sqlite_sequence;
+  SELECT id FROM s ORDER BY id;
+  PRAGMA integrity_check;
+} {1 0 1 0 1 0 1 s 6 1 5 6 ok}
+
+finish_test
