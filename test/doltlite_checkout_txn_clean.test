@@ -1,0 +1,70 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-checkout-txn-clean
+
+# A transaction that undoes a branch's uncommitted changes leaves the live
+# catalog equal to HEAD while the stored working set is still dirty. A
+# checkout in that transaction must leave the branch at HEAD.
+proc setup {} {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INT PRIMARY KEY, a VARCHAR(20));
+    INSERT INTO t VALUES(1,'a1');
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('other');
+    INSERT INTO t VALUES(2,'uncommitted row');
+    UPDATE t SET a='uncommitted edit' WHERE id=1;
+  }
+}
+
+setup
+do_execsql_test 1.0 {
+  BEGIN;
+  DELETE FROM t WHERE id=2;
+  UPDATE t SET a='a1' WHERE id=1;
+  SELECT dolt_checkout('other');
+  COMMIT;
+  SELECT dolt_checkout('main');
+  SELECT id, a FROM t ORDER BY id;
+  SELECT count(*) FROM dolt_status;
+} {0 0 1 a1 0}
+
+do_test 1.1 {
+  db close
+  sqlite3 db test.db
+  db eval { SELECT id, a FROM t ORDER BY id }
+} {1 a1}
+
+setup
+do_execsql_test 2.0 {
+  BEGIN;
+  DELETE FROM t WHERE id=2;
+  UPDATE t SET a='a1' WHERE id=1;
+  SELECT dolt_checkout('other');
+  SELECT dolt_checkout('main');
+  SELECT id, a FROM t ORDER BY id;
+  COMMIT;
+  SELECT id, a FROM t ORDER BY id;
+} {0 0 1 a1 1 a1}
+
+setup
+do_execsql_test 3.0 {
+  BEGIN;
+  DELETE FROM t WHERE id=2;
+  UPDATE t SET a='a1' WHERE id=1;
+  SELECT dolt_checkout('other');
+  ROLLBACK;
+  SELECT dolt_checkout('main');
+  SELECT id, a FROM t ORDER BY id;
+} {0 0 1 {uncommitted edit} 2 {uncommitted row}}
+
+setup
+do_execsql_test 4.0 {
+  BEGIN;
+  SELECT dolt_checkout('other');
+  COMMIT;
+  SELECT dolt_checkout('main');
+  SELECT id, a FROM t ORDER BY id;
+} {0 0 1 {uncommitted edit} 2 {uncommitted row}}
+
+finish_test

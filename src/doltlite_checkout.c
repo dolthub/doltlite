@@ -284,8 +284,13 @@ static int checkoutCaptureOldCatalog(sqlite3 *db, ChunkStore *cs,
     sqlite3_free(oldCatData);
     return rc;
   }else{
-    int rc = doltliteGetPersistedWorkingCatalogHash(db, pOldCatHash);
-    if( rc==SQLITE_NOTFOUND ) rc = doltliteGetHeadCatalogHash(db, pOldCatHash);
+    /* Clean means the live catalog equals HEAD. The persisted working
+    ** catalog can still be the dirty one from before this transaction. */
+    int rc = doltliteGetHeadCatalogHash(db, pOldCatHash);
+    if( rc==SQLITE_OK && prollyHashIsEmpty(pOldCatHash) ){
+      rc = doltliteGetPersistedWorkingCatalogHash(db, pOldCatHash);
+      if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
+    }
     return rc;
   }
 }
