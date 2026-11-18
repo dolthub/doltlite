@@ -721,7 +721,8 @@ static int recordEndsInNull(const u8 *p, int n){
 /* An insert over a key whose stored row it replaces (DELETE then INSERT in one
 ** transaction, or REPLACE) should keep the stored bytes when they already say
 ** the same thing, as an in-place overwrite does, so the table hash does not
-** move. bOverwrite admits a key with no pending edit. *ppKeep is a copy the
+** move. bOverwrite admits a key with no pending edit, and 2 admits any
+** pending edit as well. *ppKeep is a copy the
 ** caller frees. nSchemaField is the current record width, or 0. bTrimmed means
 ** this write already dropped trailing NULLs, so a longer stored row can still
 ** be the same values even though the new record does not end in NULL. A write
@@ -752,7 +753,10 @@ int prollyBaseBytesOverPendingDelete(
   if( !bOverwrite && !pCur->pMutMap->bHasDelete ) return SQLITE_OK;
   rc = prollyMutMapFindRc(pCur->pMutMap, pKey, nKey, intKey, &pEntry);
   if( rc!=SQLITE_OK ) return rc;
-  if( pEntry ? pEntry->op!=PROLLY_EDIT_DELETE : !bOverwrite ) return SQLITE_OK;
+  if( bOverwrite<2
+   && (pEntry ? pEntry->op!=PROLLY_EDIT_DELETE : !bOverwrite) ){
+    return SQLITE_OK;
+  }
   prollyCursorInit(&base, pCur->pBt->pStore, &pCur->pBt->cache,
                    &pCur->pCur.root, pCur->pCur.flags);
   rc = pKey ? prollyCursorSeekBlob(&base, pKey, nKey, &res)

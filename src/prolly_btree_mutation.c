@@ -1128,6 +1128,7 @@ static int btCursorInsertImpl(
     int splitKey = 0;
     int storePayload = 0;
     int isIndex = 0;
+    int bKeyOnly = 0;
     const u8 *pStoredPayload = (const u8*)pPayload->pKey;
     int nStoredPayload = (int)pPayload->nKey;
     if( pCur->pKeyInfo ){
@@ -1141,6 +1142,11 @@ static int btCursorInsertImpl(
      && pCur->pKeyInfo->nKeyField < pCur->pKeyInfo->nAllField ){
       nKeyField = (int)pCur->pKeyInfo->nKeyField;
       splitKey = 1;
+      /* The sort key alone rebuilds the key columns unless one of them
+      ** needs its record bytes. */
+      bKeyOnly = !isIndex && !storePayload
+              && !sortKeyRecordNeedsPayload(
+                    (const u8*)pPayload->pKey, (int)pPayload->nKey, nKeyField);
       storePayload = 1;
     }
     /* Sort keys collapse INTEGER/integral REAL; keep the record if REAL type
@@ -1200,7 +1206,23 @@ static int btCursorInsertImpl(
             pStoredPayload = *ppCanon;
             nStoredPayload = nCanon;
           }
+          /* With every other column absent the row is its key, and is
+          ** stored as a key-covering row is: with no record. Otherwise a
+          ** row written before the table gained a column and one written
+          ** after it would differ in bytes while equal in value. */
+          if( bKeyOnly ){
+            DoltliteRecordInfo ri;
+            doltliteRecordInfoInit(&ri);
+            bKeyOnly = doltliteParseRecordStrict(
+                           pStoredPayload, nStoredPayload, &ri)==SQLITE_OK
+                    && ri.nField<=nKeyField;
+            doltliteRecordInfoClear(&ri);
+          }
+        }else{
+          bKeyOnly = 0;
         }
+      }else{
+        bKeyOnly = 0;
       }
       if( rc==SQLITE_OK
        && (pCur->pBtree->db->mDbFlags & DBFLAG_InternalDml)==0
@@ -1216,9 +1238,26 @@ static int btCursorInsertImpl(
               pOld, nOld, pStoredPayload, nStoredPayload,
               nSchemaField, &equal);
         }
+        if( rc==SQLITE_OK && equal && bKeyOnly ){
+          /* The payload of a row stored with no record is rebuilt from its
+          ** key. Keep it only if those bytes are really in storage. */
+          int nRaw = 0;
+          if( pCur->mmActive
+           && (pCur->mergeSrc==MERGE_SRC_MUT
+               || pCur->mergeSrc==MERGE_SRC_BOTH) ){
+            ProllyMutMapEntry *pEntry;
+            rc = currentMutMapEntry(pCur, &pEntry);
+            if( rc==SQLITE_OK ) nRaw = pEntry->nVal;
+          }else if( prollyCursorIsValid(&pCur->pCur) ){
+            const u8 *pRaw;
+            prollyCursorValue(&pCur->pCur, &pRaw, &nRaw);
+          }
+          if( nRaw<=0 ) equal = 0;
+        }
         if( rc==SQLITE_OK && equal ){
           pStoredPayload = pOld;
           nStoredPayload = nOld;
+          bKeyOnly = 0;
         }
       }
       if( rc==SQLITE_OK && !isIndex && splitKey ){
@@ -1255,11 +1294,17 @@ static int btCursorInsertImpl(
         ** seek that found the conflict leaves seekResult 0. */
         rc = prollyBaseBytesOverPendingDelete(pCur, pSortKey, nSortKey, 0,
                  pStoredPayload, nStoredPayload, nSchemaField,
-                 ppCanon && *ppCanon, seekResult==0, ppKeep, &nKeep);
+                 ppCanon && *ppCanon, bKeyOnly ? 2 : seekResult==0,
+                 ppKeep, &nKeep);
         if( rc==SQLITE_OK && *ppKeep ){
           pStoredPayload = *ppKeep;
           nStoredPayload = nKeep;
+          bKeyOnly = 0;
         }
+      }
+      if( rc==SQLITE_OK && bKeyOnly ){
+        storePayload = 0;
+        nStoredPayload = 0;
       }
     }
     if( rc==SQLITE_OK ){

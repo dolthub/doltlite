@@ -1,0 +1,123 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-key-only-row-encoding
+
+# A clustered row whose non-key columns are all absent is stored with no
+# record, whether it was written before the table had those columns or
+# after. Equal rows must be equal bytes: no-op writes leave the working
+# set clean and the table hash does not depend on history.
+proc table_hash {sql} {
+  forcedelete h.db
+  sqlite3 dbh h.db
+  dbh eval $sql
+  set h [dbh one {SELECT dolt_hashof_table('t')}]
+  dbh close
+  return $h
+}
+
+foreach {name decl v1 v2 w} {
+  text     {k TEXT PRIMARY KEY}                      {'a'}   {'b'}   {k='a'}
+  worowid  {k TEXT PRIMARY KEY}                      {'a'}   {'b'}   {k='a'}
+  compound {a INT, b TEXT, PRIMARY KEY(a,b)}         {1,'x'} {2,'y'} {a=1}
+  real     {k REAL PRIMARY KEY}                      {1.5}   {2.0}   {k=1.5}
+  nocase   {k TEXT COLLATE nocase PRIMARY KEY}       {'a'}   {'b'}   {k='a'}
+} {
+  set tail [expr {$name eq "worowid" ? " WITHOUT ROWID" : ""}]
+
+  reset_db
+  do_test $name-noop-update {
+    db eval "CREATE TABLE t($decl)$tail"
+    db eval "INSERT INTO t VALUES($v1),($v2)"
+    db eval {
+      ALTER TABLE t ADD COLUMN c INT;
+      SELECT dolt_commit('-Am','c1');
+      SELECT dolt_branch('b');
+    }
+    db eval "UPDATE t SET c=NULL WHERE $w"
+    db eval "INSERT OR REPLACE INTO t SELECT * FROM t"
+    db eval {
+      SELECT count(*) FROM dolt_status;
+      SELECT count(*) FROM dolt_diff_t('HEAD','WORKING');
+    }
+  } {0 0}
+
+  do_test $name-merge {
+    db eval "INSERT INTO t VALUES($v1 || 'z', 9)"
+    db eval {
+      SELECT dolt_commit('-Am','main');
+      SELECT dolt_checkout('b');
+    }
+    db eval "UPDATE t SET c=5 WHERE $w"
+    db eval {
+      SELECT dolt_commit('-Am','b');
+      SELECT dolt_merge('main') IS NOT NULL;
+    }
+    db eval "SELECT c FROM t WHERE $w ORDER BY c LIMIT 1"
+  } {5}
+
+  do_execsql_test $name-integrity {
+    PRAGMA integrity_check;
+  } {ok}
+
+  do_test $name-hash-add {
+    set h1 [table_hash "CREATE TABLE t($decl)$tail;
+                        INSERT INTO t VALUES($v1);
+                        ALTER TABLE t ADD COLUMN c;"]
+    set h2 [table_hash "CREATE TABLE t($decl)$tail;
+                        ALTER TABLE t ADD COLUMN c;
+                        INSERT INTO t VALUES($v1,NULL);"]
+    expr {$h1 eq $h2}
+  } {1}
+
+  do_test $name-hash-drop {
+    set h1 [table_hash "CREATE TABLE t($decl)$tail;
+                        ALTER TABLE t ADD COLUMN c INT;
+                        INSERT INTO t VALUES($v1,1);
+                        ALTER TABLE t DROP COLUMN c;"]
+    set h2 [table_hash "CREATE TABLE t($decl)$tail;
+                        INSERT INTO t VALUES($v1);"]
+    expr {$h1 eq $h2}
+  } {1}
+
+  reset_db
+  do_test $name-noop-replace {
+    db eval "CREATE TABLE t($decl)$tail"
+    db eval {ALTER TABLE t ADD COLUMN c INT}
+    db eval "INSERT INTO t VALUES($v1,1),($v2,2)"
+    db eval {
+      ALTER TABLE t DROP COLUMN c;
+      SELECT dolt_commit('-Am','c1');
+    }
+    db eval "INSERT OR REPLACE INTO t VALUES($v1)"
+    db eval {
+      SELECT count(*) FROM dolt_status;
+      SELECT count(*) FROM t;
+      PRAGMA integrity_check;
+    }
+  } {0 2 ok}
+}
+
+reset_db
+do_execsql_test read-1.0 {
+  CREATE TABLE t(k TEXT PRIMARY KEY, c INT, d TEXT);
+  CREATE INDEX tc ON t(c);
+  CREATE INDEX td ON t(d);
+  INSERT INTO t VALUES('a',NULL,NULL),('b',2,NULL),('c',NULL,'x');
+  UPDATE t SET c=NULL WHERE k='b';
+  SELECT k, quote(c), quote(d) FROM t ORDER BY k;
+  SELECT k FROM t INDEXED BY tc WHERE c IS NULL ORDER BY k;
+  SELECT k FROM t INDEXED BY td WHERE d='x';
+  PRAGMA integrity_check;
+} {a NULL NULL b NULL NULL c NULL 'x' a b c c ok}
+
+do_test read-1.1 {
+  db close
+  sqlite3 db test.db
+  db eval {
+    UPDATE t SET c=7 WHERE k='a';
+    SELECT k, quote(c), quote(d) FROM t ORDER BY k;
+    PRAGMA integrity_check;
+  }
+} {a 7 NULL b NULL NULL c NULL 'x' ok}
+
+finish_test
