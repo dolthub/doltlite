@@ -242,6 +242,7 @@ doltlite_checkout_staged_drop
 doltlite_checkout_transaction
 doltlite_checkout_dot_view_trigger
 doltlite_checkout_txn_clean
+doltlite_working_ref_txn_clean
 doltlite_replace_nocase_pk
 doltlite_key_only_row_encoding
 doltlite_txn_reset_clean

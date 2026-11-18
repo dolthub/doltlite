@@ -191,9 +191,13 @@ int doltliteResolveCatalogHashForRef(sqlite3 *db, const char *zRef,
     if( dirty ){
       return doltliteFlushCatalogToHash(db, pCatHash);
     }
-    /* A branch nobody has written or checked out has no working set. */
-    rc = doltliteGetPersistedWorkingCatalogHash(db, pCatHash);
-    if( rc==SQLITE_NOTFOUND ) rc = doltliteGetHeadCatalogHash(db, pCatHash);
+    /* Clean means the live catalog equals HEAD. The persisted working
+    ** catalog can still be the dirty one from before this transaction. */
+    rc = doltliteGetHeadCatalogHash(db, pCatHash);
+    if( rc==SQLITE_OK && prollyHashIsEmpty(pCatHash) ){
+      rc = doltliteGetPersistedWorkingCatalogHash(db, pCatHash);
+      if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
+    }
     return rc;
   }
   if( doltliteRefIsStaged(zRef) ){
