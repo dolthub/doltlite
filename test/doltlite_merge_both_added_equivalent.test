@@ -1,0 +1,110 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-merge-both-added-equivalent
+
+# The same table created on both branches merges when the two CREATE TABLE
+# statements describe one table, however each is spelled. A real difference
+# in the definition is still a schema conflict.
+proc try_merge {side main {ins1 {INSERT INTO u VALUES(1,1)}}
+                         {ins2 {INSERT INTO u VALUES(2,2)}}} {
+  reset_db
+  db eval {
+    CREATE TABLE t(a INT PRIMARY KEY);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_checkout('-b','side');
+  }
+  db eval $side
+  db eval $ins1
+  db eval {
+    SELECT dolt_commit('-Am','side');
+    SELECT dolt_checkout('main');
+  }
+  db eval $main
+  db eval $ins2
+  db eval {SELECT dolt_commit('-Am','main')}
+  set rc [catch {db eval {SELECT dolt_merge('side')}}]
+  list $rc [db eval {SELECT x FROM u ORDER BY x}] \
+       [db eval {PRAGMA integrity_check}]
+}
+
+foreach {name side main} {
+  pk-column-vs-table
+    {CREATE TABLE u(x INT PRIMARY KEY, y INT)}
+    {CREATE TABLE u(x INT, y INT, PRIMARY KEY(x))}
+  case-and-spacing
+    {create table u (x int primary key,y int)}
+    {CREATE TABLE u(x INT PRIMARY KEY, y INT)}
+  integer-pk
+    {CREATE TABLE u(x INTEGER PRIMARY KEY, y INT)}
+    {CREATE TABLE u(x INTEGER, y INT, PRIMARY KEY(x))}
+  without-rowid
+    {CREATE TABLE u(x INT PRIMARY KEY, y INT) WITHOUT ROWID}
+    {CREATE TABLE u(x INT, y INT, PRIMARY KEY(x)) without rowid}
+  unique-column-vs-table
+    {CREATE TABLE u(x INT PRIMARY KEY, y INT UNIQUE)}
+    {CREATE TABLE u(x INT PRIMARY KEY, y INT, UNIQUE(y))}
+  check-spacing
+    {CREATE TABLE u(x INT PRIMARY KEY, y INT CHECK(y>0))}
+    {CREATE TABLE u(x INT PRIMARY KEY, y INT check( y > 0 ))}
+} {
+  do_test same-$name {
+    try_merge $side $main
+  } {0 {1 2} ok}
+}
+
+foreach {name side main} {
+  type
+    {CREATE TABLE u(x INT PRIMARY KEY, y INT)}
+    {CREATE TABLE u(x INT PRIMARY KEY, y TEXT)}
+  default
+    {CREATE TABLE u(x INT PRIMARY KEY, y INT DEFAULT 1)}
+    {CREATE TABLE u(x INT PRIMARY KEY, y INT DEFAULT 2)}
+  column-order
+    {CREATE TABLE u(x INT PRIMARY KEY, y INT)}
+    {CREATE TABLE u(y INT, x INT PRIMARY KEY)}
+  primary-key
+    {CREATE TABLE u(x INT PRIMARY KEY, y INT)}
+    {CREATE TABLE u(x INT, y INT PRIMARY KEY)}
+  check
+    {CREATE TABLE u(x INT PRIMARY KEY, y INT CHECK(y>0))}
+    {CREATE TABLE u(x INT PRIMARY KEY, y INT CHECK(y>1))}
+  not-null
+    {CREATE TABLE u(x INT PRIMARY KEY, y INT NOT NULL)}
+    {CREATE TABLE u(x INT PRIMARY KEY, y INT)}
+  unique
+    {CREATE TABLE u(x INT PRIMARY KEY, y INT UNIQUE)}
+    {CREATE TABLE u(x INT PRIMARY KEY, y INT)}
+} {
+  do_test differs-$name {
+    try_merge $side $main
+  } {1 2 ok}
+}
+
+do_test rows-same {
+  try_merge {CREATE TABLE u(x INT PRIMARY KEY, y INT)} \
+            {CREATE TABLE u(x INT, y INT, PRIMARY KEY(x))} \
+            {INSERT INTO u VALUES(1,1)} {INSERT INTO u VALUES(1,1)}
+} {0 1 ok}
+
+do_test rows-conflict {
+  try_merge {CREATE TABLE u(x INT PRIMARY KEY, y INT)} \
+            {CREATE TABLE u(x INT, y INT, PRIMARY KEY(x))} \
+            {INSERT INTO u VALUES(1,1)} {INSERT INTO u VALUES(1,9)}
+} {1 1 ok}
+
+reset_db
+do_execsql_test ignore-1.0 {
+  CREATE TABLE t(a INTEGER PRIMARY KEY);
+  SELECT length(dolt_commit('-Am','base'));
+  SELECT dolt_checkout('-b','side');
+  create table dolt_ignore (pattern text not null, ignored tinyint not null, primary key (pattern));
+  INSERT INTO dolt_ignore VALUES('s%',1);
+  SELECT length(dolt_commit('-Am','side'));
+  SELECT dolt_checkout('main');
+  INSERT INTO dolt_ignore VALUES('m%',1);
+  SELECT length(dolt_commit('-Am','main'));
+  SELECT dolt_merge('side') IS NOT NULL;
+  SELECT pattern FROM dolt_ignore ORDER BY pattern;
+} {40 0 40 0 40 1 m% s%}
+
+finish_test

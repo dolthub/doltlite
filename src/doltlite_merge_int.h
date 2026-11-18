@@ -359,6 +359,7 @@ struct DlFk {
 
 int dlColsContain(const char *zCols, const char *zName);
 int dlCoresMatch(const char *zA, const char *zB, int bStripUnique);
+int schemaAddedTablesEquivalent(const SchemaEntry *pA, const SchemaEntry *pB);
 int schemaUniqueSideChoice(
   const char *zAnc, const char *zOurs, const char *zTheirs, int *pChoice
 );

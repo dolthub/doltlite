@@ -1012,6 +1012,95 @@ int schemaUniqueSideChoice(
   return rc==SQLITE_NOMEM ? rc : SQLITE_OK;
 }
 
+static int schemaKeyIndexesSame(Table *pA, Table *pB, u8 idxType){
+  Index *pLeft, *pRight;
+  for(pLeft=pA->pIndex; pLeft && pLeft->idxType!=idxType; pLeft=pLeft->pNext);
+  for(pRight=pB->pIndex; pRight && pRight->idxType!=idxType;
+      pRight=pRight->pNext);
+  if( !pLeft || !pRight ) return pLeft==pRight;
+  if( pLeft->nKeyCol!=pRight->nKeyCol ) return 0;
+  {
+    int i;
+    for(i=0; i<pLeft->nKeyCol; i++){
+      if( pLeft->aiColumn[i]!=pRight->aiColumn[i]
+       || sqlite3_stricmp(pLeft->azColl[i], pRight->azColl[i])!=0
+       || pLeft->aSortOrder[i]!=pRight->aSortOrder[i] ) return 0;
+    }
+  }
+  return 1;
+}
+
+/* Two spellings of one table: the same columns in the same order with the
+** same types, defaults and constraints, so a row of one is a row of the
+** other. Foreign keys are not compared and count as a difference. */
+static int schemaTablesSame(Table *pA, Table *pB){
+  const u32 mFlags = TF_WithoutRowid|TF_Autoincrement|TF_Strict;
+  /* COLFLAG_UNIQUE records where a key was declared, not what it is; the
+  ** index comparison below covers uniqueness. */
+  const u16 mCol = COLFLAG_PRIMKEY|COLFLAG_HIDDEN|COLFLAG_VIRTUAL
+                 |COLFLAG_STORED;
+  int i;
+  if( pA->nCol!=pB->nCol || pA->iPKey!=pB->iPKey
+   || (pA->tabFlags & mFlags)!=(pB->tabFlags & mFlags) ) return 0;
+  if( !IsOrdinaryTable(pA) || !IsOrdinaryTable(pB) ) return 0;
+  if( pA->u.tab.pFKey || pB->u.tab.pFKey ) return 0;
+  if( sqlite3ExprListCompare(pA->pCheck, pB->pCheck, -1)!=0 ) return 0;
+  for(i=0; i<pA->nCol; i++){
+    Column *a = &pA->aCol[i];
+    Column *b = &pB->aCol[i];
+    if( sqlite3_stricmp(a->zCnName, b->zCnName)!=0
+     || sqlite3_stricmp(sqlite3ColumnType(a, ""), sqlite3ColumnType(b, ""))!=0
+     || a->affinity!=b->affinity
+     || a->notNull!=b->notNull
+     || (a->colFlags & mCol)!=(b->colFlags & mCol)
+     || sqlite3_stricmp(sqlite3ColumnColl(a) ? sqlite3ColumnColl(a) : "",
+                        sqlite3ColumnColl(b) ? sqlite3ColumnColl(b) : "")!=0
+     || sqlite3ExprCompare(0, sqlite3ColumnExpr(pA, a),
+                           sqlite3ColumnExpr(pB, b), -1)!=0 ){
+      return 0;
+    }
+  }
+  return schemaKeyIndexesSame(pA, pB, SQLITE_IDXTYPE_PRIMARYKEY)
+      && schemaUniqueIndexesSame(pA, pB);
+}
+
+/* The same table can be spelled two ways: case, spacing, or a key declared
+** on the column or on the table. Compile both and compare what they make. */
+int schemaAddedTablesEquivalent(const SchemaEntry *pA, const SchemaEntry *pB){
+  const char *azSql[2];
+  sqlite3 *aDb[2] = {0, 0};
+  Table *aTab[2] = {0, 0};
+  int i, rc = SQLITE_OK, bSame = 0;
+  if( !pA->zType || !pB->zType || strcmp(pA->zType, "table")!=0
+   || strcmp(pB->zType, "table")!=0 ) return 0;
+  azSql[0] = pA->zSql;
+  azSql[1] = pB->zSql;
+  for(i=0; i<2 && rc==SQLITE_OK; i++){
+    sqlite3_stmt *pStmt = 0;
+    rc = sqlite3_open(":memory:", &aDb[i]);
+    if( rc==SQLITE_OK ) rc = sqlite3_exec(aDb[i], azSql[i], 0, 0, 0);
+    if( rc==SQLITE_OK ){
+      rc = sqlite3_prepare_v2(aDb[i],
+          "SELECT name FROM sqlite_schema WHERE type='table'"
+          " AND name<>'sqlite_sequence' LIMIT 1", -1, &pStmt, 0);
+    }
+    if( rc==SQLITE_OK ){
+      rc = sqlite3_step(pStmt);
+      if( rc==SQLITE_ROW ){
+        aTab[i] = sqlite3FindTable(aDb[i],
+            (const char*)sqlite3_column_text(pStmt, 0), "main");
+        rc = aTab[i] ? SQLITE_OK : SQLITE_CORRUPT;
+      }else if( rc==SQLITE_DONE ){
+        rc = SQLITE_CORRUPT;
+      }
+    }
+    sqlite3_finalize(pStmt);
+  }
+  if( rc==SQLITE_OK ) bSame = schemaTablesSame(aTab[0], aTab[1]);
+  for(i=0; i<2; i++) sqlite3_close(aDb[i]);
+  return bSame;
+}
+
 /* True when zName sits on this side as a plain addition: absent from the
 ** ancestor, and not standing in an ancestor column's slot with its type,
 ** which is what a rename leaves behind. */
