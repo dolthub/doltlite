@@ -368,11 +368,11 @@ static u8 *buildMergedRecord(MergeWinner *aWinners, int nFields, int *pnOut){
   return result;
 }
 
-static int fieldIsDualAdd(const MergeRowPolicy *pPolicy, int iField){
+static int fieldHasUnknownBase(const MergeRowPolicy *pPolicy, int iField){
   int i;
   if( !pPolicy ) return 0;
-  for(i=0; i<pPolicy->nDualAddFields; i++){
-    if( pPolicy->aiDualAddFields[i]==iField ) return 1;
+  for(i=0; i<pPolicy->nUnknownBaseFields; i++){
+    if( pPolicy->aiUnknownBaseFields[i]==iField ) return 1;
   }
   return 0;
 }
@@ -404,9 +404,7 @@ static u8 *tryCellMerge(
   {
     MergeWinner *winners;
     /* Past stored width is a missing field. It compares equal to an
-    ** encoded NULL, so an omitted NULL and a stored NULL still merge.
-    ** A column added on both sides has no ancestor value; those fields
-    ** are changes on each side, then the two values are compared. */
+    ** encoded NULL, so an omitted NULL and a stored NULL still merge. */
     static const RecField kNullField = { 0, 0, 0 };
     int nEmit = 0;
 
@@ -456,7 +454,7 @@ static u8 *tryCellMerge(
           oursChanged = side!=SCHEMA_MERGE_THEIRS;
           theirsChanged = side!=SCHEMA_MERGE_OURS;
         }
-      }else if( fieldIsDualAdd(pPolicy, i) ){
+      }else if( fieldHasUnknownBase(pPolicy, i) ){
         oursChanged = 1;
         theirsChanged = 1;
       }else if( mergeVbRowForces(pForced, i) ){

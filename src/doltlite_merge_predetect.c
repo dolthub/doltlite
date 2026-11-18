@@ -1373,7 +1373,7 @@ static int mergeRenameHasEvidence(
         || (!ancCi.bHasRowid && !sideCi.bHasRowid && a>=0 && a==b
             && a<ancCi.nPk && a<sideCi.nPk);
   }
-  rc = mergeColDefaultsLoad(zAncSql, zTable, &defaults);
+  rc = mergeColDefaultsLoad(zAncSql, zTable, 0, &defaults);
   if( rc!=SQLITE_OK ) goto done;
   pDefault = doltliteBuildRecord(defaults.aVal, defaults.nCol, &nDefault);
   if( !pDefault ){ rc = SQLITE_NOMEM; goto done; }

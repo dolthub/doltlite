@@ -244,10 +244,8 @@ struct MergeRowPolicy {
   int bSchemaIsTheirs;
   int nDropFields;
   int *aiDropFields;
-  /* Storage indexes of columns added on both sides. The ancestor has no
-  ** value there, so each side's value is a change. */
-  int nDualAddFields;
-  int *aiDualAddFields;
+  int nUnknownBaseFields;
+  int *aiUnknownBaseFields;
   int nInsertFields;
   u8 *aInsertSides;
 };
@@ -259,7 +257,7 @@ int mergeRowAddedDefaults(
   ProllyHash *pOurOut, ProllyHash *pAncOut, ProllyHash *pTheirOut
 );
 int mergeRowPolicy(
-  MergePass1Ctx *c, const char *zName, Table *pTab,
+  MergePass1Ctx *c, const char *zName, sqlite3 *pSchemaDb, Table *pTab,
   int useTheirs, MergeRowPolicy *pPolicy
 );
 
@@ -543,11 +541,13 @@ typedef struct MergeColDefaults MergeColDefaults;
 struct MergeColDefaults {
   DoltliteSerialValue *aVal;
   u8 **apOwned;
+  u8 *aKnown;
   int nCol;
 };
 void mergeColDefaultsFree(MergeColDefaults *p);
 int mergeColDefaultsLoad(const char *zSql, const char *zTable,
-                         MergeColDefaults *pOut);
+                         int bTrackKnown, MergeColDefaults *pOut);
+int mergeColBackfillKnown(sqlite3 *db, Table *pTab, int iCol, int *pbKnown);
 int doltliteColumnIsVirtual(const Table *pTab, int iCol);
 int doltlitePrepareIndexExpr(sqlite3 *db, Table *pTab, Expr *pExpr,
                               int iGenerated, sqlite3_stmt **ppStmt);

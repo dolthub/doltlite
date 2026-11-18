@@ -173,6 +173,7 @@ done:
 int mergeRowPolicy(
   MergePass1Ctx *c,
   const char *zName,
+  sqlite3 *pSchemaDb,
   Table *pTab,
   int useTheirs,
   MergeRowPolicy *pPolicy
@@ -226,10 +227,10 @@ int mergeRowPolicy(
   }
   pPolicy->aiDeleteCompareFields = sqlite3_malloc(pTab->nNVCol*sizeof(int));
   pPolicy->aiDropFields = sqlite3_malloc(pTab->nNVCol*sizeof(int));
-  pPolicy->aiDualAddFields = sqlite3_malloc(pTab->nNVCol*sizeof(int));
+  pPolicy->aiUnknownBaseFields = sqlite3_malloc(pTab->nNVCol*sizeof(int));
   pPolicy->aInsertSides = sqlite3_malloc(pTab->nNVCol);
   if( !pPolicy->aiDeleteCompareFields || !pPolicy->aiDropFields
-   || !pPolicy->aiDualAddFields || !pPolicy->aInsertSides ){
+   || !pPolicy->aiUnknownBaseFields || !pPolicy->aInsertSides ){
     freeColumns(aAnc, nAnc);
     freeColumns(aSelected, nSelected);
     freeColumns(aOther, nOther);
@@ -263,14 +264,18 @@ int mergeRowPolicy(
             oursHas ? SCHEMA_MERGE_OURS : SCHEMA_MERGE_THEIRS;
       }
     }
-    /* Present on both branches and missing from the ancestor. Each side's
-    ** value, including an omitted field or an encoded NULL, is a change. */
     if( iAnc<0 && aOther
      && parsedColumnIndexByName(aSelected, nSelected, zCol)>=0
      && parsedColumnIndexByName(aOther, nOther, zCol)>=0
      && parsedColumnIndexByName(aOriginal, nOriginal, zCol)>=0 ){
-      pPolicy->aiDualAddFields[pPolicy->nDualAddFields++] =
-          iField;
+      int bKnown;
+      sqlite3_mutex_enter(pSchemaDb->mutex);
+      rc = mergeColBackfillKnown(pSchemaDb, pTab, i, &bKnown);
+      sqlite3_mutex_leave(pSchemaDb->mutex);
+      if( rc!=SQLITE_OK ) break;
+      if( !bKnown ){
+        pPolicy->aiUnknownBaseFields[pPolicy->nUnknownBaseFields++] = iField;
+      }
     }
     if( iAnc<0 ) continue;
     for(j=0; c->pnSchemaActions && j<*c->pnSchemaActions; j++){
@@ -291,7 +296,7 @@ int mergeRowPolicy(
   freeColumns(aSelected, nSelected);
   freeColumns(aOther, nOther);
   freeColumns(aOriginal, nOriginal);
-  return SQLITE_OK;
+  return rc;
 }
 
 static int mergeIndexColumnSemanticsChanged(Table *pOurs, Table *pMerged){
