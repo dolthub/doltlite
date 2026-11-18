@@ -743,16 +743,19 @@ static int patchNativeAlter(
   const PatchTable *pTable,
   const PatchSchema *pFrom,
   const PatchSchema *pTo,
-  char **pzAlter
+  char **pzAlter,
+  int *piAddedDefault
 ){
   sqlite3 *tmp = 0;
   sqlite3_stmt *pStmt = 0;
   char *zAlter = 0;
   const char *zActual = 0;
   int i, nDiff = 0, iDiff = -1;
+  int iAddedDefault = -1;
   int isCandidate = 0;
   int rc = SQLITE_OK;
   *pzAlter = 0;
+  *piAddedDefault = -1;
   if( strcmp(pTable->zFromName,pTable->zToName)!=0 ){
     isCandidate = 1;
     zAlter = sqlite3_mprintf("ALTER TABLE \"%w\" RENAME TO \"%w\"",
@@ -801,6 +804,16 @@ static int patchNativeAlter(
     if( !pTab ) return SQLITE_CORRUPT;
     i = sqlite3ColumnIndex(pTab,pTo->col.azName[pTo->col.nCol-1]);
     if( i<0 ) return SQLITE_CORRUPT;
+    if( !pTab->aCol[i].notNull ){
+      sqlite3_value *pValue = 0;
+      rc = sqlite3ValueFromExpr(pTo->db, sqlite3ColumnExpr(pTab, &pTab->aCol[i]),
+                                SQLITE_UTF8, pTab->aCol[i].affinity, &pValue);
+      if( rc==SQLITE_OK && pValue && sqlite3_value_type(pValue)!=SQLITE_NULL ){
+        iAddedDefault = pTo->col.nCol-1;
+      }
+      sqlite3ValueFree(pValue);
+      if( rc!=SQLITE_OK ) return rc;
+    }
     rc = patchSchemaItem(pTable->pToSchema->zSql,i,&zItem,&nItem);
     if( rc!=SQLITE_OK ) return rc;
     isCandidate = 1;
@@ -832,6 +845,7 @@ static int patchNativeAlter(
       zActual = (const char*)sqlite3_column_text(pStmt,0);
       if( zActual && strcmp(zActual,pTable->pToSchema->zSql)==0 ){
         *pzAlter = zAlter;
+        *piAddedDefault = iAddedDefault;
         zAlter = 0;
       }
       rc = SQLITE_OK;
@@ -1087,6 +1101,47 @@ static int patchAppendUpdate(PatchCursor *pCur, const char *zTable,
   return rc;
 }
 
+static int patchAppendChange(
+  PatchCursor *pCur,
+  const PatchTable *pTable,
+  const PatchSchema *pFrom,
+  const PatchSchema *pTo,
+  const ProllyDiffChange *pChange
+){
+  const u8 *pOld = pChange->pOldVal;
+  const u8 *pNew = pChange->pNewVal;
+  int nOld = pChange->nOldVal;
+  int nNew = pChange->nNewVal;
+  u8 *pOldKey = 0, *pNewKey = 0;
+  int nOldKey = 0, nNewKey = 0;
+  int rc;
+  if( pTable->pFromSchema && nOld==0 && pChange->type!=PROLLY_DIFF_ADD ){
+    rc = doltliteRecordFromClusteredKey(pFrom->db,pTable->zFromName,
+              pChange->pKey,pChange->nKey,&pOldKey,&nOldKey);
+    if( rc!=SQLITE_OK ) goto done;
+    if( pOldKey ){ pOld=pOldKey; nOld=nOldKey; }
+  }
+  if( pTable->pToSchema && nNew==0 && pChange->type!=PROLLY_DIFF_DELETE ){
+    rc = doltliteRecordFromClusteredKey(pTo->db,pTable->zToName,
+              pChange->pKey,pChange->nKey,&pNewKey,&nNewKey);
+    if( rc!=SQLITE_OK ) goto done;
+    if( pNewKey ){ pNew=pNewKey; nNew=nNewKey; }
+  }
+  if( pChange->type==PROLLY_DIFF_ADD ){
+    rc = patchAppendInsert(pCur,pTable->zToName,pTo,pNew,nNew,pChange->intKey);
+  }else if( pChange->type==PROLLY_DIFF_DELETE ){
+    rc = patchAppendDelete(pCur,pTable->zToName,pFrom,pTo,
+                           pOld,nOld,pChange->intKey);
+  }else{
+    rc = patchAppendUpdate(pCur,pTable->zToName,pFrom,pTo,pOld,nOld,pNew,nNew,
+                           pChange->intKey);
+  }
+done:
+  sqlite3_free(pOldKey);
+  sqlite3_free(pNewKey);
+  return rc;
+}
+
 static int patchAppendData(
   PatchCursor *pCur,
   sqlite3 *db,
@@ -1113,40 +1168,67 @@ static int patchAppendData(
   rc = prollyDiffIterOpen(&it,cs,pCache,&oldRoot,&newRoot,fromFlags,toFlags);
   if( rc!=SQLITE_OK ) return rc;
   while( (rc=prollyDiffIterStep(&it,&pChange))==SQLITE_ROW ){
-    const u8 *pOld = pChange->pOldVal;
-    const u8 *pNew = pChange->pNewVal;
-    int nOld = pChange->pOldVal ? pChange->nOldVal : 0;
-    int nNew = pChange->pNewVal ? pChange->nNewVal : 0;
-    u8 *pOldKey = 0, *pNewKey = 0;
-    int nOldKey = 0, nNewKey = 0;
-    if( pTable->pFromSchema && nOld==0 && pChange->type!=PROLLY_DIFF_ADD ){
-      rc = doltliteRecordFromClusteredKey(pFrom->db,pTable->zFromName,
-                pChange->pKey,pChange->nKey,&pOldKey,&nOldKey);
-      if( rc!=SQLITE_OK ) goto data_step_done;
-      if( pOldKey ){ pOld=pOldKey; nOld=nOldKey; }
-    }
-    if( pTable->pToSchema && nNew==0 && pChange->type!=PROLLY_DIFF_DELETE ){
-      rc = doltliteRecordFromClusteredKey(pTo->db,pTable->zToName,
-                pChange->pKey,pChange->nKey,&pNewKey,&nNewKey);
-      if( rc!=SQLITE_OK ) goto data_step_done;
-      if( pNewKey ){ pNew=pNewKey; nNew=nNewKey; }
-    }
-    if( pChange->type==PROLLY_DIFF_ADD ){
-      rc = patchAppendInsert(pCur,pTable->zToName,pTo,pNew,nNew,pChange->intKey);
-    }else if( pChange->type==PROLLY_DIFF_DELETE ){
-      rc = patchAppendDelete(pCur,pTable->zToName,pFrom,pTo,
-                            pOld,nOld,pChange->intKey);
-    }else{
-      rc = patchAppendUpdate(pCur,pTable->zToName,pFrom,pTo,pOld,nOld,pNew,nNew,
-                             pChange->intKey);
-    }
-data_step_done:
-    sqlite3_free(pOldKey);
-    sqlite3_free(pNewKey);
+    rc = patchAppendChange(pCur,pTable,pFrom,pTo,pChange);
     if( rc!=SQLITE_OK ) break;
   }
   prollyDiffIterClose(&it);
   return rc==SQLITE_DONE ? SQLITE_OK : rc;
+}
+
+static int patchAppendDefaultNulls(
+  PatchCursor *pCur,
+  sqlite3 *db,
+  const PatchTable *pTable,
+  const PatchSchema *pFrom,
+  const PatchSchema *pTo,
+  int iAdded
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  const struct TableEntry *pOld = pTable->pFromTable;
+  const struct TableEntry *pNew = pTable->pToTable;
+  ProllyCursor oldCur, newCur;
+  int res, rc;
+
+  if( prollyHashIsEmpty(&pOld->root) || prollyHashIsEmpty(&pNew->root) ){
+    return SQLITE_OK;
+  }
+  prollyCursorInit(&oldCur,cs,pCache,&pOld->root,pOld->flags);
+  prollyCursorInit(&newCur,cs,pCache,&pNew->root,pNew->flags);
+  rc = prollyCursorFirst(&newCur,&res);
+  for(; rc==SQLITE_OK && prollyCursorIsValid(&newCur);
+      rc=prollyCursorNext(&newCur)){
+    ProllyDiffChange change = {0};
+    PatchValue value;
+    int equal;
+    prollyCursorValue(&newCur,&change.pNewVal,&change.nNewVal);
+    patchGetValue(pTo,change.pNewVal,change.nNewVal,0,iAdded,&value);
+    if( value.eType!=SQLITE_NULL ) continue;
+
+    if( pNew->flags & PROLLY_NODE_INTKEY ){
+      change.intKey = prollyCursorIntKey(&newCur);
+      rc = prollyCursorSeekInt(&oldCur,change.intKey,&res);
+    }else{
+      prollyCursorKey(&newCur,&change.pKey,&change.nKey);
+      rc = prollyCursorSeekBlob(&oldCur,change.pKey,change.nKey,&res);
+    }
+    if( rc!=SQLITE_OK ) break;
+    if( res!=0 || !prollyCursorIsValid(&oldCur) ) continue;
+
+    /* The ordinary diff already emits inserts and unequal records. */
+    prollyCursorValue(&oldCur,&change.pOldVal,&change.nOldVal);
+    rc = prollyValuesEqual(change.pOldVal,change.nOldVal,
+                           change.pNewVal,change.nNewVal,&equal);
+    if( rc!=SQLITE_OK ) break;
+    if( equal ){
+      change.type = PROLLY_DIFF_MODIFY;
+      rc = patchAppendChange(pCur,pTable,pFrom,pTo,&change);
+      if( rc!=SQLITE_OK ) break;
+    }
+  }
+  prollyCursorClose(&oldCur);
+  prollyCursorClose(&newCur);
+  return rc;
 }
 
 static int patchAppendAllData(
@@ -1178,6 +1260,7 @@ static int patchGenerateTable(
   PatchSchema from, to;
   char *zNativeAlter = 0;
   int schemaChanged, bRebuild = 0;
+  int iAddedDefault = -1;
   int rc = SQLITE_OK;
   memset(&from,0,sizeof(from));
   memset(&to,0,sizeof(to));
@@ -1210,7 +1293,7 @@ static int patchGenerateTable(
   schemaChanged = strcmp(pTable->zFromName,pTable->zToName)!=0
       || strcmp(pTable->pFromSchema->zSql,pTable->pToSchema->zSql)!=0;
   if( schemaChanged ){
-    rc = patchNativeAlter(pTable,&from,&to,&zNativeAlter);
+    rc = patchNativeAlter(pTable,&from,&to,&zNativeAlter,&iAddedDefault);
     if( rc==SQLITE_OK && zNativeAlter
      && pTable->pFromTable->flags==pTable->pToTable->flags ){
       rc = patchAppendObjectDrops(pCur,pTable->zFromName,
@@ -1228,7 +1311,12 @@ static int patchGenerateTable(
   }
   if( rc==SQLITE_OK ){
     if( bRebuild ) rc=patchAppendAllData(pCur,db,pTable,&to);
-    else rc=patchAppendData(pCur,db,pTable,&from,&to);
+    else{
+      rc = patchAppendData(pCur,db,pTable,&from,&to);
+      if( rc==SQLITE_OK && iAddedDefault>=0 ){
+        rc = patchAppendDefaultNulls(pCur,db,pTable,&from,&to,iAddedDefault);
+      }
+    }
   }
   if( rc==SQLITE_OK && !bRebuild ){
     rc = patchAppendIndexCreates(pCur,pTable->zToName,
