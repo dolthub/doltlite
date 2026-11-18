@@ -2511,9 +2511,7 @@ run_test "merge_add_column_unstored_keeps_default" \
 run_test "merge_add_column_unstored_integrity" \
   "PRAGMA integrity_check;" "ok" "$DB115"
 
-# Both branches add the same column. The ancestor has no value there, so
-# each side's value is a change: NULL against another value conflicts, and
-# equal values merge. A stored NULL still matches an omitted field.
+# A column added on both sides starts at its default for existing rows.
 DB116=/tmp/test_merge116_$$.db; rm -f "$DB116"
 $DOLTLITE "$DB116" > /dev/null 2>&1 <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
@@ -2570,10 +2568,10 @@ SELECT dolt_checkout('main');
 ALTER TABLE t ADD COLUMN b INT DEFAULT 7;
 SELECT dolt_commit('-Am','main');
 SQL
-run_test_error_match "merge_dual_add_null_vs_default" \
-  "SELECT dolt_merge('feature');" "conflict" "$DB117"
+run_test_match "merge_dual_add_null_vs_default" \
+  "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB117"
 run_test "merge_dual_add_null_vs_default_kept" \
-  "SELECT coalesce(b,'N') FROM t;" "7" "$DB117"
+  "SELECT coalesce(b,'N') FROM t;" "N" "$DB117"
 run_test "merge_dual_add_null_vs_default_schema" \
   "SELECT count(*) FROM dolt_schema_conflicts;" "0" "$DB117"
 
@@ -2635,8 +2633,8 @@ ALTER TABLE t ADD COLUMN b INT;
 UPDATE t SET b=5 WHERE id=1;
 SELECT dolt_commit('-Am','main');
 SQL
-run_test_error_match "merge_dual_add_value_vs_omit" \
-  "SELECT dolt_merge('feature');" "conflict" "$DB120"
+run_test_match "merge_dual_add_value_vs_omit" \
+  "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB120"
 run_test "merge_dual_add_value_vs_omit_kept" \
   "SELECT coalesce(b,'N') FROM t;" "5" "$DB120"
 
@@ -2679,6 +2677,30 @@ run_test_error_match "merge_dual_add_null_vs_value_without_rowid" \
   "SELECT dolt_merge('feature');" "conflict" "$DB122"
 run_test "merge_dual_add_null_vs_value_without_rowid_kept" \
   "SELECT coalesce(b,'N') FROM t;" "9" "$DB122"
+
+DB_VOLATILE_DEFAULT=/tmp/test_merge_volatile_default_$$.db
+rm -f "$DB_VOLATILE_DEFAULT"
+$DOLTLITE "$DB_VOLATILE_DEFAULT" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+INSERT INTO t VALUES (1,1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feature');
+DELETE FROM t;
+ALTER TABLE t ADD COLUMN b INT DEFAULT (random() IS NOT NULL);
+INSERT INTO t VALUES (1,1,1);
+SELECT dolt_commit('-Am','main');
+SELECT dolt_checkout('feature');
+DELETE FROM t;
+ALTER TABLE t ADD COLUMN b INT DEFAULT (random() IS NOT NULL);
+INSERT INTO t VALUES (1,1,2);
+SELECT dolt_commit('-Am','feature');
+SELECT dolt_checkout('main');
+SQL
+run_test_error_match "merge_dual_add_volatile_default_conflict" \
+  "SELECT dolt_merge('feature');" "conflict" "$DB_VOLATILE_DEFAULT"
+run_test "merge_dual_add_volatile_default_kept" \
+  "SELECT b FROM t;" "1" "$DB_VOLATILE_DEFAULT"
+rm -f "$DB_VOLATILE_DEFAULT"
 
 # An idle "Already up to date" merge must drop the graph lock before it
 # returns. A peer write is the proof: the merging session stays open and

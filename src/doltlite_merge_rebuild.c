@@ -756,16 +756,35 @@ void mergeColDefaultsFree(MergeColDefaults *p){
     sqlite3_free(p->apOwned);
   }
   sqlite3_free(p->aVal);
+  sqlite3_free(p->aKnown);
   memset(p, 0, sizeof(*p));
+}
+
+int mergeColBackfillKnown(sqlite3 *db, Table *pTab, int iCol, int *pbKnown){
+  Column *pCol = &pTab->aCol[iCol];
+  Expr *pDflt = sqlite3ColumnExpr(pTab, pCol);
+  sqlite3_value *pValue = 0;
+  int rc = SQLITE_OK;
+
+  if( pDflt ){
+    rc = sqlite3ValueFromExpr(db, pDflt, SQLITE_UTF8, pCol->affinity, &pValue);
+    *pbKnown = pValue!=0;
+  }else{
+    *pbKnown = !pCol->notNull;
+  }
+  sqlite3ValueFree(pValue);
+  return rc;
 }
 
 int mergeColDefaultsLoad(
   const char *zSql,
   const char *zTable,
+  int bTrackKnown,
   MergeColDefaults *pOut
 ){
   sqlite3 *tmp = 0;
   sqlite3_stmt *pStmt = 0;
+  Table *pTab = 0;
   char *zQuery = 0;
   int nCol = 0;
   int rc;
@@ -787,6 +806,12 @@ int mergeColDefaultsLoad(
   if( rc!=SQLITE_DONE ) goto done;
   sqlite3_reset(pStmt);
 
+  if( bTrackKnown && nCol>0 ){
+    pTab = sqlite3FindTable(tmp, zTable, "main");
+    if( !pTab || pTab->nCol!=nCol ){ rc = SQLITE_CORRUPT; goto done; }
+    pOut->aKnown = sqlite3_malloc(nCol);
+    if( !pOut->aKnown ){ rc = SQLITE_NOMEM; goto done; }
+  }
   if( nCol>0 ){
     pOut->aVal = sqlite3_malloc(nCol * (int)sizeof(DoltliteSerialValue));
     pOut->apOwned = sqlite3_malloc(nCol * (int)sizeof(u8*));
@@ -805,7 +830,14 @@ int mergeColDefaultsLoad(
     const char *zType = (const char*)sqlite3_column_text(pStmt, 2);
     sqlite3_stmt *pEval = 0;
     char *zEval;
-    if( !zDflt || !zDflt[0] || cid<0 || cid>=pOut->nCol ) continue;
+    if( cid<0 || cid>=pOut->nCol ) continue;
+    if( pTab ){
+      int bKnown;
+      rc = mergeColBackfillKnown(tmp, pTab, cid, &bKnown);
+      if( rc!=SQLITE_OK ) goto done;
+      pOut->aKnown[cid] = (u8)bKnown;
+    }
+    if( !zDflt || !zDflt[0] ) continue;
     zEval = sqlite3_mprintf("SELECT %s", zDflt);
     if( !zEval ){ rc = SQLITE_NOMEM; goto done; }
     if( sqlite3_prepare_v2(tmp, zEval, -1, &pEval, 0)==SQLITE_OK
@@ -1297,9 +1329,9 @@ mapped:
   }
 
   /* Unsupplied slots take the owning schema's declared default. */
-  rc = mergeColDefaultsLoad(zOursSql, zTable, &oursDefaults);
+  rc = mergeColDefaultsLoad(zOursSql, zTable, zSharedSql!=0, &oursDefaults);
   if( rc!=SQLITE_OK ) goto done;
-  rc = mergeColDefaultsLoad(zTheirsSql, zTable, &theirsDefaults);
+  rc = mergeColDefaultsLoad(zTheirsSql, zTable, 0, &theirsDefaults);
   if( rc!=SQLITE_OK ) goto done;
 
   if( zSharedSql ){
@@ -1307,11 +1339,11 @@ mapped:
     int nShared = 0;
     rc = parseColumns(zSharedSql, &aShared, &nShared);
     if( rc!=SQLITE_OK ) goto done;
-    /* A column added on both sides has no ancestor value. NULL stays
-    ** NULL here; an extra field below keeps that row distinct from a
-    ** stored NULL, which compares equal to an omitted field. */
+    /* Use the backfill default for shared additions when SQLite can supply
+    ** one. Keep the synthetic field for additions with no known base. */
     for(j=0; j<nOurs && j<oursDefaults.nCol; j++){
-      if( parsedColumnIndexByName(aAnc, nAnc, aOurs[j].zName)<0
+      if( !oursDefaults.aKnown[j]
+       && parsedColumnIndexByName(aAnc, nAnc, aOurs[j].zName)<0
        && parsedColumnIndexByName(aShared, nShared, aOurs[j].zName)>=0 ){
         oursDefaults.aVal[j].eType = SQLITE_NULL;
         bAncestorGap = 1;

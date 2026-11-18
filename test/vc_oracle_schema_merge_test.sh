@@ -1707,7 +1707,7 @@ expect_dual_value "both_add_same_column_and_disjoint_drop_row" "$DB" \
 # Cherry-pick shared additions to preserve Dolt's column tags.
 for direction in forward reverse; do
   for shared in one both; do
-    for edits in rows shared; do
+    for edits in rows shared clash inserts; do
       tag="shared_column_positions_${direction}_${shared}_${edits}"
       DB="$TMPROOT/$tag.db"
       ours=main
@@ -1717,7 +1717,13 @@ for direction in forward reverse; do
         theirs=main
       fi
       column=n
-      if [ "$edits" = shared ]; then column=x; fi
+      their_key=2
+      their_insert="INSERT INTO t(k,v,n) VALUES(4,'theirs',4);"
+      case "$edits" in
+        shared) column=x ;;
+        clash) column=x; their_key=1 ;;
+        inserts) their_insert="INSERT INTO t(k,v,n,x) VALUES(3,'ours',3,22);" ;;
+      esac
       extra=""
       if [ "$shared" = both ]; then extra="SELECT dolt_cherry_pick('add_y');"; fi
       cat <<SQL | dl_setup "$DB" "$tag"
@@ -1741,17 +1747,21 @@ SELECT dolt_commit('-Am','ours');
 SELECT dolt_checkout('$theirs');
 $extra
 UPDATE t SET v='theirs' WHERE k=0;
-UPDATE t SET $column=22 WHERE k=2;
-INSERT INTO t(k,v,n) VALUES(4,'theirs',4);
+UPDATE t SET $column=22 WHERE k=$their_key;
+$their_insert
 SELECT dolt_commit('-Am','theirs');
 SELECT dolt_checkout('main');
 SQL
-      if [ "$edits" = shared ]; then
+      if [ "$edits" = clash ] || [ "$edits" = inserts ]; then
         expect_merge_conflict "$tag" "$DB"
       else
         expect_merge_ok "$tag" "$DB"
-        expect_dual_value "${tag}_rows" "$DB" \
-          "0:theirs:10:NULL:0,1:one:11:NULL:0,2:two:22:NULL:0,3:ours:3:NULL:0,4:theirs:4:NULL:0" \
+        if [ "$edits" = shared ]; then
+          rows="0:theirs:10:NULL:0,1:one:1:NULL:11,2:two:2:NULL:22,3:ours:3:NULL:0,4:theirs:4:NULL:0"
+        else
+          rows="0:theirs:10:NULL:0,1:one:11:NULL:0,2:two:22:NULL:0,3:ours:3:NULL:0,4:theirs:4:NULL:0"
+        fi
+        expect_dual_value "${tag}_rows" "$DB" "$rows" \
           "SELECT group_concat(k||':'||v||':'||n||':'||coalesce(y,'NULL')||':'||x, ',') FROM (SELECT * FROM t ORDER BY k);" \
           "SELECT GROUP_CONCAT(CONCAT(k,':',v,':',n,':',COALESCE(y,'NULL'),':',x) ORDER BY k SEPARATOR ',') FROM t;"
       fi
