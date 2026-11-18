@@ -6596,6 +6596,22 @@ static int dotCmdClone(ShellState *p){
 #ifdef DOLTLITE_PROLLY
   open_db(p, 0);
   if( !doltliteShellDbIsStock(p->db) ){
+    /* The copy is flat, like a dump: a nonlocal rule would bind its names
+    ** to a branch the new file does not have. */
+    sqlite3_stmt *pRule = 0;
+    int bRule = 0;
+    if( sqlite3_prepare_v2(p->db,
+          "SELECT 1 FROM main.dolt_nonlocal_tables LIMIT 1",
+          -1, &pRule, 0)==SQLITE_OK ){
+      bRule = sqlite3_step(pRule)==SQLITE_ROW;
+    }
+    sqlite3_finalize(pRule);
+    if( bRule ){
+      dotCmdError(p, 0, "unable",
+          "dolt_nonlocal_tables binds tables to another branch, which a"
+          " flat copy cannot carry; use dolt_clone or VACUUM INTO instead");
+      return 1;
+    }
     tryToClone(p, azArg[1]);
     return 0;
   }
