@@ -985,13 +985,34 @@ SQLITE_API int SQLITE_APICALL doltlite_export_sqlite(sqlite3 *db, const char *zR
 
 #ifdef DOLTLITE_PROLLY
 typedef struct DumpFile DumpFile;
-struct DumpFile { sqlite3_file *file; i64 offset; };
+#define DUMP_FILE_BUFFER 65536
+struct DumpFile { sqlite3_file *file; i64 offset; u8 *aBuf; int nBuf; };
 
+static int dumpFileFlush(DumpFile *f){
+  int rc = SQLITE_OK;
+  if( f->nBuf>0 ){
+    rc = sqlite3OsWrite(f->file,f->aBuf,f->nBuf,f->offset);
+    if( rc==SQLITE_OK ) f->offset += f->nBuf;
+    f->nBuf = 0;
+  }
+  return rc;
+}
+
+/* A row is written as a few bytes per field; one system call for each made
+** the export many times slower than the rows took to produce. */
 static int dumpFileWrite(void *ctx, const void *data, int n){
   DumpFile *f = ctx;
-  int rc = sqlite3OsWrite(f->file,data,n,f->offset);
-  if( rc==SQLITE_OK ) f->offset += n;
-  return rc;
+  int rc = SQLITE_OK;
+  if( n>DUMP_FILE_BUFFER-f->nBuf ) rc = dumpFileFlush(f);
+  if( rc!=SQLITE_OK ) return rc;
+  if( n>=DUMP_FILE_BUFFER ){
+    rc = sqlite3OsWrite(f->file,data,n,f->offset);
+    if( rc==SQLITE_OK ) f->offset += n;
+    return rc;
+  }
+  memcpy(f->aBuf+f->nBuf,data,n);
+  f->nBuf += n;
+  return SQLITE_OK;
 }
 
 static char *dumpFileUri(const char *z){
@@ -1096,7 +1117,10 @@ static int dumpToFile(sqlite3 *db, const char *zRef, const char *zPath,
         SQLITE_OPEN_READWRITE|SQLITE_OPEN_MAIN_DB,0);
   }else{
     stream.file = file;
+    stream.aBuf = sqlite3_malloc(DUMP_FILE_BUFFER);
+    if( !stream.aBuf ){ rc = SQLITE_NOMEM; goto file_done; }
     rc = doltlite_dump_sql(db,zRef,dumpFileWrite,&stream,pzErr);
+    if( rc==SQLITE_OK ) rc = dumpFileFlush(&stream);
   }
   if( rc==SQLITE_OK ) rc = sqlite3OsSync(file,SQLITE_SYNC_FULL);
   if( file ){
@@ -1105,6 +1129,7 @@ static int dumpToFile(sqlite3 *db, const char *zRef, const char *zPath,
   }
   if( rc==SQLITE_OK ) rc = sqlite3OsPublishFile(vfs,tmp,dest,&exists);
 file_done:
+  sqlite3_free(stream.aBuf);
   if( out ) sqlite3_close(out);
   if( file ) sqlite3OsCloseFree(file);
   if( created ) sqlite3OsDelete(vfs,tmp,0);

@@ -376,6 +376,22 @@ done
 
 rm -f "$DB_NC" "$NC_SQL"
 
+# The SQL export writes a few bytes per field. Unbuffered, that was a write
+# call each and many times the cost of the sqlite-format export of the same
+# rows; buffered, the two are comparable.
+echo ""
+echo "dolt_dump SQL format against sqlite format..."
+DB_DUMP="/tmp/dl_perf_dump_$$.db"
+rm -f "$DB_DUMP" "$DB_DUMP.sql" "$DB_DUMP.sqlite"
+"$DOLTLITE" "$DB_DUMP" "CREATE TABLE a(i INTEGER PRIMARY KEY, v, pad);
+WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<200000)
+  INSERT INTO a SELECT i,0,hex(randomblob(30)) FROM c;" > /dev/null 2>&1
+T_DUMP_SQLITE=$(time_ms "\"$DOLTLITE\" '$DB_DUMP' \"SELECT dolt_dump('--file-name','$DB_DUMP.sqlite','-r','sqlite')\"")
+T_DUMP_SQL=$(time_ms "\"$DOLTLITE\" '$DB_DUMP' \"SELECT dolt_dump('--file-name','$DB_DUMP.sql')\"")
+echo "  sqlite format: ${T_DUMP_SQLITE}ms, SQL format: ${T_DUMP_SQL}ms"
+assert_ratio "dump_sql_vs_sqlite_format" "$T_DUMP_SQLITE" "$T_DUMP_SQL" 4
+rm -f "$DB_DUMP" "$DB_DUMP.sql" "$DB_DUMP.sqlite"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi

@@ -779,4 +779,28 @@ foreach {tn schema err} {
   }
 }
 
+# The SQL export buffers its output. A table whose text is several buffers
+# long, with a value larger than the buffer in the middle, comes out whole.
+reset_db
+do_test dump-buffered-output {
+  db eval {
+    CREATE TABLE big(i INTEGER PRIMARY KEY, v, pad);
+    WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<3000)
+      INSERT INTO big SELECT i, 0, hex(randomblob(20)) FROM c;
+    UPDATE big SET pad=hex(zeroblob(70000)) WHERE i=1500;
+  }
+  forcedelete dump-buffered.sql
+  set r [db eval {SELECT dolt_dump('--file-name','dump-buffered.sql')}]
+  set fd [open dump-buffered.sql rb]; set text [read $fd]; close $fd
+  sqlite3 out file::memory:?doltlite_engine=sqlite -uri 1
+  out eval $text
+  lappend r {*}[out eval {
+    SELECT count(*), sum(i), sum(length(pad)) FROM big;
+  }] [expr {[db eval {SELECT group_concat(pad,'') FROM big}]
+            eq [out eval {SELECT group_concat(pad,'') FROM big}]}]
+  out close
+  set r
+} {0 3000 4501500 259960 1}
+do_test dump-buffered-output.no-temp {glob -nocomplain *-dump-*} {}
+
 finish_test
