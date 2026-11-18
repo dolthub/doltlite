@@ -1,0 +1,124 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-txn-left-branch-undone
+
+# dolt_commit refuses when the transaction left uncommitted writes on
+# another branch. A branch whose writes were undone, by ROLLBACK TO or by
+# later statements, holds none.
+proc setup {} {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT);
+    INSERT INTO t VALUES(1,'a1');
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('other');
+  }
+}
+proc finish {} {
+  db eval {
+    SELECT count(*) FROM dolt_log;
+    SELECT group_concat(id) FROM t;
+    SELECT dolt_checkout('main');
+    SELECT group_concat(id) FROM t;
+    SELECT count(*) FROM dolt_status;
+  }
+}
+set refused {1 {Cannot commit changes on more than one branch / database}}
+
+setup
+do_test 1.0 {
+  db eval {
+    BEGIN;
+    SAVEPOINT s;
+    INSERT INTO t VALUES(2,'main-uncommitted');
+    SELECT dolt_checkout('other');
+    ROLLBACK TO s;
+    INSERT INTO t VALUES(3,'other');
+    SELECT length(dolt_commit('-Am','on other'));
+    COMMIT;
+  }
+  finish
+} {3 1,3 0 1 0}
+
+setup
+do_test 2.0 {
+  db eval {
+    BEGIN;
+    INSERT INTO t VALUES(2,'main-uncommitted');
+    DELETE FROM t WHERE id=2;
+    SELECT dolt_checkout('other');
+    INSERT INTO t VALUES(3,'other');
+    SELECT length(dolt_commit('-Am','on other'));
+    COMMIT;
+  }
+  finish
+} {3 1,3 0 1 0}
+
+setup
+do_test 3.0 {
+  db eval {
+    BEGIN;
+    INSERT INTO t VALUES(2,'main-uncommitted');
+    SELECT dolt_checkout('other');
+    INSERT INTO t VALUES(3,'other');
+  }
+  catchsql {SELECT dolt_commit('-Am','on other')}
+} $refused
+do_test 3.1 {
+  db eval {COMMIT}
+  finish
+} {2 1,3 0 1,2 1}
+
+# The savepoint is after the write, so ROLLBACK TO keeps it.
+setup
+do_test 4.0 {
+  db eval {
+    BEGIN;
+    INSERT INTO t VALUES(2,'main-uncommitted');
+    SAVEPOINT s;
+    SELECT dolt_checkout('other');
+    ROLLBACK TO s;
+    INSERT INTO t VALUES(3,'other');
+  }
+  catchsql {SELECT dolt_commit('-Am','on other')}
+} $refused
+do_test 4.1 {
+  db eval {COMMIT}
+  finish
+} {2 1,3 0 1,2 1}
+
+# Leave main dirty, come back, undo it there, leave again.
+setup
+do_test 5.0 {
+  db eval {
+    BEGIN;
+    INSERT INTO t VALUES(2,'main-uncommitted');
+    SELECT dolt_checkout('other');
+    SELECT dolt_checkout('main');
+    DELETE FROM t WHERE id=2;
+    SELECT dolt_checkout('other');
+    INSERT INTO t VALUES(3,'other');
+    SELECT length(dolt_commit('-Am','on other'));
+    COMMIT;
+  }
+  finish
+} {3 1,3 0 1 0}
+
+# Back on the branch it left dirty, with a write on the other one too.
+setup
+do_test 6.0 {
+  db eval {
+    BEGIN;
+    INSERT INTO t VALUES(2,'main-uncommitted');
+    SELECT dolt_checkout('other');
+    INSERT INTO t VALUES(3,'other');
+    SELECT dolt_checkout('main');
+  }
+  catchsql {SELECT dolt_commit('-Am','on main')}
+} $refused
+do_test 6.1 {
+  db eval {ROLLBACK}
+  db eval {SELECT group_concat(id) FROM t}
+} {1}
+
+finish_test

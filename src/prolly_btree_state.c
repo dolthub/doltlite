@@ -1868,8 +1868,30 @@ int doltliteNoteTxnLeaving(sqlite3 *db){
   if( !p ) return SQLITE_OK;
   sqlite3_free(p->zTxnLeaving);
   p->bTxnLeavingWrote = (u8)doltliteBtreeTxnWrote(p);
+  p->txnLeavingBase = p->committedCatalogHash;
   p->zTxnLeaving = sqlite3_mprintf("%s", p->zBranch ? p->zBranch : "main");
   return p->zTxnLeaving ? SQLITE_OK : SQLITE_NOMEM;
+}
+
+static const char *txnLeftFind(Btree *p, const char *zName){
+  char *zKey;
+  const char *z;
+  if( !p->zTxnLeftDirty ) return 0;
+  zKey = sqlite3_mprintf("\n%s\t", zName);
+  if( !zKey ) return 0;
+  z = strstr(p->zTxnLeftDirty, zKey);
+  if( z ) z += strlen(zKey);
+  sqlite3_free(zKey);
+  return z;
+}
+
+static void txnLeftBase(const char *zHex, ProllyHash *pBase){
+  int i;
+  memset(pBase, 0, sizeof(*pBase));
+  for(i=0; i<PROLLY_HASH_SIZE && zHex[2*i] && zHex[2*i+1]; i++){
+    pBase->data[i] = (u8)((sqlite3HexToInt(zHex[2*i])<<4)
+                          | sqlite3HexToInt(zHex[2*i+1]));
+  }
 }
 
 int doltliteMarkTxnCheckout(
@@ -1879,27 +1901,29 @@ int doltliteMarkTxnCheckout(
 ){
   Btree *p = db && db->nDb>0 ? db->aDb[0].pBt : 0;
   const char *zLeft;
+  const ProllyHash *pBase;
   int bDirty;
   if( !p ) return SQLITE_OK;
   zLeft = p->zTxnLeaving;
-  bDirty = p->bTxnCheckout
-      ? (pLeftCatalog
-         && prollyHashCompare(pLeftCatalog, &p->txnArrivalCatalog)!=0)
-      : p->bTxnLeavingWrote;
-  if( bDirty && zLeft ){
-    char *zKey = sqlite3_mprintf("\n%s\n", zLeft);
-    if( !zKey ) return SQLITE_NOMEM;
-    if( !p->zTxnLeftDirty || !strstr(p->zTxnLeftDirty, zKey) ){
-      char *zNew = sqlite3_mprintf("%s%s",
-          p->zTxnLeftDirty ? p->zTxnLeftDirty : "\n", zKey+1);
-      if( !zNew ){
-        sqlite3_free(zKey);
-        return SQLITE_NOMEM;
-      }
-      sqlite3_free(p->zTxnLeftDirty);
-      p->zTxnLeftDirty = zNew;
+  pBase = p->bTxnCheckout ? &p->txnArrivalCatalog : &p->txnLeavingBase;
+  bDirty = pLeftCatalog
+      ? prollyHashCompare(pLeftCatalog, pBase)!=0
+      : (!p->bTxnCheckout && p->bTxnLeavingWrote);
+  if( bDirty && zLeft && !txnLeftFind(p, zLeft) ){
+    static const char zHexDigits[] = "0123456789abcdef";
+    char zHex[2*PROLLY_HASH_SIZE+1];
+    char *zNew;
+    int i;
+    for(i=0; i<PROLLY_HASH_SIZE; i++){
+      zHex[2*i] = zHexDigits[pBase->data[i]>>4];
+      zHex[2*i+1] = zHexDigits[pBase->data[i]&15];
     }
-    sqlite3_free(zKey);
+    zHex[2*PROLLY_HASH_SIZE] = 0;
+    zNew = sqlite3_mprintf("%s%s\t%s\n",
+        p->zTxnLeftDirty ? p->zTxnLeftDirty : "\n", zLeft, zHex);
+    if( !zNew ) return SQLITE_NOMEM;
+    sqlite3_free(p->zTxnLeftDirty);
+    p->zTxnLeftDirty = zNew;
   }
   p->txnArrivalCatalog = *pArrival;
   p->txnArrivalStaged = p->vc.stagedCatalog;
@@ -1907,33 +1931,52 @@ int doltliteMarkTxnCheckout(
   return SQLITE_OK;
 }
 
+/* A branch stays listed after ROLLBACK TO undoes what was written on it.
+** It still holds this transaction's writes only while its working set
+** differs from the catalog it had before them. */
+static int txnLeftStillDirty(Btree *p, const char *zName, int nName,
+                             const char *zHex){
+  ProllyHash base, cur;
+  char *z = sqlite3_mprintf("%.*s", nName, zName);
+  int rc;
+  if( !z ) return 1;
+  txnLeftBase(zHex, &base);
+  rc = btreeReadWorkingCatalog(p->pBt->pStore, z, &cur, 0);
+  sqlite3_free(z);
+  if( rc==SQLITE_NOTFOUND ) return 0;
+  if( rc!=SQLITE_OK ) return 1;
+  return prollyHashCompare(&cur, &base)!=0;
+}
+
+static int txnLeftOtherDirty(Btree *p){
+  const char *zCur = p->zBranch ? p->zBranch : "main";
+  const char *z;
+  int nOther = 0;
+  for(z=p->zTxnLeftDirty+1; *z; ){
+    const char *zTab = strchr(z, '\t');
+    const char *zEnd = zTab ? strchr(zTab, '\n') : 0;
+    if( !zEnd ) break;
+    if( ((size_t)(zTab-z)!=strlen(zCur) || memcmp(z, zCur, zTab-z)!=0)
+     && txnLeftStillDirty(p, z, (int)(zTab-z), zTab+1) ){
+      nOther++;
+    }
+    z = zEnd+1;
+  }
+  return nOther;
+}
+
 /* As in Dolt, dolt_commit commits one branch. True when the transaction
 ** checked out and holds uncommitted writes on more than one branch, counting
 ** those it left and the one it is on. */
 int doltliteTxnCheckoutSplitsCommit(sqlite3 *db){
   Btree *p = db && db->nDb>0 ? db->aDb[0].pBt : 0;
-  const char *zCur;
-  const char *z;
-  char *zKey;
-  ProllyHash live;
-  int nOther = 0;
-  int bCurrent;
+  const char *zCurBase;
+  ProllyHash live, base;
+  int nOther;
   if( !p || !p->bTxnCheckout || !p->zTxnLeftDirty ) return 0;
-  zCur = p->zBranch ? p->zBranch : "main";
-  zKey = sqlite3_mprintf("\n%s\n", zCur);
-  if( !zKey ) return 0;
-  bCurrent = strstr(p->zTxnLeftDirty, zKey)!=0;
-  sqlite3_free(zKey);
-  for(z=p->zTxnLeftDirty+1; *z; ){
-    const char *zEnd = strchr(z, '\n');
-    if( !zEnd ) break;
-    if( (size_t)(zEnd-z)!=strlen(zCur) || memcmp(z, zCur, zEnd-z)!=0 ){
-      nOther++;
-    }
-    z = zEnd+1;
-  }
+  nOther = txnLeftOtherDirty(p);
   if( nOther==0 ) return 0;
-  if( bCurrent || nOther>1 ) return 1;
+  if( nOther>1 ) return 1;
   /* Staging is a write to this branch's working set too. */
   if( prollyHashCompare(&p->vc.stagedCatalog, &p->txnArrivalStaged)!=0 ){
     return 1;
@@ -1948,6 +1991,13 @@ int doltliteTxnCheckoutSplitsCommit(sqlite3 *db){
     sqlite3_free(data);
     if( rc!=SQLITE_OK ) return 0;
   }
+  /* Back on a branch it left dirty, the arrival catalog already holds
+  ** this transaction's writes. */
+  zCurBase = txnLeftFind(p, p->zBranch ? p->zBranch : "main");
+  if( zCurBase ){
+    txnLeftBase(zCurBase, &base);
+    return prollyHashCompare(&live, &base)!=0;
+  }
   return prollyHashCompare(&live, &p->txnArrivalCatalog)!=0;
 }
 
@@ -1955,19 +2005,8 @@ int doltliteTxnCheckoutSplitsCommit(sqlite3 *db){
 ** it is on. */
 int doltliteTxnCheckoutLeftOtherDirty(sqlite3 *db){
   Btree *p = db && db->nDb>0 ? db->aDb[0].pBt : 0;
-  const char *zCur;
-  const char *z;
   if( !p || !p->bTxnCheckout || !p->zTxnLeftDirty ) return 0;
-  zCur = p->zBranch ? p->zBranch : "main";
-  for(z=p->zTxnLeftDirty+1; *z; ){
-    const char *zEnd = strchr(z, '\n');
-    if( !zEnd ) break;
-    if( (size_t)(zEnd-z)!=strlen(zCur) || memcmp(z, zCur, zEnd-z)!=0 ){
-      return 1;
-    }
-    z = zEnd+1;
-  }
-  return 0;
+  return txnLeftOtherDirty(p)>0;
 }
 
 int doltliteTxnCheckoutOwnsGraphLock(sqlite3 *db){
