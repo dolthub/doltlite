@@ -27,6 +27,7 @@ doltlite_recover_rawformat_2
 doltlite_recover_rawformat_3
 doltlite_recover_rejections
 doltlite_deserialize_stock_image
+doltlite_serialize_large
 doltlite_sqlite_journal_mode
 doltlite_recover_rtree
 doltlite_recover_savepointfault

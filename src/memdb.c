@@ -178,7 +178,9 @@ static int doltliteMemdbOpen(
 ){
   DoltliteMemVfs *p = (DoltliteMemVfs*)pVfs;
   MemFile *pFile = (MemFile*)pFd;
-  UNUSED_PARAMETER(zName);
+  /* An unnamed open is a temp file of its own; handing it the image
+  ** would let a spool overwrite the database from offset zero. */
+  if( zName==0 ) return memdbOpen(pVfs, 0, pFd, flags, pOutFlags);
   memset(pFile, 0, sizeof(*pFile));
   p->pStore->nRef++;
   pFile->pStore = p->pStore;

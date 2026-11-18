@@ -1,0 +1,85 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-serialize-large
+
+# A serialized image's VFS must give temp files their own storage. Once a
+# store passes the checkpoint threshold, the index spool would otherwise be
+# written over the image from offset zero.
+do_execsql_test 1.0 {
+  CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);
+  WITH RECURSIVE c(value) AS (SELECT 1 UNION ALL SELECT value+1 FROM c WHERE value<45000)
+  INSERT INTO t SELECT value, hex(zeroblob(100)) || value FROM c;
+  SELECT length(dolt_commit('-Am','c1'));
+} {40}
+
+do_test 1.1 {
+  set img [db serialize]
+  set src [open test.db rb]
+  set head [read $src 4]
+  close $src
+  expr {[string range $img 0 3] eq $head}
+} {1}
+
+do_test 1.2 {
+  sqlite3 db2 :memory:
+  db2 deserialize $img
+  db2 eval {
+    SELECT count(*), sum(length(b)) FROM t;
+    SELECT count(*) FROM dolt_log;
+    PRAGMA integrity_check;
+  }
+} [db eval {
+  SELECT count(*), sum(length(b)) FROM t;
+  SELECT count(*) FROM dolt_log;
+  SELECT 'ok';
+}]
+catch {db2 close}
+
+reset_db
+do_execsql_test 2.0 {
+  CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);
+  WITH RECURSIVE c(value) AS (SELECT 1 UNION ALL SELECT value+1 FROM c WHERE value<5000)
+  INSERT INTO t SELECT value, 'orig' || value FROM c;
+  CREATE TABLE big(a INTEGER PRIMARY KEY, b TEXT);
+  SELECT length(dolt_commit('-Am','c1'));
+} {40}
+
+do_test 2.1 {
+  set img [db serialize]
+  sqlite3 db2 :memory:
+  db2 deserialize $img
+  db2 eval {
+    WITH RECURSIVE c(value) AS (SELECT 1 UNION ALL SELECT value+1 FROM c WHERE value<45000)
+  INSERT INTO big SELECT value, hex(zeroblob(100)) || value FROM c;
+    SELECT count(*) FROM t;
+    SELECT count(*) FROM big;
+    SELECT count(*) FROM dolt_log;
+    PRAGMA integrity_check;
+  }
+} {5000 45000 2 ok}
+
+do_test 2.2 {
+  db2 eval {
+    SELECT length(dolt_commit('-Am','c2'));
+    VACUUM;
+    SELECT dolt_gc();
+    SELECT count(*) FROM big;
+    SELECT count(*) FROM dolt_log;
+    PRAGMA integrity_check;
+  }
+} {40 {0 chunks removed, 0 chunks kept (in-memory)} 45000 3 ok}
+
+do_test 2.3 {
+  set img2 [db2 serialize]
+  db2 close
+  sqlite3 db2 :memory:
+  db2 deserialize $img2
+  db2 eval {
+    SELECT count(*) FROM big;
+    SELECT count(*) FROM dolt_log;
+    PRAGMA integrity_check;
+  }
+} {45000 3 ok}
+catch {db2 close}
+
+finish_test
