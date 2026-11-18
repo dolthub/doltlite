@@ -241,14 +241,27 @@ int chunkStoreMaskDeferredWorkingSets(
   return rc;
 }
 
+static int csWsTracks(const CsWsSession *w, const char *zBranch);
+
+/* The commit in between published the masked value and ended the batch, so
+** the deferred value put back here replaces that one. */
 void chunkStoreUnmaskWorkingSets(ChunkStore *cs, CsWorkingSetMask *a, int n){
   int i;
   for(i=0; i<n; i++){
+    CsWsSession *w;
     int j;
     if( !a[i].bMasked ) continue;
-    j = findBranchIdx(cs, a[i].zBranch);
-    if( j>=0 ) cs->refs.aBranches[j].workingSetHash = a[i].hash;
     a[i].bMasked = 0;
+    j = findBranchIdx(cs, a[i].zBranch);
+    if( j<0 ) continue;
+    for(w=&cs->wsMain; w; w=w->pNext){
+      if( !w->bWsReplacing && csWsTracks(w, a[i].zBranch) ){
+        w->bWsReplacing = 1;
+        w->wsReplaced = cs->refs.aBranches[j].workingSetHash;
+        w->wsReplacedBasis = w->wsReplaced;
+      }
+    }
+    cs->refs.aBranches[j].workingSetHash = a[i].hash;
   }
 }
 

@@ -190,6 +190,7 @@ doltlite_clean_schemas
 doltlite_clean_ignored
 doltlite_max_page_count
 doltlite_txn_state_cursor
+doltlite_txn_ref_publish_own_ws
 doltlite_add_rename_source
 doltlite_unrelated_table_staging
 doltlite_add_ignore_rename
