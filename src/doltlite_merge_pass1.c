@@ -1216,6 +1216,24 @@ static int mergePass1BothSides(
         pMergeTheirsRoot, ourSchemaChanged, theirSchemaChanged,
         schemaChoice, theirsEntry);
   }
+  /* Their index tree is adopted because ours did not move. Under the
+  ** ancestor's table definition our row changes left this index alone;
+  ** under their definition the same name may index what our rows changed. */
+  if( bNamedSchemaObject && theirsChanged
+   && zSchemaConflictTable && zSchemaConflictTable[0] ){
+    struct TableEntry *pAncTable = doltliteFindTableByName(
+        c->aAnc, c->nAnc, zSchemaConflictTable);
+    struct TableEntry *pOurTable = doltliteFindTableByName(
+        c->aOurs, c->nOurs, zSchemaConflictTable);
+    if( pAncTable && pOurTable
+     && prollyHashCompare(&pOurTable->root, &pAncTable->root)!=0
+     && schemaEntryChangedByName(c->aAncSchema, c->nAncSchema,
+            c->aTheirsSchema, c->nTheirsSchema, zSchemaConflictTable) ){
+      rc = mergeAppendReindexName(
+          c->pazReindex, c->pnReindex, zSchemaMergeName);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+  }
   if( theirsChanged ){
     struct TableEntry merged = *pMergeOurs;
     memcpy(&merged.root, &theirsEntry->root, sizeof(ProllyHash));
