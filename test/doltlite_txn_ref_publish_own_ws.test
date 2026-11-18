@@ -1,0 +1,86 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-txn-ref-publish-own-ws
+
+# dolt_tag and dolt_branch inside a transaction publish the refs with the
+# transaction's uncommitted working set held back. The working set put back
+# afterwards is still the transaction's own, not a peer's write.
+proc fresh {} {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT);
+    INSERT INTO t VALUES(1,'a1');
+    SELECT dolt_commit('-Am','c1');
+    INSERT INTO t VALUES(5,'a5');
+    SELECT dolt_commit('-Am','c2');
+    SELECT dolt_branch('other','HEAD~1');
+  }
+  db close
+  sqlite3 db test.db
+}
+
+proc in_txn {publish cmd} {
+  fresh
+  db eval {
+    BEGIN;
+    INSERT INTO t VALUES(2,'a2');
+    SELECT dolt_add('.');
+  }
+  db eval $publish
+  set rc [catch {db eval $cmd} msg]
+  if {$rc} { db eval ROLLBACK ; return $msg }
+  db eval COMMIT
+  list [db eval {SELECT active_branch()}] \
+       [db eval {SELECT count(*) FROM dolt_log}] \
+       [db eval {SELECT id FROM t ORDER BY id}] \
+       [db eval {SELECT count(*) FROM dolt_status WHERE staged}]
+}
+
+foreach {name publish} {
+  tag    {SELECT dolt_tag('q')}
+  branch {SELECT dolt_branch('b2')}
+} {
+  do_test $name-reset-soft {
+    in_txn $publish {SELECT dolt_reset('--soft','HEAD~1')}
+  } {main 2 {1 2 5} 1}
+
+  do_test $name-reset {
+    in_txn $publish {SELECT dolt_reset()}
+  } {main 3 {1 2 5} 0}
+
+  do_test $name-reset-hard {
+    in_txn $publish {SELECT dolt_reset('--hard')}
+  } {main 3 {1 5} 0}
+
+  do_test $name-checkout {
+    in_txn $publish {SELECT dolt_checkout('other')}
+  } {other 2 1 0}
+
+  do_test $name-commit {
+    in_txn $publish {SELECT dolt_commit('-m','c3')}
+  } {main 4 {1 2 5} 0}
+}
+
+do_test tag-survives {
+  in_txn {SELECT dolt_tag('q')} {SELECT dolt_reset('--hard')}
+  db eval {SELECT tag_name FROM dolt_tags}
+} {q}
+
+do_test dirty-session-tag-checkout {
+  fresh
+  db eval {
+    INSERT INTO t VALUES(2,'a2');
+  }
+  db close
+  sqlite3 db test.db
+  db eval {
+    BEGIN;
+    SELECT dolt_add('.');
+    SELECT dolt_tag('x');
+    SELECT dolt_checkout('other');
+    COMMIT;
+    SELECT active_branch();
+  }
+} {0 0 0 other}
+
+finish_test
