@@ -1335,7 +1335,7 @@ static void doltliteGcFunc(
     return;
   }
 
-  if( !chunkFileGetFilename(&cs->file) || cs->isSharedMemory
+  if( !chunkFileGetFilename(&cs->file) || cs->isSharedMemory || cs->isBuffer
    || strcmp(chunkFileGetFilename(&cs->file), ":memory:")==0 ){
     sqlite3_result_text(context, "0 chunks removed, 0 chunks kept (in-memory)", -1, SQLITE_TRANSIENT);
     return;
@@ -1372,7 +1372,10 @@ static int doltliteGcCompactStoreWithPhase(
   int nKept = 0, nRemoved = 0;
 
   if( !cs ) return SQLITE_OK;
-  if( !chunkFileGetFilename(&cs->file) || strcmp(chunkFileGetFilename(&cs->file), ":memory:")==0 ){
+  /* A serialized image has nowhere to build its replacement: every named
+  ** file its VFS opens is the image itself. */
+  if( !chunkFileGetFilename(&cs->file) || cs->isBuffer
+   || strcmp(chunkFileGetFilename(&cs->file), ":memory:")==0 ){
     return SQLITE_OK;
   }
   if( !sqlite3_get_autocommit(db)
