@@ -970,6 +970,63 @@ static int trimTrailingAbsentNulls(
   return SQLITE_OK;
 }
 
+/* The same trim for a record whose last value ends in a symbolic run of
+** zeros. Its length does not match its header until the zeros are added,
+** so only the header is read: a trailing NULL has no body bytes, and the
+** body carries over as it is. */
+static int trimTrailingAbsentNullsZeroTail(
+  Table *pTab,
+  const u8 *pIn,
+  int nIn,
+  u8 **ppOut,
+  int *pnOut
+){
+  u64 hdrSize, st;
+  int hdrBytes, i, iEnd, nField = 0, nKeep, nNewType, nNewHdr, nBody;
+  u8 *pOut;
+
+  *pnOut = 0;
+  if( !pTab || !pIn || nIn<=0 || !ppOut ) return SQLITE_OK;
+  hdrBytes = sqlite3GetVarint(pIn, &hdrSize);
+  if( hdrSize<(u64)hdrBytes || hdrSize>(u64)nIn ) return SQLITE_OK;
+  for(i=hdrBytes; i<(int)hdrSize; nField++){
+    i += sqlite3GetVarint(pIn+i, &st);
+  }
+  if( i!=(int)hdrSize ) return SQLITE_OK;
+  nKeep = nField;
+  iEnd = (int)hdrSize;
+  while( nKeep>1 && pIn[iEnd-1]==0
+      && (iEnd-1==hdrBytes || (pIn[iEnd-2] & 0x80)==0) ){
+    Column *pCol = 0;
+    if( !recordFieldColumn(pTab, 1, nKeep-1, &pCol) ) break;
+    if( !columnAbsentIsNull(pTab, pCol) ) break;
+    nKeep--;
+    iEnd--;
+  }
+  if( nKeep==nField ) return SQLITE_OK;
+  nNewType = iEnd - hdrBytes;
+  nNewHdr = nNewType;
+  if( nNewHdr<=126 ){
+    nNewHdr += 1;
+  }else{
+    int nVarint = sqlite3VarintLen(nNewHdr);
+    nNewHdr += nVarint;
+    if( nVarint<sqlite3VarintLen(nNewHdr) ) nNewHdr++;
+  }
+  nBody = nIn - (int)hdrSize;
+  pOut = sqlite3_malloc(nNewHdr + nBody);
+  if( !pOut ) return SQLITE_NOMEM;
+  if( sqlite3PutVarint(pOut, (u64)nNewHdr)!=nNewHdr-nNewType ){
+    sqlite3_free(pOut);
+    return SQLITE_OK;
+  }
+  memcpy(pOut + (nNewHdr-nNewType), pIn+hdrBytes, (size_t)nNewType);
+  if( nBody>0 ) memcpy(pOut+nNewHdr, pIn+(int)hdrSize, (size_t)nBody);
+  *ppOut = pOut;
+  *pnOut = nNewHdr + nBody;
+  return SQLITE_OK;
+}
+
 static int btCursorInsertImpl(
   BtCursor *pCur,
   const BtreePayload *pPayload,
@@ -1027,13 +1084,14 @@ static int btCursorInsertImpl(
     if( nData<0 || pPayload->nZero<0 || nTotal64 > 0x7fffffff ){
       return SQLITE_TOOBIG;
     }
-    if( (pCur->pBtree->db->mDbFlags & DBFLAG_InternalDml)==0
-     && pPayload->nZero==0 ){
+    if( (pCur->pBtree->db->mDbFlags & DBFLAG_InternalDml)==0 ){
       Table *pTab = cursorRowTable(pCur);
       int nCanon = 0;
       if( pTab ){
         nSchemaField = pTab->nNVCol;
-        rc = trimTrailingAbsentNulls(pTab, 1, pData, nData, ppCanon, &nCanon);
+        rc = pPayload->nZero>0
+           ? trimTrailingAbsentNullsZeroTail(pTab, pData, nData, ppCanon, &nCanon)
+           : trimTrailingAbsentNulls(pTab, 1, pData, nData, ppCanon, &nCanon);
         if( rc!=SQLITE_OK ) return rc;
         if( *ppCanon ){
           pData = *ppCanon;
