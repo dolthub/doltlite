@@ -1,0 +1,66 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-failed-command-vtab
+
+ifcapable !fts5 {
+  finish_test
+  return
+}
+
+# A full-text table buffers a statement's terms and writes them out when
+# the next savepoint opens. A version-control command that fails inside the
+# transaction must leave those terms in place.
+foreach {name cmd} {
+  checkout    {dolt_checkout('nosuch')}
+  checkout-b  {dolt_checkout('-b','other')}
+  merge       {dolt_merge('nosuch')}
+  merge-dirty {dolt_merge('other')}
+  cherry-pick {dolt_cherry_pick('other')}
+  revert      {dolt_revert('nosuch')}
+  reset       {dolt_reset('--hard','nosuch')}
+  commit      {dolt_commit('-m')}
+  commit-all  {dolt_commit_all('-m')}
+} {
+  reset_db
+  do_execsql_test $name-setup {
+    CREATE VIRTUAL TABLE f USING fts5(body);
+    CREATE TABLE p(k INTEGER PRIMARY KEY, v);
+    INSERT INTO f(rowid,body) VALUES(1,'alpha one');
+    INSERT INTO p VALUES(1,1);
+    SELECT length(dolt_commit('-Am','base'));
+    SELECT dolt_branch('other');
+    SELECT dolt_checkout('other');
+    INSERT INTO p VALUES(2,2);
+    SELECT length(dolt_commit('-Am','other'));
+    SELECT dolt_checkout('main');
+  } {40 0 0 40 0}
+  do_test $name-fails {
+    db eval {
+      BEGIN;
+      INSERT INTO f(rowid,body) VALUES(2,'alpha two');
+      INSERT INTO p VALUES(5,5);
+    }
+    catch {db eval "SELECT $cmd"}
+  } {1}
+  do_execsql_test $name-in-txn {
+    SELECT rowid FROM f WHERE f MATCH 'alpha' ORDER BY rowid;
+    SELECT count(*) FROM f;
+    SELECT k FROM p ORDER BY k;
+  } {1 2 2 1 5}
+  do_execsql_test $name-committed {
+    COMMIT;
+    SELECT rowid FROM f WHERE f MATCH 'alpha' ORDER BY rowid;
+    INSERT INTO f(f) VALUES('integrity-check');
+    PRAGMA integrity_check;
+  } {1 2 ok}
+  do_test $name-reopen {
+    db close
+    sqlite3 db test.db
+    db eval {
+      SELECT rowid FROM f WHERE f MATCH 'two';
+      INSERT INTO f(f) VALUES('integrity-check');
+    }
+  } {2}
+}
+
+finish_test
