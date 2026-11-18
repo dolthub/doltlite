@@ -1,0 +1,68 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-merge-index-meaning
+
+# Theirs changes what an index covers without changing its name or text.
+# Ours changes rows the ancestor's index did not cover, so ours' index tree
+# is unchanged and theirs' is adopted; it must still index ours' rows.
+foreach {op cmd} {
+  merge       {dolt_merge('br')}
+  cherry-pick {dolt_cherry_pick('br')}
+} {
+  reset_db
+  do_execsql_test $op-autoindex-setup {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a INT UNIQUE, b TEXT UNIQUE);
+    INSERT INTO t VALUES (1,10,'x'),(2,20,'y');
+    SELECT dolt_commit('-Am','base') IS NOT NULL;
+    SELECT dolt_branch('br');
+    UPDATE t SET b='q' WHERE id=1;
+    SELECT dolt_commit('-Am','ours') IS NOT NULL;
+    SELECT dolt_checkout('br');
+    CREATE TABLE t9(id INTEGER PRIMARY KEY, a INT, b TEXT UNIQUE);
+    INSERT INTO t9 SELECT id,a,b FROM t;
+    DROP TABLE t;
+    ALTER TABLE t9 RENAME TO t;
+    SELECT dolt_commit('-Am','theirs') IS NOT NULL;
+    SELECT dolt_checkout('main');
+  } {1 0 1 0 1 0}
+  do_test $op-autoindex-apply {
+    db eval "SELECT $cmd IS NOT NULL"
+  } {1}
+  do_execsql_test $op-autoindex-lookup {
+    SELECT id FROM t WHERE b='q';
+    SELECT id FROM t WHERE b='x';
+    PRAGMA integrity_check;
+  } {1 ok}
+  do_catchsql_test $op-autoindex-unique {
+    INSERT INTO t VALUES (3,30,'q');
+  } {1 {UNIQUE constraint failed: t.b}}
+
+  reset_db
+  do_execsql_test $op-generated-setup {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, c INT,
+                   g INT GENERATED ALWAYS AS (a+1) VIRTUAL);
+    INSERT INTO t(id,a,c) VALUES (1,10,100),(2,20,200),(3,30,300);
+    CREATE INDEX ig ON t(g);
+    SELECT dolt_commit('-Am','base') IS NOT NULL;
+    SELECT dolt_branch('br');
+    UPDATE t SET c=111 WHERE id=1;
+    SELECT dolt_commit('-Am','ours') IS NOT NULL;
+    SELECT dolt_checkout('br');
+    DROP INDEX ig;
+    ALTER TABLE t DROP COLUMN g;
+    ALTER TABLE t ADD COLUMN g INT GENERATED ALWAYS AS (c+1) VIRTUAL;
+    CREATE INDEX ig ON t(g);
+    SELECT dolt_commit('-Am','theirs') IS NOT NULL;
+    SELECT dolt_checkout('main');
+  } {1 0 1 0 1 0}
+  do_test $op-generated-apply {
+    db eval "SELECT $cmd IS NOT NULL"
+  } {1}
+  do_execsql_test $op-generated-lookup {
+    SELECT id FROM t INDEXED BY ig WHERE g=112;
+    SELECT id FROM t INDEXED BY ig WHERE g=101;
+    PRAGMA integrity_check;
+  } {1 ok}
+}
+
+finish_test
