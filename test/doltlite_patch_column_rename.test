@@ -19,7 +19,7 @@ foreach keymode {integer clustered text without-rowid composite keyless} {
   set query {SELECT * FROM t ORDER BY 1}
   if {$keymode eq "keyless"} {set query {SELECT rowid,* FROM t ORDER BY rowid}}
 
-  foreach kind {rename-add swap reuse pk-rename pk-rename-add rename-drop rename-default drop add} {
+  foreach kind {rename-add swap reuse pk-rename pk-rename-add rename-drop rename-default drop add add-default-null add-default-all-null} {
     reset_db
     set columns {a INT,b INT}
     if {$kind eq "reuse"} {set columns {a INT}}
@@ -99,6 +99,20 @@ foreach keymode {integer clustered text without-rowid composite keyless} {
           INSERT INTO t(id,a,b,c) VALUES(4,40,400,4);
         }
       }
+      add-default-null {
+        execsql {
+          ALTER TABLE t ADD COLUMN c INT DEFAULT 7;
+          UPDATE t SET c=NULL WHERE id=1;
+          UPDATE t SET a=21,c=NULL WHERE id=2;
+          INSERT INTO t(id,a,b,c) VALUES(4,40,400,NULL);
+        }
+      }
+      add-default-all-null {
+        execsql {
+          ALTER TABLE t ADD COLUMN c TEXT DEFAULT 'new';
+          UPDATE t SET c=NULL;
+        }
+      }
     }
     execsql {SELECT dolt_commit('-Am','target')}
     set target [execsql $query]
@@ -108,6 +122,14 @@ foreach keymode {integer clustered text without-rowid composite keyless} {
     set forward [execsql {
       SELECT statement FROM dolt_patch('HEAD~1','HEAD') ORDER BY statement_order;
     }]
+    if {$kind in {add-default-null add-default-all-null}} {
+      do_test patch-column-$keymode-$kind-native-add {
+        llength [lsearch -all -glob $forward {ALTER TABLE "t" ADD COLUMN c *}]
+      } 1
+      do_test patch-column-$keymode-$kind-null-updates {
+        llength [lsearch -all -glob $forward {UPDATE "t" SET "c"=NULL WHERE *}]
+      } [expr {$kind eq "add-default-null" ? 1 : 3}]
+    }
     set reverse [execsql {
       SELECT statement FROM dolt_patch('HEAD','HEAD~1') ORDER BY statement_order;
     }]
