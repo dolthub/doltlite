@@ -2633,6 +2633,60 @@ int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
 }
 
 
+static int catalogCursorPinsPending(Btree *pBtree){
+  BtCursor *p;
+  for(p=pBtree->pBt->pCursor; p; p=p->pNext){
+    struct TableEntry *pTE;
+    if( p->pBtree!=pBtree ) continue;
+    if( p->eState!=CURSOR_VALID && p->eState!=CURSOR_SKIPNEXT ) continue;
+    pTE = findTable(pBtree, p->pgnoRoot);
+    if( pTE && pTE->pPending
+     && !prollyMutMapIsEmpty((ProllyMutMap*)pTE->pPending) ){
+      return 1;
+    }
+  }
+  return 0;
+}
+
+/* A catalog read inside a running statement must leave positioned cursors
+** alone: the VDBE compares against them and holds their payload without
+** restoring them first. The pending edits go onto scratch roots that only
+** the serialized catalog sees. A command goes on to write from the flushed
+** catalog, so it keeps the real flush. */
+static int serializeCatalogOverPending(Btree *pBtree, u8 **ppOut, int *pnOut){
+  BtShared *pBt = pBtree->pBt;
+  ProllyHash *aLive;
+  int i;
+  int rc = SQLITE_OK;
+  /* The schema-hash scan runs SQL, so it goes before any root is swapped. */
+  if( pBtree->cat.n>1 ){
+    rc = doltliteUpdateSchemaHashesForBtree(pBtree);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  aLive = sqlite3_malloc64(sizeof(ProllyHash)*(u64)(pBtree->cat.n+1));
+  if( !aLive ) return SQLITE_NOMEM;
+  for(i=0; i<pBtree->cat.n; i++) aLive[i] = pBtree->cat.a[i].root;
+  for(i=0; rc==SQLITE_OK && i<pBtree->cat.n; i++){
+    struct TableEntry *pTE = &pBtree->cat.a[i];
+    ProllyMutator mut;
+    if( !pTE->pPending || prollyMutMapIsEmpty((ProllyMutMap*)pTE->pPending) ){
+      continue;
+    }
+    memset(&mut, 0, sizeof(mut));
+    mut.pStore = pBt->pStore;
+    mut.pCache = &pBt->cache;
+    mut.oldRoot = pTE->root;
+    mut.pEdits = (ProllyMutMap*)pTE->pPending;
+    mut.flags = pTE->flags;
+    rc = prollyMutateFlush(&mut);
+    if( rc==SQLITE_OK ) pTE->root = mut.newRoot;
+  }
+  if( rc==SQLITE_OK ) rc = serializeCatalog(pBtree, ppOut, pnOut);
+  for(i=0; i<pBtree->cat.n; i++) pBtree->cat.a[i].root = aLive[i];
+  sqlite3_free(aLive);
+  return rc;
+}
+
 int doltliteFlushAndSerializeBtreeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
   BtShared *pBt;
   int rc;
@@ -2640,6 +2694,10 @@ int doltliteFlushAndSerializeBtreeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut)
     return SQLITE_ERROR;
   }
   pBt = pBtree->pBt;
+  if( pBtree->inTrans==TRANS_WRITE && !pBtree->pAtomicCommand
+   && !pBtree->bCommandTxn && catalogCursorPinsPending(pBtree) ){
+    return serializeCatalogOverPending(pBtree, ppOut, pnOut);
+  }
   if( pBtree->inTrans==TRANS_WRITE ){
     rc = flushAllPending(pBtree, pBt, 0);
     if( rc!=SQLITE_OK ) return rc;
