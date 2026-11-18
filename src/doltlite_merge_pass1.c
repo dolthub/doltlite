@@ -371,7 +371,8 @@ static int mergePass1AddedSchemaMatches(
   ourSE = findSchemaEntry(c->aOursSchema, c->nOursSchema, zObjectName);
   theirSE = findSchemaEntry(c->aTheirsSchema, c->nTheirsSchema, zObjectName);
   if( !ourSE || !theirSE || !ourSE->zSql || !theirSE->zSql ) return 0;
-  return strcmp(ourSE->zSql, theirSE->zSql)==0;
+  return strcmp(ourSE->zSql, theirSE->zSql)==0
+      || schemaAddedTablesEquivalent(ourSE, theirSE);
 }
 
 /* An index kept from ours was built over ours' rows and ours' column
