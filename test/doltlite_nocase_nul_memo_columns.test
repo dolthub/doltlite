@@ -1,0 +1,67 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-nocase-nul-memo-columns
+
+# The count shortcut and the planner share one "this index holds no NOCASE
+# key with a NUL" memo. The shortcut only needs the first column, but its
+# answer must not stand in for the columns after it.
+set q {
+  SELECT id FROM t WHERE a='x' AND b>'p'||char(0)||'q' ORDER BY id;
+  SELECT id FROM t WHERE a='x' AND b<'p'||char(0)||'qq' ORDER BY id;
+  SELECT count(*) FROM t WHERE a='x' GROUP BY b;
+  SELECT count(*) FROM (SELECT DISTINCT b FROM t WHERE a='x');
+  SELECT id FROM t WHERE a='x' ORDER BY b, id;
+}
+set rows {
+  INSERT INTO t VALUES(1,'x','p'||char(0)||'q'),(2,'x','p'||char(0)||'z'),
+                      (3,'x','p'||char(0)||'qq'),(4,'y','k');
+}
+
+db eval {
+  CREATE TABLE t(id INTEGER PRIMARY KEY,
+                 a TEXT COLLATE nocase, b TEXT COLLATE nocase);
+}
+db eval $rows
+set expected [db eval $q]
+
+do_test 1.0 {
+  db eval {CREATE INDEX tab ON t(a, b)}
+  db eval $q
+} $expected
+
+do_test 1.1 {
+  db eval {SELECT count(*) FROM t WHERE a BETWEEN 'x' AND 'y'}
+} {4}
+
+do_test 1.2 {
+  db eval $q
+} $expected
+
+reset_db
+do_test 2.0 {
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY,
+                   a TEXT COLLATE nocase, b TEXT COLLATE nocase);
+    CREATE INDEX tab ON t(a, b);
+    INSERT INTO t VALUES(9,'w','k');
+    SELECT count(*) FROM t WHERE a BETWEEN 'w' AND 'y';
+  }
+} {1}
+
+do_test 2.1 {
+  db eval $rows
+  db eval {SELECT count(*) FROM t WHERE a BETWEEN 'x' AND 'y'}
+} {4}
+
+do_test 2.2 {
+  db eval $q
+} $expected
+
+do_test 2.3 {
+  db close
+  sqlite3 db test.db
+  db eval {SELECT count(*) FROM t WHERE a BETWEEN 'x' AND 'y'}
+  db eval $q
+} $expected
+
+finish_test

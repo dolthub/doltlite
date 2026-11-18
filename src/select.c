@@ -5833,8 +5833,11 @@ static Index *isSimpleIndexRangeCount(
     int hasNocaseNul = pParse->pTriggerTab!=0;
     if( !hasNocaseNul ){
       int iDb = sqlite3SchemaToIndex(pParse->db, pTab->pSchema);
+      /* The btree memoises the answer per index, so ask about the same
+      ** columns the planner does. */
+      int nOrderCol = IsPrimaryKeyIndex(pIdx) ? pIdx->nKeyCol : pIdx->nColumn;
       if( sqlite3BtreeProllyIndexHasNocaseNul(pParse->db->aDb[iDb].pBt,
-              pIdx->tnum, 1, pIdx->azColl, &hasNocaseNul)!=SQLITE_OK ){
+              pIdx->tnum, nOrderCol, pIdx->azColl, &hasNocaseNul)!=SQLITE_OK ){
         return 0;
       }
     }

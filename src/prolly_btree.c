@@ -239,8 +239,14 @@ int sqlite3BtreeProllyIndexHasNocaseNul(
   ** otherwise rescan the index or walk its pending edits every time. */
   if( pTE->nocaseNulState
    && prollyHashCompare(&pTE->nocaseNulRoot, &pTE->root)==0 ){
-    *pHas = pTE->nocaseNulState==2;
-    return SQLITE_OK;
+    /* An answer about fewer columns says nothing about the rest. */
+    int ok = 0;
+    u32 mask = nocaseCollMask(nKeyCol, azColl, &ok);
+    if( pTE->nocaseNulMaskValid==(u8)ok
+     && (!ok || pTE->nocaseNulMask==mask) ){
+      *pHas = pTE->nocaseNulState==2;
+      return SQLITE_OK;
+    }
   }
   pMap = (ProllyMutMap*)pTE->pPending;
   if( pMap ){
