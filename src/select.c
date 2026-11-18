@@ -5710,6 +5710,7 @@ static Table *isSimpleRowidRangeCount(
    || p->pEList->nExpr!=1
    || p->pSrc->nSrc!=1
    || p->pSrc->a[0].fg.isSubquery
+   || p->pSrc->a[0].fg.isIndexedBy
    || pAggInfo->nFunc!=1
    || p->pHaving
   ){

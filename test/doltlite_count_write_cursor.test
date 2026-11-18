@@ -155,4 +155,26 @@ foreach storage {file memory} {
   }
 }
 
+# The rowid-range count shortcut replaces the WHERE loop, so it must leave a
+# statement with INDEXED BY to the planner: an index the query cannot use is
+# an error, as in stock, and a usable one still gives the count.
+reset_db
+do_execsql_test indexed-by.setup {
+  CREATE TABLE t(a INTEGER PRIMARY KEY, b, c);
+  CREATE INDEX i ON t(b) WHERE c>0;
+  CREATE INDEX j ON t(b);
+  INSERT INTO t VALUES(1,1,1),(2,2,0),(3,3,1);
+}
+do_catchsql_test indexed-by.unusable-between {
+  SELECT count(*) FROM t INDEXED BY i WHERE a BETWEEN 1 AND 5;
+} {1 {no query solution}}
+do_catchsql_test indexed-by.unusable-range {
+  SELECT count(*) FROM t INDEXED BY i WHERE a >= 1 AND a <= 5;
+} {1 {no query solution}}
+do_execsql_test indexed-by.usable {
+  SELECT count(*) FROM t INDEXED BY j WHERE a BETWEEN 1 AND 5;
+  SELECT count(*) FROM t WHERE a BETWEEN 1 AND 5;
+  SELECT count(*) FROM t NOT INDEXED WHERE a BETWEEN 2 AND 5;
+} {3 3 2}
+
 finish_test
