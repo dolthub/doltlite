@@ -1,0 +1,106 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-nonlocal-vtab-after-checkout
+
+ifcapable !fts5||!rtree {
+  finish_test
+  return
+}
+
+# Leaving a branch whose dolt_nonlocal_tables rules name virtual tables: the
+# first statement on the branch arrived at uses that branch's own tables.
+proc fresh {} {
+  reset_db
+  db eval {
+    CREATE VIRTUAL TABLE f USING fts5(body);
+    CREATE VIRTUAL TABLE r USING rtree(id,x0,x1);
+    CREATE TABLE p(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO f(rowid,body) VALUES(1,'alpha');
+    INSERT INTO r VALUES(1,0,1);
+    INSERT INTO p VALUES(1,'one');
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_checkout('-b','exp');
+    INSERT INTO dolt_nonlocal_tables VALUES('f','main',NULL,'immediate');
+    INSERT INTO dolt_nonlocal_tables VALUES('r','main',NULL,'immediate');
+    INSERT INTO dolt_nonlocal_tables VALUES('p','main',NULL,'immediate');
+    SELECT dolt_commit('-Am','rules');
+  }
+  db close
+  sqlite3 db test.db
+  db eval {
+    SELECT dolt_checkout('exp');
+    SELECT rowid FROM f;
+    SELECT id FROM r;
+    SELECT id FROM p;
+  }
+}
+
+do_test fts5-write {
+  fresh
+  db eval {SELECT dolt_checkout('main')}
+  list [catch {db eval {INSERT INTO f(rowid,body) VALUES(2,'beta')}} msg] \
+       $msg [db eval {SELECT rowid, body FROM f ORDER BY rowid}]
+} {0 {} {1 alpha 2 beta}}
+
+do_test fts5-match {
+  fresh
+  db eval {SELECT dolt_checkout('main')}
+  list [catch {db eval {SELECT rowid FROM f WHERE f MATCH 'alpha'}} msg] $msg
+} {0 1}
+
+do_test rtree-read {
+  fresh
+  db eval {SELECT dolt_checkout('main')}
+  list [catch {db eval {SELECT id FROM r}} msg] $msg
+} {0 1}
+
+do_test rtree-write {
+  fresh
+  db eval {SELECT dolt_checkout('main')}
+  list [catch {db eval {INSERT INTO r VALUES(2,5,6)}} msg] \
+       $msg [db eval {SELECT id FROM r ORDER BY id}]
+} {0 {} {1 2}}
+
+do_test plain-table {
+  fresh
+  db eval {SELECT dolt_checkout('main')}
+  list [catch {db eval {INSERT INTO p VALUES(2,'two')}} msg] \
+       $msg [db eval {SELECT id FROM p ORDER BY id}]
+} {0 {} {1 2}}
+
+do_test new-branch-off-main {
+  fresh
+  db eval {SELECT dolt_checkout('-b','side','main')}
+  list [catch {db eval {INSERT INTO f(rowid,body) VALUES(2,'beta')}} msg] \
+       $msg [db eval {SELECT rowid FROM f ORDER BY rowid}] \
+       [db eval {SELECT dolt_checkout('main')}] \
+       [db eval {SELECT rowid FROM f ORDER BY rowid}]
+} {0 {} {1 2} 0 1}
+
+do_test back-to-rule-branch {
+  fresh
+  db eval {
+    SELECT dolt_checkout('main');
+    INSERT INTO f(rowid,body) VALUES(2,'beta');
+    INSERT INTO p VALUES(2,'two');
+    SELECT dolt_commit('-Am','main write');
+    SELECT dolt_checkout('exp');
+  }
+  list [catch {db eval {SELECT id FROM p ORDER BY id}} msg] $msg \
+       [catch {db eval {SELECT count(*) FROM f WHERE f MATCH 'alpha'}} msg] \
+       $msg [db eval {SELECT id FROM r}]
+} {0 {1 2} 0 1 1}
+
+do_test in-transaction {
+  fresh
+  db eval {
+    BEGIN;
+    SELECT dolt_checkout('main');
+  }
+  set res [list [catch {db eval {SELECT rowid FROM f}} msg] $msg \
+                [catch {db eval {SELECT id FROM r}} msg] $msg]
+  db eval COMMIT
+  set res
+} {0 1 0 1}
+
+finish_test
