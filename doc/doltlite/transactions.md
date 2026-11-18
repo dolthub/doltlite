@@ -9,7 +9,8 @@ statement, with two rules that are easy to miss.
 |---|---|
 | Row writes, `dolt_add` | Undone, staging included |
 | `dolt_reset` (`--soft`, `--hard`, or no args) | Kept. The SQL transaction is committed, then a new one begun, as in Dolt. |
-| `dolt_branch`, `dolt_tag`, `dolt_branch('-d')` | Kept. Refs are durable the moment the call returns. |
+| `dolt_branch` (create, `-c`, `-m`, `-f`, `-d`, `-D`) | Kept. The SQL transaction is committed, then a new one begun, as in Dolt. |
+| `dolt_tag`, `dolt_tag('-d')` | Kept. The tag change is durable the moment the call returns. The transaction stays open, and its row writes can still be rolled back. |
 | `dolt_checkout -b` | Kept. The SQL transaction is committed, then a new one begun. |
 | `dolt_checkout` of an existing branch | Kept. The connection stays on the new branch. |
 | `dolt_commit`, `dolt_commit_all`, and any merge, cherry-pick, revert, or rebase that completes | Kept. The SQL transaction is committed, then a new one begun, as in Dolt. |
@@ -66,8 +67,11 @@ One durable writer at a time per database file. What a second connection sees:
 | A read transaction tries to write after a peer committed | `database is locked` (`SQLITE_BUSY_SNAPSHOT`). The read snapshot is stale; roll back and retry. |
 | `dolt_commit` while the graph lock is busy or a peer advanced the branch first | `cannot commit: database is busy or branch HEAD changed. Please retry your transaction.` |
 | Merge, cherry-pick, revert, pull racing a peer commit | `SQLITE_BUSY`; nothing is lost, retry the operation |
+| A read starts while a peer is publishing a commit or running `dolt_gc` | `database is locked` (`SQLITE_BUSY`) until the publish finishes. `busy_timeout` applies. |
 
-Readers never block on writers and never see uncommitted rows or staging.
+Readers never see uncommitted rows or staging, and a peer's open write
+transaction does not block them. Only the publish itself does, briefly, so
+set `busy_timeout` on connections that only read as well.
 
 ## Refusals
 
