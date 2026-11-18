@@ -246,6 +246,7 @@ doltlite_checkout_txn_clean
 doltlite_working_ref_txn_clean
 doltlite_replace_nocase_pk
 doltlite_key_only_row_encoding
+doltlite_zeroblob_tail_canonical
 doltlite_txn_reset_clean
 doltlite_checkout_system_tables
 doltlite_checkout_policy

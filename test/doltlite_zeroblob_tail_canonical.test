@@ -1,0 +1,73 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-zeroblob-tail-canonical
+
+# zeroblob() reaches the btree as a record with a symbolic run of zeros.
+# With NULL columns after it, that record must be stored like the same
+# value written out, so equal rows hash equally and a no-op write is clean.
+proc table_hash {sql} {
+  forcedelete h.db
+  sqlite3 dbh h.db
+  dbh eval $sql
+  set h [dbh one {SELECT dolt_hashof_table('t')}]
+  dbh close
+  return $h
+}
+
+do_execsql_test 1.0 {
+  CREATE TABLE t(a INTEGER PRIMARY KEY, b BLOB, c TEXT);
+  INSERT INTO t VALUES(10, x'00000000', NULL);
+  SELECT length(dolt_commit('-Am','c1'));
+} {40}
+
+do_execsql_test 1.1 {
+  UPDATE t SET b=zeroblob(4) WHERE a=10;
+  SELECT count(*) FROM dolt_status;
+  SELECT count(*) FROM dolt_diff_summary('HEAD','WORKING');
+  SELECT hex(b), quote(c) FROM t;
+} {0 0 00000000 NULL}
+
+do_catchsql_test 1.2 {
+  SELECT dolt_commit('-am','no row changed');
+} {1 {nothing to commit, working tree clean (use dolt_add to stage changes)}}
+
+foreach {name decl vals} {
+  one-null   {a INTEGER PRIMARY KEY, b BLOB, c TEXT}          {NULL}
+  two-nulls  {a INTEGER PRIMARY KEY, b BLOB, c TEXT, d INT}   {NULL, NULL}
+  keyless    {b BLOB, c TEXT}                                 {NULL}
+  default    {a INTEGER PRIMARY KEY, b BLOB, c TEXT DEFAULT 'x'} {NULL}
+} {
+  foreach n {1 300 70000} {
+    do_test hash-$name-$n {
+      set lead [expr {$name eq "keyless" ? "" : "1, "}]
+      set h1 [table_hash "CREATE TABLE t($decl);
+                          INSERT INTO t VALUES($lead zeroblob($n), $vals);"]
+      set h2 [table_hash "CREATE TABLE t($decl);
+                          INSERT INTO t VALUES($lead unhex(hex(zeroblob($n))), $vals);"]
+      expr {$h1 eq $h2}
+    } {1}
+  }
+}
+
+reset_db
+do_execsql_test 2.0 {
+  CREATE TABLE t(a INTEGER PRIMARY KEY, b BLOB, c TEXT, d INT);
+  INSERT INTO t VALUES(1, zeroblob(5000), NULL, NULL);
+  INSERT INTO t VALUES(2, zeroblob(8), NULL, 7);
+  INSERT INTO t VALUES(3, zeroblob(8), 'x', NULL);
+  SELECT a, length(b), quote(c), quote(d) FROM t ORDER BY a;
+  PRAGMA integrity_check;
+} {1 5000 NULL NULL 2 8 NULL 7 3 8 'x' NULL ok}
+
+do_test 2.1 {
+  db close
+  sqlite3 db test.db
+  db eval {
+    ALTER TABLE t ADD COLUMN e DEFAULT 'dflt';
+    SELECT a, length(b), quote(c), quote(d), e FROM t ORDER BY a;
+    SELECT hex(substr(b,1,4)) FROM t WHERE a=1;
+    PRAGMA integrity_check;
+  }
+} {1 5000 NULL NULL dflt 2 8 NULL 7 dflt 3 8 'x' NULL dflt 00000000 ok}
+
+finish_test
