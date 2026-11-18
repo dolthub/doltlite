@@ -682,13 +682,11 @@ int saveCursorPosition(BtCursor *pCur){
 }
 
 /* Borrowed catalog/schema name, or NULL. Never allocates. */
-const char *findTableNumberName(sqlite3 *db, Pgno iTable){
-  Btree *pBtree;
-  Schema *pSchema;
+static const char *tableNumberNameIn(
+  Btree *pBtree, Schema *pSchema, Pgno iTable
+){
   HashElem *k;
   int i;
-  if( !db || db->nDb<=0 ) return 0;
-  pBtree = db->aDb[0].pBt;
   if( pBtree && pBtree->cat.a ){
     for(i=0; i<pBtree->cat.n; i++){
       if( pBtree->cat.a[i].iTable==iTable && pBtree->cat.a[i].zName ){
@@ -696,7 +694,6 @@ const char *findTableNumberName(sqlite3 *db, Pgno iTable){
       }
     }
   }
-  pSchema = db->aDb[0].pSchema;
   if( pSchema ){
     for(k=sqliteHashFirst(&pSchema->tblHash); k; k=sqliteHashNext(k)){
       Table *pTab = (Table*)sqliteHashData(k);
@@ -708,12 +705,30 @@ const char *findTableNumberName(sqlite3 *db, Pgno iTable){
   return 0;
 }
 
+const char *findTableNumberName(sqlite3 *db, Pgno iTable){
+  if( !db || db->nDb<=0 ) return 0;
+  return tableNumberNameIn(db->aDb[0].pBt, db->aDb[0].pSchema, iTable);
+}
+
+/* Table numbers are per database: an attached database's number must not
+** be looked up in main. */
+static const char *btreeTableNumberName(Btree *pBtree, Pgno iTable){
+  sqlite3 *db = pBtree->db;
+  int i;
+  for(i=0; i<db->nDb; i++){
+    if( db->aDb[i].pBt==pBtree ){
+      return tableNumberNameIn(pBtree, db->aDb[i].pSchema, iTable);
+    }
+  }
+  return tableNumberNameIn(pBtree, 0, iTable);
+}
+
 int tableEntryIsTableRoot(Btree *pBtree, struct TableEntry *pTE,
                                  int *pRc){
   if( !pTE || pTE->iTable<=1 ) return 0;
   if( pTE->tableRootKnown ) return pTE->isTableRoot ? 1 : 0;
   if( !pTE->zName && pBtree && pBtree->db ){
-    const char *z = findTableNumberName(pBtree->db, pTE->iTable);
+    const char *z = btreeTableNumberName(pBtree, pTE->iTable);
     if( z ){
       pTE->zName = sqlite3_mprintf("%s", z);
       if( !pTE->zName ){

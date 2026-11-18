@@ -1,0 +1,74 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-attach-create-in-txn
+
+# A table or index created in the current transaction has no persisted
+# type yet. Whether it is a table or an index must be decided from its own
+# database, whose table numbers overlap main's.
+forcedelete aux.db
+do_execsql_test 1.0 {
+  CREATE TABLE m1(x INTEGER PRIMARY KEY, y);
+  CREATE TABLE m2(x INTEGER PRIMARY KEY, y);
+  CREATE TABLE m3(x INTEGER PRIMARY KEY, y);
+  ATTACH 'aux.db' AS aux;
+}
+
+do_execsql_test 1.1 {
+  BEGIN;
+  CREATE TABLE aux.t(a INT PRIMARY KEY, b) WITHOUT ROWID;
+  INSERT INTO aux.t VALUES(1,'one');
+  UPDATE aux.t SET b='uno' WHERE a=1;
+  INSERT OR REPLACE INTO aux.t VALUES(1,'ein');
+  SELECT * FROM aux.t;
+  COMMIT;
+  SELECT * FROM aux.t;
+  PRAGMA aux.integrity_check;
+} {1 ein 1 ein ok}
+
+do_execsql_test 1.2 {
+  BEGIN;
+  CREATE TABLE aux.u(id INTEGER PRIMARY KEY, v);
+  CREATE INDEX aux.uv ON u(v);
+  INSERT INTO aux.u VALUES(1,'dup'),(2,'dup'),(3,'dup'),(4,'keep');
+  SELECT id FROM aux.u INDEXED BY uv WHERE v='dup' ORDER BY id;
+  DELETE FROM aux.u WHERE v='dup';
+  COMMIT;
+  SELECT id, v FROM aux.u ORDER BY id;
+  PRAGMA aux.integrity_check;
+} {1 2 3 4 keep ok}
+
+do_execsql_test 1.3 {
+  SAVEPOINT s;
+  CREATE TABLE aux.w(k TEXT PRIMARY KEY, b, d);
+  INSERT INTO aux.w VALUES('a','x','y'),('b','x','y');
+  INSERT OR REPLACE INTO aux.w VALUES('a','z','y');
+  ALTER TABLE aux.w DROP COLUMN d;
+  RELEASE s;
+  SELECT * FROM aux.w ORDER BY k;
+  PRAGMA aux.integrity_check;
+} {a z b x ok}
+
+do_execsql_test 1.4 {
+  CREATE TABLE aux.e(k INTEGER PRIMARY KEY, v);
+  INSERT INTO aux.e VALUES(1,10),(2,20),(3,30);
+  BEGIN;
+  CREATE INDEX aux.ei ON e(v);
+  SELECT sum(k) FROM aux.e INDEXED BY ei WHERE v>0;
+  INSERT INTO aux.e VALUES(4,40);
+  COMMIT;
+  SELECT k FROM aux.e INDEXED BY ei WHERE v>15 ORDER BY k;
+  PRAGMA aux.integrity_check;
+} {6 2 3 4 ok}
+
+do_test 1.5 {
+  db close
+  sqlite3 db aux.db
+  db eval {
+    SELECT * FROM t;
+    SELECT id FROM u;
+    SELECT k FROM w ORDER BY k;
+    PRAGMA integrity_check;
+  }
+} {1 ein 4 a b ok}
+
+finish_test

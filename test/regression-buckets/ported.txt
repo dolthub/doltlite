@@ -123,6 +123,7 @@ doltlite_readonly_status
 doltlite_empty_readonly_engine
 doltlite_detached_ephemeral
 doltlite_attached_vc
+doltlite_attach_create_in_txn
 doltlite_lazy_system_schema
 doltlite_blame_stale_layout
 doltlite_open_head
