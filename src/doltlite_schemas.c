@@ -900,7 +900,7 @@ int doltliteRevertViewsAndTriggers(
   sqlite3_stmt *pStmt = 0;
   char **azDrop = 0;
   int nDrop = 0;
-  int i, rc;
+  int i, rc, bTrigger;
 
   /* Collect first: dropping while the statement walks the schema would
   ** invalidate it. */
@@ -915,7 +915,8 @@ int doltliteRevertViewsAndTriggers(
     azNew = sqlite3_realloc(azDrop, (nDrop+1)*(int)sizeof(char*));
     if( !azNew ){ rc = SQLITE_NOMEM; break; }
     azDrop = azNew;
-    azDrop[nDrop] = sqlite3_mprintf("DROP %s \"%w\"",
+    /* Dropping a view drops its INSTEAD OF triggers with it. */
+    azDrop[nDrop] = sqlite3_mprintf("DROP %s IF EXISTS \"%w\"",
         strcmp(zType, "view")==0 ? "VIEW" : "TRIGGER", zName);
     if( !azDrop[nDrop] ){ rc = SQLITE_NOMEM; break; }
     nDrop++;
@@ -931,12 +932,14 @@ int doltliteRevertViewsAndTriggers(
   sqlite3_free(azDrop);
   if( rc!=SQLITE_OK ) return rc;
 
+  /* Views first: an INSTEAD OF trigger needs its view to exist. */
+  for(bTrigger=0; rc==SQLITE_OK && bTrigger<2; bTrigger++)
   for(i=0; rc==SQLITE_OK && i<nSourceSchema; i++){
     const char *zType = aSourceSchema[i].zType;
     char *zDetail = 0;
     char *zMsg = 0;
     if( !zType || !aSourceSchema[i].zSql ) continue;
-    if( strcmp(zType, "view")!=0 && strcmp(zType, "trigger")!=0 ) continue;
+    if( strcmp(zType, bTrigger ? "trigger" : "view")!=0 ) continue;
     rc = sqlite3_exec(db, aSourceSchema[i].zSql, 0, 0, 0);
     if( rc==SQLITE_OK || rc==SQLITE_NOMEM ) continue;
     /* Copy first: ErrorWithMsg replaces the connection string this reads. */
