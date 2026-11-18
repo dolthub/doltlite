@@ -1,0 +1,69 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-merge-keyless-drop-column
+
+# Ours drops a column; theirs adds rows to a keyless table. A row whose
+# only stored field was the dropped column must still get a record.
+foreach {name decl ins rows} {
+  two-col
+    {c1, c3}
+    {INSERT INTO t VALUES(0,NULL); INSERT INTO t VALUES(5,-1);}
+    {NULL -1}
+  three-col
+    {c1, c2, c3}
+    {INSERT INTO t VALUES(0,NULL,NULL); INSERT INTO t VALUES(5,NULL,-1);}
+    {NULL -1}
+  all-null
+    {c1, c3}
+    {INSERT INTO t VALUES(0,NULL); INSERT INTO t VALUES(5,NULL);}
+    {NULL NULL}
+  default
+    {c1, c3 DEFAULT 7}
+    {INSERT INTO t(c1) VALUES(0); INSERT INTO t VALUES(5,-1);}
+    {7 -1}
+} {
+  forcedelete linear.db
+  sqlite3 db2 linear.db
+  db2 eval "CREATE TABLE t($decl)"
+  db2 eval $ins
+  db2 eval {ALTER TABLE t DROP COLUMN c1}
+  set linear [db2 one {SELECT dolt_hashof_table('t')}]
+  db2 close
+
+  foreach {op br cmd} {
+    merge       b1   {SELECT dolt_merge('main') IS NOT NULL}
+    cherry-pick main {SELECT dolt_checkout('main'); SELECT dolt_cherry_pick('b1') IS NOT NULL}
+  } {
+    reset_db
+    do_test $name-$op-apply {
+      db eval "CREATE TABLE t($decl)"
+      db eval {
+        SELECT dolt_commit('-Am','base');
+        SELECT dolt_branch('b1');
+        ALTER TABLE t DROP COLUMN c1;
+        SELECT dolt_commit('-Am','drop');
+        SELECT dolt_checkout('b1');
+      }
+      db eval $ins
+      db eval {SELECT dolt_commit('-Am','rows')}
+      lindex [db eval $cmd] end
+    } {1}
+    do_execsql_test $name-$op-rows {
+      SELECT quote(c3) FROM t ORDER BY rowid;
+    } $rows
+    do_execsql_test $name-$op-integrity {
+      PRAGMA integrity_check;
+    } {ok}
+    do_test $name-$op-hash {
+      db one {SELECT dolt_hashof_table('t')}
+    } $linear
+    do_test $name-$op-reopen {
+      db close
+      sqlite3 db test.db
+      db eval {SELECT dolt_checkout($br)}
+      db eval {SELECT quote(c3) FROM t ORDER BY rowid}
+    } $rows
+  }
+}
+
+finish_test
