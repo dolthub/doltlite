@@ -1,0 +1,113 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-patch-statement-phases
+
+# Index and table names are global to the schema and ALTER TABLE re-reads
+# every view, so a patch has to order its statements across tables: replaying
+# it on the from-snapshot must reproduce the to-snapshot.
+proc roundtrip {c1 c2 from to} {
+  reset_db
+  db eval $c1
+  db eval {SELECT dolt_commit('-Am','c1')}
+  db eval $c2
+  db eval {SELECT dolt_commit('-Am','c2')}
+  set from [db one "SELECT dolt_hashof('$from')"]
+  set to [db one "SELECT dolt_hashof('$to')"]
+  set patch [db eval "SELECT statement FROM dolt_patch('$from','$to')
+                      ORDER BY statement_order"]
+  db eval "SELECT dolt_checkout('-b','rt','$from')"
+  set rc 0
+  foreach stmt $patch {
+    if {[catch {db eval $stmt} msg]} { set rc $msg ; break }
+  }
+  list $rc [db eval "SELECT count(*) FROM dolt_patch('WORKING','$to')"] \
+       [db eval {PRAGMA integrity_check}]
+}
+
+do_test index-name-moves-to-earlier-table {
+  roundtrip {
+    CREATE TABLE t1(id INTEGER PRIMARY KEY, a INT);
+    CREATE TABLE t2(id INTEGER PRIMARY KEY, a INT);
+    INSERT INTO t1 VALUES(1,1);
+    INSERT INTO t2 VALUES(1,1);
+    CREATE INDEX ix ON t2(a);
+  } {
+    DROP INDEX ix;
+    CREATE INDEX ix ON t1(a);
+  } HEAD~1 HEAD
+} {0 0 ok}
+
+do_test index-name-moves-to-later-table {
+  roundtrip {
+    CREATE TABLE t1(id INTEGER PRIMARY KEY, a INT);
+    CREATE TABLE t2(id INTEGER PRIMARY KEY, a INT);
+    CREATE INDEX ix ON t1(a);
+  } {
+    DROP INDEX ix;
+    CREATE INDEX ix ON t2(a);
+  } HEAD~1 HEAD
+} {0 0 ok}
+
+do_test index-name-moves-from-dropped-table {
+  roundtrip {
+    CREATE TABLE t2(id INTEGER PRIMARY KEY, a INT);
+    INSERT INTO t2 VALUES(1,1);
+    CREATE INDEX ix ON t2(a);
+  } {
+    DROP TABLE t2;
+    CREATE TABLE "order"(k TEXT PRIMARY KEY, a INT);
+    INSERT INTO "order" VALUES('x',5);
+    CREATE INDEX ix ON "order"(a);
+  } HEAD~1 HEAD
+} {0 0 ok}
+
+do_test index-name-moves-from-rebuilt-table {
+  roundtrip {
+    CREATE TABLE a(id INTEGER PRIMARY KEY, x INT);
+    CREATE TABLE z(id INTEGER PRIMARY KEY, x INT);
+    INSERT INTO z VALUES(1,1);
+    CREATE INDEX ix ON z(x);
+  } {
+    DROP TABLE z;
+    CREATE TABLE z(k TEXT PRIMARY KEY, x INT);
+    INSERT INTO z VALUES('k',2);
+    CREATE INDEX ix ON a(x);
+  } HEAD~1 HEAD
+} {0 0 ok}
+
+do_test create-precedes-alter-for-dangling-view {
+  roundtrip {
+    CREATE TABLE a(id INTEGER PRIMARY KEY, x INT);
+    CREATE TABLE u(id INTEGER PRIMARY KEY);
+    CREATE VIEW v AS SELECT * FROM u;
+  } {
+    DROP TABLE u;
+    ALTER TABLE a ADD COLUMN y INT;
+  } HEAD HEAD~1
+} {0 0 ok}
+
+do_test alter-precedes-drop-under-view {
+  roundtrip {
+    CREATE TABLE a(id INTEGER PRIMARY KEY, x INT);
+    CREATE TABLE z(id INTEGER PRIMARY KEY, x INT, y INT);
+    CREATE VIEW v AS SELECT * FROM a;
+  } {
+    ALTER TABLE z DROP COLUMN y;
+    DROP TABLE a;
+  } HEAD~1 HEAD
+} {0 0 ok}
+
+do_test new-table-data-and-indexes {
+  roundtrip {
+    CREATE TABLE a(id INTEGER PRIMARY KEY, x INT);
+    INSERT INTO a VALUES(1,1),(2,2);
+  } {
+    CREATE TABLE b(id INTEGER PRIMARY KEY, x INT UNIQUE);
+    INSERT INTO b VALUES(1,1),(2,2);
+    CREATE INDEX bx ON b(x,id);
+    UPDATE a SET x=x+10;
+    CREATE INDEX ax ON a(x);
+  } HEAD~1 HEAD
+} {0 0 ok}
+
+finish_test
