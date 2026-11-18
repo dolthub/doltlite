@@ -1463,6 +1463,9 @@ mapped:
       doltliteRecordInfoClear(&kinfo);
     }
 
+    /* Only a PK-covering clustered row may store an empty record. */
+    if( nEmit==0 && isIntKey && nMergedRecord>0 ) nEmit = 1;
+
     /* A field before the last emitted one is stored, not omitted: a slot
     ** this row never supplied must hold the default a reader would see. */
     for(k=0; k<nOurs && k<oursDefaults.nCol; k++){
