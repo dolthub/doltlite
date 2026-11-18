@@ -124,24 +124,32 @@ static int cmdBeginAtomicJoined(Btree *p){
   memset(s, 0, sizeof(*s));
   s->bUserSavepoint = db->pSavepoint!=0;
   s->bSqlWrite = p->inTrans==TRANS_WRITE;
-  rc = doltliteSaveTxnState(db, &s->state);
-  if( rc==SQLITE_OK ){
-    if( !s->bSqlWrite ){
-      btreeStoreCommittedFromCurrent(p, &s->state.sessionCatalogHash);
-    }
-    s->committedCatalogHash = p->committedCatalogHash;
-    s->committedCatalogShape = p->committedCatalogShape;
-    s->committedVc = p->committedVc;
-    memcpy(s->committedAMeta, p->committedAMeta, sizeof(s->committedAMeta));
-    db->nVcInterruptMask++;
-    rc = sqlite3_exec(db, "SAVEPOINT doltlite_command", 0, 0, 0);
-    db->nVcInterruptMask--;
-  }
+  /* Opening the savepoint makes a virtual table write out what it buffered
+  ** for earlier statements. The saved state must hold those rows, or a
+  ** failed command would restore a catalog without them. */
+  db->nVcInterruptMask++;
+  rc = sqlite3_exec(db, "SAVEPOINT doltlite_command", 0, 0, 0);
+  db->nVcInterruptMask--;
   if( rc!=SQLITE_OK ){
+    sqlite3_free(s);
+    return rc;
+  }
+  rc = doltliteSaveTxnState(db, &s->state);
+  if( rc!=SQLITE_OK ){
+    db->nVcInterruptMask++;
+    (void)sqlite3_exec(db, "RELEASE doltlite_command", 0, 0, 0);
+    db->nVcInterruptMask--;
     doltliteTxnStateClear(&s->state);
     sqlite3_free(s);
     return rc;
   }
+  if( !s->bSqlWrite ){
+    btreeStoreCommittedFromCurrent(p, &s->state.sessionCatalogHash);
+  }
+  s->committedCatalogHash = p->committedCatalogHash;
+  s->committedCatalogShape = p->committedCatalogShape;
+  s->committedVc = p->committedVc;
+  memcpy(s->committedAMeta, p->committedAMeta, sizeof(s->committedAMeta));
   p->pAtomicCommand = s;
   p->bAtomicCommandSeal = 0;
   p->bCommandTxn = 1;
