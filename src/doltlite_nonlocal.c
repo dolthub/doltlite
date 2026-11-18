@@ -402,7 +402,17 @@ static int nonlocalSync(sqlite3 *db){
 
   if( db->init.busy || db->nVdbeExec>0 || db->nDb<1
    || !doltliteNonlocalSlot(db) ) return 0;
-  if( !DbHasProperty(db, 0, DB_SchemaLoaded) ) return 0;
+  /* A checkout unloads the schema. Compiling would load it again, but with
+  ** names still redirected by the rules of the branch just left. */
+  if( !DbHasProperty(db, 0, DB_SchemaLoaded) ){
+    char *zErr = 0;
+    int rc;
+    p = nonlocalState(db, 0);
+    if( !p || p->bSyncing || (p->nRule==0 && p->nAttach==0) ) return 0;
+    rc = sqlite3Init(db, &zErr);
+    sqlite3DbFree(db, zErr);
+    if( rc!=SQLITE_OK || !DbHasProperty(db, 0, DB_SchemaLoaded) ) return 0;
+  }
   pNo = doltliteNonlocalNoRules(db);
   if( pNo->pSchema==db->aDb[0].pSchema
    && pNo->iCookie==pNo->pSchema->schema_cookie
