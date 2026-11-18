@@ -154,6 +154,44 @@ foreach {name sub} {
   oracle close
 }
 
+# A count shortcut folds the pending edits in while another cursor on the
+# same index sits between its lower-bound seek and its range test.
+foreach {name sub} {
+  all   {SELECT count(*) FROM t}
+  range {SELECT count(*) FROM t WHERE b BETWEEN 1 AND 500}
+  index {SELECT count(*) FROM t INDEXED BY tb}
+  rowid {SELECT count(*) FROM t WHERE a BETWEEN 1 AND 5000}
+} {
+  reset_db
+  forcedelete pending-delete-oracle.db
+  sqlite3 oracle {file:pending-delete-oracle.db?doltlite_engine=sqlite} -uri 1
+  foreach conn {db oracle} {
+    $conn eval {
+      CREATE TABLE t(a INTEGER PRIMARY KEY, b INTEGER);
+      CREATE INDEX tb ON t(b);
+      WITH RECURSIVE s(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM s WHERE x<40)
+        INSERT INTO t SELECT x, x FROM s;
+      BEGIN;
+      DELETE FROM t WHERE a=7;
+      INSERT INTO t VALUES(1001,128);
+    }
+  }
+  foreach {kind sql} [list \
+    index "SELECT a,b FROM t WHERE b>0 AND b < ($sub)" \
+    table "SELECT a,b FROM t WHERE a>0 AND a < ($sub)" \
+  ] {
+    do_test count-$name-$kind {db eval $sql} [oracle eval $sql]
+  }
+  foreach conn {db oracle} {
+    $conn eval "UPDATE t SET b=b+1000 WHERE b>0 AND b < ($sub)"
+    $conn eval COMMIT
+  }
+  do_test count-$name-write {
+    db eval {SELECT a,b FROM t ORDER BY a; PRAGMA integrity_check}
+  } [oracle eval {SELECT a,b FROM t ORDER BY a; PRAGMA integrity_check}]
+  oracle close
+}
+
 reset_db
 do_execsql_test oom.setup {
   CREATE TABLE t(id INTEGER PRIMARY KEY);

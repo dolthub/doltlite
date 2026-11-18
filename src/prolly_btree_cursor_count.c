@@ -397,8 +397,17 @@ done:
   sqlite3_free(pUpperNext);
   return rc;
 }
-static int flushPendingForCount(BtCursor *pCur){
+/* A read must leave a positioned sibling alone: the VDBE compares against
+** it and holds its payload without restoring it first. With one present the
+** pending edits are applied to a scratch root that only the count sees;
+** *pLive then holds the root the caller must put back. */
+static int flushPendingForCount(
+  BtCursor *pCur,
+  struct TableEntry **ppScratch,
+  ProllyHash *pLive
+){
   struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+  *ppScratch = 0;
   if( pTE && pTE->pPending ){
     ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
     if( !prollyMutMapIsEmpty(pMap) ){
@@ -411,13 +420,19 @@ static int flushPendingForCount(BtCursor *pCur){
          && p!=pCur
          && p->pgnoRoot==pCur->pgnoRoot
          && (p->eState==CURSOR_VALID || p->eState==CURSOR_SKIPNEXT) ){
-          u8 isPinned = p->isPinned;
-          /* A flush changes representation, not rows, so it can save a
-          ** pinned cursor without changing the row that cursor locks. */
-          p->isPinned = 0;
-          rc = saveCursorPosition(p);
-          p->isPinned = isPinned;
+          ProllyMutator mut;
+          memset(&mut, 0, sizeof(mut));
+          mut.pStore = pCur->pBt->pStore;
+          mut.pCache = &pCur->pBt->cache;
+          mut.oldRoot = pTE->root;
+          mut.pEdits = pMap;
+          mut.flags = pTE->flags;
+          rc = prollyMutateFlush(&mut);
           if( rc!=SQLITE_OK ) return rc;
+          *pLive = pTE->root;
+          pTE->root = mut.newRoot;
+          *ppScratch = pTE;
+          return SQLITE_OK;
         }
       }
       rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot,
@@ -438,11 +453,15 @@ static int flushPendingForCount(BtCursor *pCur){
 }
 
 int prollyBtCursorCount(sqlite3 *db, BtCursor *pCur, i64 *pnEntry){
+  struct TableEntry *pScratch;
+  ProllyHash live;
   int rc;
   (void)db;
-  rc = flushPendingForCount(pCur);
+  rc = flushPendingForCount(pCur, &pScratch, &live);
   if( rc!=SQLITE_OK ) return rc;
-  return countTreeEntries(pCur->pBtree, pCur->pgnoRoot, pnEntry);
+  rc = countTreeEntries(pCur->pBtree, pCur->pgnoRoot, pnEntry);
+  if( pScratch ) pScratch->root = live;
+  return rc;
 }
 
 int prollyBtCursorCountRange(
@@ -452,12 +471,16 @@ int prollyBtCursorCountRange(
   i64 iUpper,
   i64 *pnEntry
 ){
+  struct TableEntry *pScratch;
+  ProllyHash live;
   int rc;
   (void)db;
-  rc = flushPendingForCount(pCur);
+  rc = flushPendingForCount(pCur, &pScratch, &live);
   if( rc!=SQLITE_OK ) return rc;
-  return countTreeIntRange(pCur->pBtree, pCur->pgnoRoot,
-                           iLower, iUpper, pnEntry);
+  rc = countTreeIntRange(pCur->pBtree, pCur->pgnoRoot,
+                         iLower, iUpper, pnEntry);
+  if( pScratch ) pScratch->root = live;
+  return rc;
 }
 
 int prollyBtCursorCountIndexRange(
@@ -467,12 +490,16 @@ int prollyBtCursorCountIndexRange(
   UnpackedRecord *pUpper,
   i64 *pnEntry
 ){
+  struct TableEntry *pScratch;
+  ProllyHash live;
   int rc;
   (void)db;
   if( pCur->curIntKey ) return SQLITE_NOTFOUND;
-  rc = flushPendingForCount(pCur);
+  rc = flushPendingForCount(pCur, &pScratch, &live);
   if( rc!=SQLITE_OK ) return rc;
-  return countTreeBlobPrefixRange(pCur, pLower, pUpper, pnEntry);
+  rc = countTreeBlobPrefixRange(pCur, pLower, pUpper, pnEntry);
+  if( pScratch ) pScratch->root = live;
+  return rc;
 }
 
 int sqlite3BtreeCount(sqlite3 *db, BtCursor *pCur, i64 *pnEntry){
