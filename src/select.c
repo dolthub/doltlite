@@ -5592,7 +5592,9 @@ static Table *isSimpleCount(Select *p, AggInfo *pAggInfo){
 }
 
 #ifdef DOLTLITE_PROLLY
-static int exprIsRowidOfTable(Expr *pExpr, Table *pTab){
+/* These match a column of one FROM item, by cursor. The same Table under
+** another cursor is an outer reference, constant for the whole count. */
+static int exprIsRowidOfTable(Expr *pExpr, Table *pTab, int iCur){
   while( pExpr && (pExpr->op==TK_UPLUS || pExpr->op==TK_COLLATE) ){
     pExpr = pExpr->pLeft;
   }
@@ -5600,10 +5602,11 @@ static int exprIsRowidOfTable(Expr *pExpr, Table *pTab){
       && pExpr->op==TK_COLUMN
       && ExprUseYTab(pExpr)
       && pExpr->y.pTab==pTab
+      && pExpr->iTable==iCur
       && (pExpr->iColumn<0 || pExpr->iColumn==pTab->iPKey);
 }
 
-static int exprIsKnownNotNullForTable(Expr *pExpr, Table *pTab){
+static int exprIsKnownNotNullForTable(Expr *pExpr, Table *pTab, int iCur){
   while( pExpr && (pExpr->op==TK_UPLUS || pExpr->op==TK_COLLATE) ){
     pExpr = pExpr->pLeft;
   }
@@ -5612,6 +5615,7 @@ static int exprIsKnownNotNullForTable(Expr *pExpr, Table *pTab){
   if( (pExpr->op==TK_COLUMN || pExpr->op==TK_AGG_COLUMN)
    && ExprUseYTab(pExpr)
    && pExpr->y.pTab==pTab
+   && pExpr->iTable==iCur
   ){
     if( pExpr->iColumn<0 || pExpr->iColumn==pTab->iPKey ) return 1;
     if( pExpr->iColumn>=0
@@ -5624,7 +5628,7 @@ static int exprIsKnownNotNullForTable(Expr *pExpr, Table *pTab){
   return 0;
 }
 
-static int exprColumnOfTable(Expr *pExpr, Table *pTab){
+static int exprColumnOfTable(Expr *pExpr, Table *pTab, int iCur){
   while( pExpr && (pExpr->op==TK_UPLUS || pExpr->op==TK_COLLATE) ){
     pExpr = pExpr->pLeft;
   }
@@ -5632,6 +5636,7 @@ static int exprColumnOfTable(Expr *pExpr, Table *pTab){
    && (pExpr->op==TK_COLUMN || pExpr->op==TK_AGG_COLUMN)
    && ExprUseYTab(pExpr)
    && pExpr->y.pTab==pTab
+   && pExpr->iTable==iCur
   ){
     return pExpr->iColumn;
   }
@@ -5722,7 +5727,7 @@ static Table *isSimpleRowidRangeCount(
   assert( !IsView(pTab) );
   if( !IsOrdinaryTable(pTab) || !HasRowid(pTab) ) return 0;
   if( rangeCountTableUsesOrig(pParse, pTab) ) return 0;
-  if( !exprIsRowidOfTable(p->pWhere->pLeft, pTab) ) return 0;
+  if( !exprIsRowidOfTable(p->pWhere->pLeft, pTab, pSrc->iCursor) ) return 0;
   *ppLow = p->pWhere->x.pList->a[0].pExpr;
   *ppHigh = p->pWhere->x.pList->a[1].pExpr;
   lowOk = sqlite3ExprIsInteger(*ppLow, &dummy, 0, 0);
@@ -5741,7 +5746,7 @@ static Table *isSimpleRowidRangeCount(
   pArgs = ExprUseXList(pExpr) ? pExpr->x.pList : 0;
   if( pArgs
    && pArgs->nExpr>0
-   && !exprIsKnownNotNullForTable(pArgs->a[0].pExpr, pTab)
+   && !exprIsKnownNotNullForTable(pArgs->a[0].pExpr, pTab, pSrc->iCursor)
   ){
     return 0;
   }
@@ -5798,7 +5803,7 @@ static Index *isSimpleIndexRangeCount(
   ){
     return 0;
   }
-  iColumn = exprColumnOfTable(p->pWhere->pLeft, pTab);
+  iColumn = exprColumnOfTable(p->pWhere->pLeft, pTab, pSrc->iCursor);
   if( iColumn<0 ) return 0;
   *ppLow = p->pWhere->x.pList->a[0].pExpr;
   *ppHigh = p->pWhere->x.pList->a[1].pExpr;
@@ -5845,9 +5850,10 @@ static Index *isSimpleIndexRangeCount(
   if( ExprHasProperty(pExpr, EP_Distinct|EP_WinFunc) ) return 0;
   pArgs = ExprUseXList(pExpr) ? pExpr->x.pList : 0;
   if( pArgs && pArgs->nExpr>0 ){
-    iArgColumn = exprColumnOfTable(pArgs->a[0].pExpr, pTab);
+    iArgColumn = exprColumnOfTable(pArgs->a[0].pExpr, pTab,
+                                   pSrc->iCursor);
     if( iArgColumn!=iColumn
-     && !exprIsKnownNotNullForTable(pArgs->a[0].pExpr, pTab)
+     && !exprIsKnownNotNullForTable(pArgs->a[0].pExpr, pTab, pSrc->iCursor)
     ){
       return 0;
     }
