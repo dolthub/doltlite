@@ -62,6 +62,7 @@ struct BlameCursor {
   ** key, so stored bytes no longer decide equality and the diff walk cannot
   ** stand in for the per-row comparison. */
   u8 rebuiltKeyVals;
+  u8 changedLayout;
 };
 
 
@@ -300,6 +301,7 @@ static void blameFreeRows(BlameCursor *c){
   c->nRows = 0;
   c->nAlloc = 0;
   c->rebuiltKeyVals = 0;
+  c->changedLayout = 0;
 }
 
 static int blameCollectLiveRows(
@@ -543,6 +545,7 @@ static int blameCompareByDiff(
   u8 curFlags,
   const ProllyHash *pCommitHash,
   const DoltliteCommit *pCommit,
+  DoltliteDiffLayout *pLayout,
   int *pDone
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -553,15 +556,19 @@ static int blameCompareByDiff(
 
   *pDone = 0;
 
-  rc = prollyDiffIterOpen(&iter, cs, pCache, pRefRoot, pCurRoot,
-                          refFlags, curFlags);
-  if( rc!=SQLITE_OK ) return rc;
+  rc = prollyDiffIterOpenCompare(&iter, cs, pCache, pRefRoot, pCurRoot,
+          refFlags, curFlags,
+          pLayout->nSlot ? doltliteDiffSharedValuesEqual : 0, pLayout);
+  if( rc!=SQLITE_OK ){
+    prollyDiffIterClose(&iter);
+    return rc;
+  }
   while( pCur->nUnresolved>0 ){
     ProllyDiffChange *pChange = 0;
     BlameRow *r;
     rc = prollyDiffIterStep(&iter, &pChange);
     if( rc!=SQLITE_ROW || !pChange ) break;
-    if( nBudget-- <= 0 ){
+    if( !pCur->changedLayout && nBudget-- <= 0 ){
       prollyDiffIterClose(&iter);
       return SQLITE_OK;
     }
@@ -577,12 +584,39 @@ static int blameCompareByDiff(
   return rc;
 }
 
+static int blameLoadDiffLayout(
+  sqlite3 *db,
+  const char *zTable,
+  const ProllyHash *pRefCat,
+  const ProllyHash *pRefSchema,
+  const ProllyHash *pCurCat,
+  const ProllyHash *pCurSchema,
+  DoltliteDiffLayout *pLayout
+){
+  DoltliteSideCols from = {0}, to = {0};
+  DoltliteColInfo declared = {0};
+  int rc = doltliteSideColsLoad(db, pRefCat, pRefSchema, zTable,
+                                &declared, 1, &from);
+  if( rc==SQLITE_OK ){
+    rc = doltliteSideColsLoad(db, pCurCat, pCurSchema, zTable,
+                              &declared, 1, &to);
+  }
+  if( rc==SQLITE_OK && from.valid && to.valid ){
+    rc = doltliteDiffLayoutInit(pLayout, &from.ci, &to.ci);
+  }
+  doltliteSideColsClear(&from);
+  doltliteSideColsClear(&to);
+  return rc;
+}
+
 static int blameCompareAgainstRef(
   sqlite3 *db,
   BlameCursor *pCur,
   const char *zTableName,
   const ProllyHash *pCurRoot,
   u8 curFlags,
+  const ProllyHash *pCurCatHash,
+  const ProllyHash *pCurSchemaHash,
   const ProllyHash *pRefCatHash,
   const ProllyHash *pCommitHash,
   const DoltliteCommit *pCommit
@@ -590,7 +624,8 @@ static int blameCompareAgainstRef(
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
   ProllyCursor refCur;
-  ProllyHash refRoot;
+  ProllyHash refRoot, refSchemaHash;
+  DoltliteDiffLayout layout = {0};
   u8 refFlags = 0;
   int haveRef = 0;
   int refCurOpen = 0;
@@ -601,7 +636,7 @@ static int blameCompareAgainstRef(
 
   if( pRefCatHash && !prollyHashIsEmpty(pRefCatHash) ){
     rc = doltliteLoadTableRootByName(db, pRefCatHash, zTableName,
-                                     &refRoot, &refFlags, 0);
+                                     &refRoot, &refFlags, &refSchemaHash);
     if( rc==SQLITE_OK ) haveRef = 1;
     else if( rc==SQLITE_NOTFOUND ){
       rc = doltliteVtabMapChunkSourceError(pCur->base.pVtab, db, rc, SQLITE_OK);
@@ -611,21 +646,28 @@ static int blameCompareAgainstRef(
     }
   }
 
+  if( haveRef && pCurRoot && curFlags==refFlags
+   && prollyHashCompare(&refSchemaHash, pCurSchemaHash)!=0 ){
+    rc = blameLoadDiffLayout(db, zTableName, pRefCatHash, &refSchemaHash,
+                             pCurCatHash, pCurSchemaHash, &layout);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
   if( haveRef && pCurRoot
    && curFlags==refFlags
+   && !layout.nSlot
    && prollyHashCompare(pCurRoot, &refRoot)==0 ){
     return SQLITE_OK;
   }
 
-  /* Stored bytes decide equality here exactly as they do for the per-row
-  ** comparison below, so the diff reaches the same verdict for every key it
-  ** reports and reports every key whose value moved. Tables whose records
-  ** were rebuilt from the key compare on bytes the trees do not hold, and a
-  ** missing current root has nothing to diff against. */
-  if( haveRef && pCurRoot && !pCur->rebuiltKeyVals ){
+  /* After crossing a layout change the fallback's working records may
+  ** use different slots than the historical pair. */
+  if( layout.nSlot ) pCur->changedLayout = 1;
+  if( haveRef && pCurRoot && (!pCur->rebuiltKeyVals || pCur->changedLayout) ){
     int done = 0;
     rc = blameCompareByDiff(db, pCur, &refRoot, refFlags,
-                            pCurRoot, curFlags, pCommitHash, pCommit, &done);
+                pCurRoot, curFlags, pCommitHash, pCommit, &layout, &done);
+    doltliteDiffLayoutClear(&layout);
     if( rc!=SQLITE_OK ) return rc;
     if( done ) return SQLITE_OK;
     if( pCur->nUnresolved<=0 ) return SQLITE_OK;
@@ -780,7 +822,7 @@ static int blameWalk(
 
   while( !prollyHashIsEmpty(&walk) && blameUnresolvedCount(pCur)>0 ){
     DoltliteCommit commit;
-    ProllyHash curTableRoot;
+    ProllyHash curTableRoot, curSchemaHash;
     u8 curFlags = 0;
     int haveCurTable = 0;
 
@@ -789,7 +831,7 @@ static int blameWalk(
     if( rc!=SQLITE_OK ) return rc;
 
     rc = doltliteLoadTableRootByName(db, &commit.catalogHash, zTableName,
-                                     &curTableRoot, &curFlags, 0);
+                                     &curTableRoot, &curFlags, &curSchemaHash);
     if( rc==SQLITE_OK ) haveCurTable = 1;
     else if( rc==SQLITE_NOTFOUND ){
       rc = doltliteVtabMapChunkSourceError(pCur->base.pVtab, db, rc, SQLITE_OK);
@@ -818,6 +860,7 @@ static int blameWalk(
           rc = blameCompareAgainstRef(db, pCur, zTableName,
                                       &curTableRoot,
                                       curFlags,
+                                      &commit.catalogHash, &curSchemaHash,
                                       &baseCatHash,
                                       &walk, &commit);
         }
@@ -829,6 +872,7 @@ static int blameWalk(
         rc = blameCompareAgainstRef(db, pCur, zTableName,
                                     &curTableRoot,
                                     curFlags,
+                                    &commit.catalogHash, &curSchemaHash,
                                     0, &walk, &commit);
         if( rc!=SQLITE_OK ){
           doltliteCommitClear(&commit);
@@ -844,6 +888,7 @@ static int blameWalk(
           rc = blameCompareAgainstRef(db, pCur, zTableName,
                                       haveCurTable ? &curTableRoot : 0,
                                       curFlags,
+                                      &commit.catalogHash, &curSchemaHash,
                                       &parentCatHash,
                                       &walk, &commit);
         }
@@ -855,6 +900,7 @@ static int blameWalk(
         rc = blameCompareAgainstRef(db, pCur, zTableName,
                                     &curTableRoot,
                                     curFlags,
+                                    &commit.catalogHash, &curSchemaHash,
                                     0, &walk, &commit);
         if( rc!=SQLITE_OK ){
           doltliteCommitClear(&commit);
@@ -1028,7 +1074,7 @@ static int bmFilter(sqlite3_vtab_cursor *pCursor,
   ProllyHash headHash;
   ProllyHash headCatHash;
   ProllyHash workingCatHash;
-  ProllyHash tableRoot;
+  ProllyHash tableRoot, schemaHash;
   u8 tableFlags = 0;
   int rc;
   DoltlitePkRange pkRange;
@@ -1078,7 +1124,7 @@ static int bmFilter(sqlite3_vtab_cursor *pCursor,
     rc = doltliteResolveCatalogHashForRef(db, "WORKING", &workingCatHash);
     if( rc==SQLITE_OK ){
       rc = doltliteLoadTableRootByName(db, &workingCatHash, v->zTableName,
-                                       &tableRoot, &tableFlags, 0);
+                                       &tableRoot, &tableFlags, &schemaHash);
     }
     if( rc!=SQLITE_OK ){
       sqlite3_free(pPkBlob);
@@ -1097,6 +1143,7 @@ static int bmFilter(sqlite3_vtab_cursor *pCursor,
   }
   c->nUnresolved = c->nRows;
   rc = blameCompareAgainstRef(db, c, v->zTableName, &tableRoot, tableFlags,
+                               &workingCatHash, &schemaHash,
                                &headCatHash, 0, 0);
   if( rc!=SQLITE_OK ){ blameFreeRows(c); return rc; }
   {

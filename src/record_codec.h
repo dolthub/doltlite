@@ -131,6 +131,21 @@ void doltliteResultUserCol(sqlite3_context *ctx,
 int doltliteFieldValuesEqual(int aType, const u8 *pA, int nA, int aOff,
                              int bType, const u8 *pB, int nB, int bOff);
 
+typedef struct DoltliteDiffLayout DoltliteDiffLayout;
+struct DoltliteDiffLayout {
+  struct DoltliteDiffSlot {
+    int iFrom;
+    int iTo;
+  } *aSlot;
+  int nSlot;
+};
+
+int doltliteDiffLayoutInit(DoltliteDiffLayout*, const DoltliteColInfo*,
+                           const DoltliteColInfo*);
+void doltliteDiffLayoutClear(DoltliteDiffLayout*);
+int doltliteDiffSharedValuesEqual(void*, const u8*, int, const u8*, int, int*);
+int doltliteDiffRecordsEqual(void*, const u8*, int, const u8*, int, int*);
+
 /* A SQLite value to be encoded into a record. eType is one of the
 ** SQLITE_* type codes; i/r/p+n carry the integer, real and text/blob
 ** payloads respectively. */

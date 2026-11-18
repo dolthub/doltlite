@@ -86,4 +86,52 @@ foreach {name sql msg} {
   do_execsql_test gone.$name.integrity {PRAGMA integrity_check} ok
 }
 
+foreach {layout pk} {rowid INTEGER clustered INT} {
+  foreach shape {equal-root mixed} {
+    reset_db
+    execsql "CREATE TABLE t(id $pk PRIMARY KEY, a INT, b INT)"
+    execsql {INSERT INTO t VALUES(1,5,NULL)}
+    if {$shape eq "mixed"} {execsql {INSERT INTO t VALUES(2,6,7),(3,NULL,NULL)}}
+    execsql {
+      SELECT dolt_commit('-Am','before');
+      ALTER TABLE t DROP COLUMN a;
+      UPDATE t SET b=5 WHERE id=1;
+      SELECT dolt_commit('-Am','after');
+    }
+    set diffRows {1 NULL 5 modified}
+    set blameRows {1 after}
+    set modified 1
+    set unmodified 0
+    if {$shape eq "mixed"} {
+      lappend diffRows 2 7 7 modified
+      lappend blameRows 2 before 3 before
+      incr modified
+      incr unmodified
+    }
+    set name dropped-slot-$layout-$shape
+    do_execsql_test $name.diff {
+      SELECT from_id, quote(from_b), quote(to_b), diff_type
+      FROM dolt_diff_t('HEAD~1','HEAD') ORDER BY from_id;
+    } $diffRows
+    do_execsql_test $name.reverse {
+      SELECT to_id, quote(to_b), quote(from_b), diff_type
+      FROM dolt_diff_t('HEAD','HEAD~1') ORDER BY to_id;
+    } $diffRows
+    do_execsql_test $name.history {
+      SELECT from_id, quote(from_b), quote(to_b), diff_type
+      FROM dolt_diff_t WHERE to_commit=dolt_hashof('HEAD') ORDER BY from_id;
+    } $diffRows
+    do_execsql_test $name.stat {
+      SELECT rows_unmodified, rows_modified, cells_modified
+      FROM dolt_diff_stat('HEAD~1','HEAD','t');
+    } [list $unmodified $modified 1]
+    do_execsql_test $name.summary {
+      SELECT data_change, schema_change FROM dolt_diff_summary('HEAD~1','HEAD','t');
+    } {1 1}
+    do_execsql_test $name.blame {
+      SELECT id, message FROM dolt_blame_t ORDER BY id;
+    } $blameRows
+  }
+}
+
 finish_test
