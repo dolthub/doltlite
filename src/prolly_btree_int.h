@@ -344,11 +344,14 @@ struct Btree {
   u8 bMasterRootChangedTxn;
   u8 bTxnWrote;
   u8 bTxnCheckout;
-  /* Branches an in-transaction checkout left with uncommitted writes, each
-  ** name between newlines, and the catalog the session arrived on. */
+  /* Branches an in-transaction checkout left with uncommitted writes, and
+  ** the catalog the session arrived on. Each entry is the name, a tab, the
+  ** hex catalog the branch had before this transaction wrote to it, and a
+  ** newline. */
   char *zTxnLeftDirty;
   char *zTxnLeaving;
   u8 bTxnLeavingWrote;
+  ProllyHash txnLeavingBase;
   ProllyHash txnArrivalCatalog;
   ProllyHash txnArrivalStaged;
   u8 bFilterSchemaPlaceholders;
