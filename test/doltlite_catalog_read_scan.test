@@ -1,0 +1,43 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-catalog-read-scan
+
+# A version-control read serializes the working catalog while another cursor
+# sits between its lower-bound seek and its range test, in a transaction
+# with pending edits on that cursor's index.
+do_execsql_test setup {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+  CREATE INDEX ta ON t(a);
+  INSERT INTO t VALUES(1,1),(2,2),(3,3);
+  SELECT length(dolt_commit('-Am','base'));
+} {40}
+
+foreach {name sub expect} {
+  status  {SELECT count(*)+5 FROM dolt_status}                     {1 2 3}
+  hashof  {SELECT length(dolt_hashof_table('t'))}                  {1 2 3 9}
+  hashdb  {SELECT length(dolt_hashof_db())}                        {1 2 3 9}
+  diff    {SELECT count(*)+5 FROM dolt_diff_t}                     {1 2 3}
+  stat    {SELECT count(*)+5 FROM dolt_diff_stat('HEAD','WORKING')} {1 2 3}
+  blame   {SELECT count(*)+5 FROM dolt_blame_t}                    {1 2 3}
+} {
+  do_test bound-$name {
+    db eval {BEGIN; INSERT INTO t VALUES(9,9);}
+    set rows [db eval "SELECT a FROM t WHERE a>0 AND a < ($sub)"]
+    db eval ROLLBACK
+    set rows
+  } $expect
+}
+
+do_test same-hash {
+  db eval {BEGIN; INSERT INTO t VALUES(9,9); UPDATE t SET a=a+10 WHERE id=2;}
+  set inScan [db eval {
+    SELECT DISTINCT dolt_hashof_table('t') FROM t WHERE a>0 AND a<100
+  }]
+  set alone [db eval {SELECT dolt_hashof_table('t')}]
+  db eval COMMIT
+  set after [db eval {SELECT dolt_hashof_table('t')}]
+  list [expr {$inScan eq $alone}] [expr {$alone eq $after}] \
+       [db eval {SELECT a FROM t ORDER BY a; PRAGMA integrity_check}]
+} {1 1 {1 3 9 12 ok}}
+
+finish_test
