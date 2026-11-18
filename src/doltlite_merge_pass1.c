@@ -398,6 +398,15 @@ static int mergePass1ReindexIfTheirRowsMoved(
   return mergeAppendReindexName(c->pazReindex, c->pnReindex, zIndex);
 }
 
+static int mergeSequenceThreeWay(
+  sqlite3 *db,
+  const ProllyHash *pAnc,
+  const ProllyHash *pOurs,
+  const ProllyHash *pTheirs,
+  u8 flags,
+  ProllyHash *pRoot
+);
+
 static int mergePass1OursAdded(
   MergePass1Ctx *c,
   int iOurs,
@@ -417,6 +426,18 @@ static int mergePass1OursAdded(
      && (strcmp(zName, "sqlite_stat1")==0
       || strcmp(zName, "sqlite_stat4")==0) ){
       c->aMerged[(*c->pnMerged)++] = c->aOurs[iOurs];
+      return SQLITE_OK;
+    }
+    /* Each side made its first AUTOINCREMENT table. The counters are for
+    ** different tables, so merge them by name from an empty ancestor. */
+    if( zName && strcmp(zName, "sqlite_sequence")==0 ){
+      struct TableEntry seq = c->aOurs[iOurs];
+      ProllyHash noAnc;
+      memset(&noAnc, 0, sizeof(noAnc));
+      rc = mergeSequenceThreeWay(c->db, &noAnc, &c->aOurs[iOurs].root,
+                                 &theirsEntry->root, seq.flags, &seq.root);
+      if( rc!=SQLITE_OK ) return rc;
+      c->aMerged[(*c->pnMerged)++] = seq;
       return SQLITE_OK;
     }
     if( mergePass1AddedSchemaMatches(
