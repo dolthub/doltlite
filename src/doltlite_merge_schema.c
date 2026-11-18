@@ -461,12 +461,53 @@ static const char *schemaColumnDefinitionTail(const char *zDef){
   return schemaSkipTrivia(zToken + n, zEnd);
 }
 
+static int schemaTokenTextIs(const char *z, int n, const char *zText);
+static int schemaTokenNamesColumn(const char *z, int n, const char *zName){
+  if( n>=2 && (*z=='"' || *z=='`' || *z=='[') ){
+    z++;
+    n -= 2;
+  }
+  return schemaTokenTextIs(z, n, zName);
+}
+
+/* A renamed column's own CHECK names it, so the rename rewrites the
+** definition. Equal when the only difference is each column naming itself. */
+static int schemaTailsEquivalentRenamed(
+  const char *zL, const char *zNameL,
+  const char *zR, const char *zNameR
+){
+  const char *zLEnd = zL + strlen(zL);
+  const char *zREnd = zR + strlen(zR);
+  while( 1 ){
+    int lType, lLen, rType, rLen;
+    zL = schemaSkipTrivia(zL, zLEnd);
+    zR = schemaSkipTrivia(zR, zREnd);
+    if( zL==zLEnd || zR==zREnd ) return zL==zLEnd && zR==zREnd;
+    if( schemaGetToken(zL, zLEnd, &lType, &lLen)!=SQLITE_OK
+     || schemaGetToken(zR, zREnd, &rType, &rLen)!=SQLITE_OK ){
+      return 0;
+    }
+    if( !schemaTokensEquivalent(zL, zL+lLen, zR, zR+rLen)
+     && !(lType==TK_ID && rType==TK_ID
+          && schemaTokenNamesColumn(zL, lLen, zNameL)
+          && schemaTokenNamesColumn(zR, rLen, zNameR)) ){
+      return 0;
+    }
+    zL += lLen;
+    zR += rLen;
+  }
+}
+
 int parsedColumnDefinitionsMatch(
   const ParsedColumn *pA,
   const ParsedColumn *pB
 ){
-  return schemaDefinitionsEquivalent(schemaColumnDefinitionTail(pA->zDef),
-                                     schemaColumnDefinitionTail(pB->zDef));
+  const char *zA = schemaColumnDefinitionTail(pA->zDef);
+  const char *zB = schemaColumnDefinitionTail(pB->zDef);
+  if( schemaDefinitionsEquivalent(zA, zB) ) return 1;
+  if( !pA->zName || !pB->zName
+   || sqlite3_stricmp(pA->zName, pB->zName)==0 ) return 0;
+  return schemaTailsEquivalentRenamed(zA, pA->zName, zB, pB->zName);
 }
 
 static const char *schemaFindToken(
