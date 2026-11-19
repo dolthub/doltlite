@@ -441,6 +441,7 @@ struct CsWorkingSetMask {
   u8 bMasked;
 };
 int chunkStoreCaptureWorkingSets(ChunkStore *cs, CsWorkingSetMask **pa, int *pn);
+int chunkStoreWorkingSetsToLand(ChunkStore *cs, u8 **paLands);
 int chunkStoreMaskDeferredWorkingSets(ChunkStore *cs, CsWorkingSetMask *a,
                                       int n, int *pnMasked);
 void chunkStoreUnmaskWorkingSets(ChunkStore *cs, CsWorkingSetMask *a, int n);

@@ -241,6 +241,43 @@ int chunkStoreMaskDeferredWorkingSets(
   return rc;
 }
 
+/* *paLands[i] is 0 for each branch whose working set the committed refs
+** already hold: publishing the refs does not land it again. */
+int chunkStoreWorkingSetsToLand(ChunkStore *cs, u8 **paLands){
+  ChunkStore view;
+  u8 *data = 0;
+  u8 *a;
+  int nData = 0;
+  int i, rc;
+  *paLands = 0;
+  if( cs->refs.nBranches<=0 ) return SQLITE_OK;
+  a = sqlite3_malloc64(cs->refs.nBranches);
+  if( !a ) return SQLITE_NOMEM;
+  memset(a, 1, cs->refs.nBranches);
+  *paLands = a;
+  if( prollyHashIsEmpty(&cs->refs.committedRefsHash) ) return SQLITE_OK;
+  rc = chunkStoreGet(cs, &cs->refs.committedRefsHash, &data, &nData);
+  if( rc!=SQLITE_OK ) return SQLITE_OK;
+  memset(&view, 0, sizeof(view));
+  rc = csDeserializeRefsIntoTemp(&view, data, nData);
+  sqlite3_free(data);
+  for(i=0; rc==SQLITE_OK && i<cs->refs.nBranches; i++){
+    const BranchRef *p = &cs->refs.aBranches[i];
+    int j = i;
+    if( !p->zName ) continue;
+    if( j>=view.refs.nBranches || !view.refs.aBranches[j].zName
+     || strcmp(view.refs.aBranches[j].zName, p->zName)!=0 ){
+      j = findBranchIdx(&view, p->zName);
+    }
+    if( j>=0 && prollyHashCompare(&view.refs.aBranches[j].workingSetHash,
+                                  &p->workingSetHash)==0 ){
+      a[i] = 0;
+    }
+  }
+  csFreeRefsState(&view);
+  return SQLITE_OK;
+}
+
 static int csWsTracks(const CsWsSession *w, const char *zBranch);
 
 /* The commit in between published the masked value and ended the batch, so
