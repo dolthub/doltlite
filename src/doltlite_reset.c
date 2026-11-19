@@ -463,9 +463,11 @@ static int doltlitePreserveUntrackedOnHardReset(
   int nStagedSchema = 0;
   int nTargetSchema = 0;
   int nUntracked = 0;
+  int nRenamed = 0;
   int stagedSchemas = 0;
   int preserveSchemas = 0;
   char **azUntracked = 0;
+  char **azRenamed = 0;
   sqlite3_stmt *pStmt = 0;
   int j, k;
   int rc;
@@ -483,14 +485,31 @@ static int doltlitePreserveUntrackedOnHardReset(
       break;
     }
   }
+  /* Read once: each dolt_status scan serializes the whole catalog. */
+  if( rc==SQLITE_OK ){
+    rc = sqlite3_prepare_v2(db,
+        "SELECT table_name FROM dolt_status WHERE status='renamed'",
+        -1, &pStmt, 0);
+  }
+  if( rc==SQLITE_OK ){
+    while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
+      const char *zPair = (const char*)sqlite3_column_text(pStmt, 0);
+      char **aNew = sqlite3_realloc(azRenamed,
+          (nRenamed+1)*(int)sizeof(char*));
+      if( !aNew ){ rc = SQLITE_NOMEM; break; }
+      azRenamed = aNew;
+      azRenamed[nRenamed] = sqlite3_mprintf("%s", zPair ? zPair : "");
+      if( !azRenamed[nRenamed++] ){ rc = SQLITE_NOMEM; break; }
+    }
+    if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+    sqlite3_finalize(pStmt);
+    pStmt = 0;
+  }
   if( rc==SQLITE_OK ){
     rc = sqlite3_prepare_v2(db,
         "SELECT m.name, m.type FROM sqlite_master AS m "
         "WHERE m.type IN ('table','view','trigger') "
-        "AND (m.name NOT LIKE 'sqlite_%' OR m.name='sqlite_sequence') "
-        "AND (m.type!='table' OR NOT EXISTS (SELECT 1 FROM dolt_status AS s "
-        "WHERE s.status='renamed' AND "
-        "substr(s.table_name, -(length(m.name)+4))=' -> ' || m.name))",
+        "AND (m.name NOT LIKE 'sqlite_%' OR m.name='sqlite_sequence')",
         -1, &pStmt, 0);
   }
   if( rc==SQLITE_OK ){
@@ -504,6 +523,13 @@ static int doltlitePreserveUntrackedOnHardReset(
         if( !stagedSchemas ) preserveSchemas = 1;
         continue;
       }
+      for(k=0; k<nRenamed; k++){
+        int nPair = sqlite3Strlen30(azRenamed[k]);
+        int nName = sqlite3Strlen30(zName);
+        if( nPair>=nName+4 && strcmp(&azRenamed[k][nPair-nName], zName)==0
+         && memcmp(&azRenamed[k][nPair-nName-4], " -> ", 4)==0 ) break;
+      }
+      if( k<nRenamed ) continue;
       for(k=0; k<nStaged; k++){
         if( aStaged[k].zName && strcmp(aStaged[k].zName, zName)==0 ){
           inStaged = 1;
@@ -724,6 +750,7 @@ static int doltlitePreserveUntrackedOnHardReset(
   if( pStmt ) sqlite3_finalize(pStmt);
   for(j=0; j<nUntracked; j++) sqlite3_free(azUntracked[j]);
   sqlite3_free(azUntracked);
+  doltliteFreeNameList(azRenamed, nRenamed);
   doltliteFreeCatalog(aStaged, nStaged);
   freeSchemaEntries(aStagedSchema, nStagedSchema);
   freeSchemaEntries(aTargetSchema, nTargetSchema);

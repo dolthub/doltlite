@@ -1,0 +1,50 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-reset-hard-many-tables
+
+# dolt_reset('--hard') looks for untracked tables to keep. That pass must
+# not read the catalog once per table: its chunk reads stay flat as the
+# table count grows.
+proc stat {name} {
+  db one {SELECT value FROM dolt_engine_stats WHERE name=$name}
+}
+proc many_setup {n} {
+  reset_db
+  db eval BEGIN
+  for {set i 0} {$i<$n} {incr i} {
+    db eval "CREATE TABLE t${i}(id INTEGER PRIMARY KEY, v)"
+  }
+  db eval {
+    COMMIT;
+    SELECT dolt_commit('-Am','tables');
+    INSERT INTO t1 VALUES(1,1);
+    ALTER TABLE t2 RENAME TO moved;
+    CREATE TABLE extra(q);
+    INSERT INTO extra VALUES(7);
+  }
+}
+
+foreach n {50 400} {
+  do_test reset-$n {
+    many_setup $n
+    set before [stat chunk_read]
+    db eval {SELECT dolt_reset('--hard')}
+    set reads($n) [expr {[stat chunk_read]-$before}]
+    db eval {
+      SELECT count(*) FROM sqlite_master WHERE name IN ('t2','moved','extra');
+      SELECT count(*) FROM t1;
+      SELECT q FROM extra;
+      SELECT table_name, status FROM dolt_status;
+    }
+  } {2 0 7 extra {new table}}
+
+  do_test names-$n {
+    db eval {SELECT name FROM sqlite_master WHERE name IN ('t2','moved','extra') ORDER BY 1}
+  } {extra t2}
+}
+
+do_test reads-flat {
+  expr {$reads(400) < $reads(50)*2 + 50}
+} {1}
+
+finish_test
