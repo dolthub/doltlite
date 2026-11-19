@@ -142,4 +142,26 @@ do_test 7.1 {
 db close
 db2 close
 
+set i 0
+foreach uri {
+  file:dlshm8a?mode=memory&cache=shared
+  file:/dlshm8b?vfs=memdb
+} {
+  incr i
+  do_test 8.$i {
+    sqlite3 db $uri -uri 1
+    sqlite3 db2 $uri -uri 1
+    db eval {
+      CREATE TABLE v(a INTEGER PRIMARY KEY, b);
+      INSERT INTO v VALUES(1,'x'),(2,'y');
+      SELECT dolt_commit('-Am','c1');
+      DELETE FROM v WHERE a=2;
+    }
+    list [catchsql VACUUM] [db2 eval {SELECT * FROM v}] \
+         [db eval {SELECT count(*) FROM dolt_log; PRAGMA integrity_check}]
+  } {{0 {}} {1 x} {2 ok}}
+  db close
+  db2 close
+}
+
 finish_test

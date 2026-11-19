@@ -1373,8 +1373,9 @@ static int doltliteGcCompactStoreWithPhase(
 
   if( !cs ) return SQLITE_OK;
   /* A serialized image has nowhere to build its replacement: every named
-  ** file its VFS opens is the image itself. */
-  if( !chunkFileGetFilename(&cs->file) || cs->isBuffer
+  ** file its VFS opens is the image itself. A shared memory file has no
+  ** directory to rename a replacement into. */
+  if( !chunkFileGetFilename(&cs->file) || cs->isBuffer || cs->isSharedMemory
    || strcmp(chunkFileGetFilename(&cs->file), ":memory:")==0 ){
     return SQLITE_OK;
   }
