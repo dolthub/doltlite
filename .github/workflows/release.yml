@@ -1045,26 +1045,18 @@ jobs:
         cd dist/crate
         cargo publish --allow-dirty
 
-  # from here — build the canonical npm distributables (make -C ext/wasm npm),
-  # stage them with packaging/npm, and npm publish. Requires the NPM_TOKEN
+  # from here — build, pack and test the canonical npm distributables before
+  # publishing the tested archive. Requires the NPM_TOKEN
   # secret: an npm automation token with publish rights to the @dolthub scope.
-  publish-wasm-npm:
-    if: github.event_name != 'workflow_dispatch'
-    needs: release
-    runs-on: ubuntu-latest
+  wasm-npm-candidate:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     env:
       EMSDK_VERSION: 3.1.74
       WABT_VERSION: 1.0.36
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
     - uses: actions/checkout@v4
-
-    - name: Check npm token
-      run: |
-        if [ -z "${NPM_TOKEN}" ]; then
-          echo "NPM_TOKEN is required to publish @dolthub/doltlite-wasm"
-          exit 1
-        fi
 
     - name: Cache Emscripten SDK
       uses: actions/cache@v4
@@ -1104,35 +1096,83 @@ jobs:
 
     - name: Build wasm npm distributables
       run: |
+        if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+          version=${GITHUB_REF_NAME#v}
+        else
+          version=0.0.0-ci
+        fi
+        echo "WASM_PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
         source "$EMSDK/emsdk_env.sh"
         ./configure
         make sqlite3.c sqlite3.h sqlite3ext.h
-        make -C ext/wasm npm
+        make -C ext/wasm DOLTLITE_VERSION="v$version" npm
 
-    - name: Set up Node
-      uses: actions/setup-node@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ runner.os }}-1.65.0
+
+    - name: Install Playwright and Chromium
+      run: |
+        npm install --prefix build/wasm-browser --no-save playwright@1.65.0
+        node build/wasm-browser/node_modules/playwright/cli.js install chromium
+
+    - name: Pack and test the WASM npm candidate
+      run: |
+        bash packaging/npm/assemble.sh "$WASM_PACKAGE_VERSION" dist/npm/stage
+        tarball=$(cd dist/npm/stage && npm pack --silent --pack-destination ..)
+        DOLTLITE_EXPECT_VERSION="v$WASM_PACKAGE_VERSION" \
+          bash packaging/npm/test-package.sh --browser "dist/npm/$tarball"
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: wasm-npm-candidate
+        path: dist/npm/*.tgz
+        if-no-files-found: error
+        compression-level: 0
+
+  publish-wasm-npm:
+    if: github.event_name == 'push'
+    needs: [release, wasm-npm-candidate]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/setup-node@v4
       with:
         node-version: 20
         registry-url: https://registry.npmjs.org
 
-    - name: Stage package
-      run: |
-        VERSION=${GITHUB_REF_NAME#v}
-        bash packaging/npm/assemble.sh "$VERSION" dist/npm
+    - uses: actions/download-artifact@v4
+      with:
+        name: wasm-npm-candidate
+        path: dist/npm
 
-    - name: Publish to npm
-      working-directory: dist/npm
+    - name: Publish the tested tarball to npm
+      shell: bash
       env:
         NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       run: |
-        VERSION=${GITHUB_REF_NAME#v}
-        # Idempotent: skip if this version is already on the registry so a
-        # re-run of the release workflow doesn't fail on a duplicate publish.
-        if npm view "@dolthub/doltlite-wasm@${VERSION}" version >/dev/null 2>&1; then
-          echo "@dolthub/doltlite-wasm@${VERSION} already published; skipping"
-          exit 0
+        : "${NODE_AUTH_TOKEN:?NPM_TOKEN is required to publish @dolthub/doltlite-wasm}"
+        tarballs=(dist/npm/*.tgz)
+        test "${#tarballs[@]}" -eq 1
+        tarball="${tarballs[0]}"
+        spec="@dolthub/doltlite-wasm@${GITHUB_REF_NAME#v}"
+        expected=$(node -e 'console.log("sha512-"+require("node:crypto").createHash("sha512").update(require("node:fs").readFileSync(process.argv[1])).digest("base64"))' "$tarball")
+        published=$(npm view "$spec" dist.integrity --prefer-online 2>/dev/null || true)
+        if [[ -n "$published" ]]; then
+          if [[ "$published" != "$expected" ]]; then
+            echo "::error::$spec is already published with a different tarball"
+            exit 1
+          fi
+          echo "$spec is already published with the tested tarball"
+        else
+          npm publish --access public "$tarball"
         fi
-        npm publish --access public
 
   # ── Build the Swift XCFramework ──────────────────────────
   # Compiles the doltlite amalgamation for the Apple platform slices (iOS,

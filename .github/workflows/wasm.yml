@@ -131,11 +131,13 @@ jobs:
         path: ~/.cache/ms-playwright
         key: playwright-${{ runner.os }}-1.65.0
 
-    - name: Test OPFS SAH pool imports in Chromium
+    - name: Install Playwright and Chromium
       run: |
         npm install --prefix build/wasm-browser --no-save playwright@1.65.0
         node build/wasm-browser/node_modules/playwright/cli.js install chromium
-        node ext/wasm/test-doltlite-opfs-import.mjs
+
+    - name: Test OPFS SAH pool imports in Chromium
+      run: node ext/wasm/test-doltlite-opfs-import.mjs
 
     - name: Test DoltLite wasm file:// remotes
       run: |
@@ -146,9 +148,7 @@ jobs:
         node ext/wasm/test-doltlite-http-remote.mjs
 
     - name: Smoke test the @dolthub/doltlite-wasm npm package
-      run: |
-        chmod +x packaging/npm/assemble.sh packaging/npm/test-package.sh
-        bash packaging/npm/test-package.sh
+      run: bash packaging/npm/test-package.sh --browser
 
     - name: Upload wasm artifacts
       uses: actions/upload-artifact@v4
