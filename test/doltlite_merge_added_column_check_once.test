@@ -1,0 +1,106 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-merge-added-column-check-once
+
+# One side adds a column whose definition carries a CHECK, the other renames
+# a column. The merged CREATE TABLE has the CHECK once, on the added column.
+proc check_setup {add other} {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, c INT);
+    INSERT INTO t VALUES(1,10,1);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('br');
+  }
+  db eval $add
+  db eval {
+    SELECT dolt_commit('-Am','ours');
+    SELECT dolt_checkout('br');
+  }
+  db eval $other
+  db eval {SELECT dolt_commit('-Am','theirs')}
+}
+proc table_sql {} {
+  regsub -all {\s+} [db one {SELECT sql FROM sqlite_master WHERE name='t'}] { } z
+  regsub -all {\( } $z {(} z
+  regsub -all { ?, ?} $z {,} z
+  return $z
+}
+proc count_checks {} {
+  expr {[regexp -all -nocase {CHECK\s*\(} [table_sql]]}
+}
+
+set n 0
+foreach {add nCheck bad} {
+  {ALTER TABLE t ADD COLUMN k INT DEFAULT 1 CHECK(a<1000 OR a IS NULL)} 1
+  {INSERT INTO t(id,a) VALUES(50,5000)}
+
+  {ALTER TABLE t ADD COLUMN k INT DEFAULT 1 CONSTRAINT ck CHECK(a<1000)} 1
+  {INSERT INTO t(id,a) VALUES(50,5000)}
+
+  {ALTER TABLE t ADD COLUMN k INT DEFAULT 1 CHECK(k>0)} 1
+  {INSERT INTO t(id,k) VALUES(50,-1)}
+
+  {ALTER TABLE t ADD COLUMN k INT DEFAULT 1 CHECK(a<1000) CHECK(k>0)} 2
+  {INSERT INTO t(id,a) VALUES(50,5000)}
+} {
+  incr n
+  foreach {dir first} {theirs main ours br} {
+    do_test $n-$dir-merge {
+      check_setup $add {ALTER TABLE t RENAME COLUMN c TO c2}
+      db eval "SELECT dolt_checkout('$first')"
+      set other [expr {$first eq "main" ? "br" : "main"}]
+      db eval "SELECT dolt_merge('$other') IS NOT NULL"
+    } {1}
+
+    do_test $n-$dir-checks {
+      count_checks
+    } $nCheck
+
+    do_test $n-$dir-columns {
+      db eval {SELECT name FROM pragma_table_info('t') ORDER BY cid}
+    } {id a c2 k}
+
+    do_test $n-$dir-enforced {
+      list [catch {db eval $bad} msg] [string match {CHECK constraint failed*} $msg]
+    } {1 1}
+
+    do_test $n-$dir-rows {
+      db eval {
+        INSERT INTO t(id,a,c2) VALUES(60,6,6);
+        SELECT id, a, c2, k FROM t ORDER BY id;
+        PRAGMA integrity_check;
+      }
+    } {1 10 1 1 60 6 6 1 ok}
+  }
+}
+
+do_test merged-sql {
+  check_setup {
+    ALTER TABLE t ADD COLUMN k INT DEFAULT 1 CHECK(a<1000);
+  } {
+    ALTER TABLE t RENAME COLUMN c TO c2;
+  }
+  db eval {
+    SELECT dolt_checkout('main');
+    SELECT dolt_merge('br') IS NOT NULL;
+  }
+  list [count_checks] [table_sql]
+} {1 {CREATE TABLE t(id INTEGER PRIMARY KEY,a INT,c2 INT,k INT DEFAULT 1 CHECK(a<1000))}}
+
+do_test revert-keeps-one {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, c INT);
+    INSERT INTO t VALUES(1,10,1);
+    SELECT dolt_commit('-Am','base');
+    ALTER TABLE t RENAME COLUMN c TO c2;
+    SELECT dolt_commit('-Am','rename');
+    ALTER TABLE t ADD COLUMN k INT DEFAULT 1 CHECK(a<1000 OR a IS NULL);
+    SELECT dolt_commit('-Am','add');
+    SELECT dolt_revert('HEAD~1') IS NOT NULL;
+  }
+  list [count_checks] [db eval {SELECT name FROM pragma_table_info('t') ORDER BY cid}]
+} {1 {id a c k}}
+
+finish_test

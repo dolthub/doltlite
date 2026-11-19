@@ -870,6 +870,24 @@ static int dlOtherFate(const DlCheck *p, DlCheck *aWin, int nWin,
 }
 
 
+/* 1 when zRaw is written in the definition of a column only the other side
+** has and the ancestor lacks: the merge adds that column with its whole
+** definition, so the clause arrives with it. */
+static int dlRidesAddedColumn(
+  const char *zRaw,
+  ParsedColumn *aOth, int nOth,
+  ParsedColumn *aWin, int nWin,
+  ParsedColumn *aAnc, int nAnc
+){
+  int i;
+  for(i=0; zRaw && i<nOth; i++){
+    if( parsedColumnIndexByName(aWin, nWin, aOth[i].zName)>=0
+     || parsedColumnIndexByName(aAnc, nAnc, aOth[i].zName)>=0 ) continue;
+    if( aOth[i].zDef && dlFindClause(aOth[i].zDef, zRaw) ) return 1;
+  }
+  return 0;
+}
+
 /* Compose one-sided defaults and the checks/FKs Dolt keeps.
 ** *pzSql is the winning CREATE, or NULL when nothing changes.
 ** A kept check that names a column the merge drops sets *pbConflict
@@ -1037,7 +1055,10 @@ static int dlComposeRetained(
     }
     if( cls==1 ){
       rc = dlPushRaw(&azDefer, &nDefer, &nDeferAlloc, aCkOth[i].zRaw);
-    }else if( !aCkOth[i].zRaw || !dlFindClause(zWork, aCkOth[i].zRaw) ){
+    }else if( !aCkOth[i].zRaw
+           || (!dlFindClause(zWork, aCkOth[i].zRaw)
+               && !dlRidesAddedColumn(aCkOth[i].zRaw, aOth, nOth,
+                                      aWin, nWin, aAnc, nAnc)) ){
       rc = dlPushRaw(&azSplice, &nSplice, &nSpliceAlloc, aCkOth[i].zRaw);
     }
     if( rc!=SQLITE_OK ) goto done;
