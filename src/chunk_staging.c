@@ -331,6 +331,9 @@ int csGrowWriteBuf(ChunkStore *cs, int nNeeded){
         nNew += nNew / 2;
       }
     }
+    if( nNew > SQLITE_MAX_ALLOCATION_SIZE && nRequired <= SQLITE_MAX_ALLOCATION_SIZE ){
+      nNew = SQLITE_MAX_ALLOCATION_SIZE;
+    }
     pNew = (u8 *)sqlite3_realloc64(cs->staging.pWriteBuf, (sqlite3_uint64)nNew);
     if( pNew == 0 ) return SQLITE_NOMEM;
     cs->staging.pWriteBuf = pNew;
