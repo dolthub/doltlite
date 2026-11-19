@@ -130,7 +130,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: linux-x64
             pkg_arch: amd64
             deb_multiarch: x86_64-linux-gnu
@@ -161,6 +161,10 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+
+    - name: Stamp the engine version
+      shell: bash
+      run: printf 'v%s\n' "${GITHUB_REF_NAME#v}" > .dolt_release_version
 
     - name: Install dependencies (Linux)
       if: runner.os == 'Linux'
@@ -203,6 +207,18 @@ jobs:
       if: runner.os == 'Windows'
       shell: msys2 {0}
       run: bash test/windows_runtime_smoke.sh build
+
+    - name: Verify CLI engine and version
+      shell: bash
+      env:
+        DOLTLITE_EXECUTABLE: build/doltlite${{ matrix.ext }}
+      run: |
+        result=$("$DOLTLITE_EXECUTABLE" :memory: 'SELECT doltlite_engine(), dolt_version();' | tr -d '\r')
+        expected="prolly|v${GITHUB_REF_NAME#v}"
+        if [[ "$result" != "$expected" ]]; then
+          printf 'Expected %s, got %s\n' "$expected" "$result" >&2
+          exit 1
+        fi
 
     - name: Package CLI tools (Unix)
       if: runner.os != 'Windows'
@@ -309,7 +325,7 @@ jobs:
   # actually build") would have caught earlier.
   package-smoke-deb:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Only run when there are real artifacts to install — i.e., on a
     # tag push (where the binaries-linux-x64 artifact will have been
     # produced by `build`). Manual workflow_dispatch runs also produce
