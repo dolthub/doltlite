@@ -1,0 +1,39 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach depth {10 4 2} {
+  reset_db
+  execsql {
+    PRAGMA foreign_keys=ON;
+    CREATE TABLE p(id INTEGER PRIMARY KEY, v);
+    CREATE TABLE c(id INTEGER PRIMARY KEY, pid REFERENCES p(id), u UNIQUE,
+                   n INT NOT NULL DEFAULT 0, CHECK(n>=0));
+    INSERT INTO p VALUES(1,'a'),(2,'b');
+    INSERT INTO c VALUES(1,1,'x',0);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_checkout('-b','other');
+    INSERT INTO c VALUES(2,2,'y',1);
+    SELECT dolt_commit('-Am','other');
+    SELECT dolt_checkout('main');
+    INSERT INTO p VALUES(3,'c');
+    SELECT dolt_commit('-Am','main');
+  }
+  sqlite3_limit db SQLITE_LIMIT_EXPR_DEPTH $depth
+  do_test merge-expr-depth-$depth-merge {
+    list [lindex [catchsql {SELECT dolt_merge('other')}] 0] \
+      [execsql {SELECT count(*) FROM c; SELECT count(*) FROM dolt_constraint_violations}]
+  } {0 {2 0}}
+  do_test merge-expr-depth-$depth-revert {
+    list [lindex [catchsql {SELECT dolt_revert('HEAD')}] 0] \
+      [execsql {SELECT count(*) FROM c}]
+  } {0 1}
+  do_test merge-expr-depth-$depth-cherry-pick {
+    list [lindex [catchsql {SELECT dolt_cherry_pick('other')}] 0] \
+      [execsql {SELECT count(*) FROM c}]
+  } {0 2}
+  do_test merge-expr-depth-$depth-kept {
+    sqlite3_limit db SQLITE_LIMIT_EXPR_DEPTH -1
+  } $depth
+}
+
+finish_test
