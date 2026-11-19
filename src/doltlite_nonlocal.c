@@ -400,7 +400,10 @@ static int nonlocalSync(sqlite3 *db){
   int nDetached = 0;
   int i;
 
-  if( db->init.busy || db->nVdbeExec>0 || db->nDb<1
+  /* A statement stepped while another compiles (a virtual table connecting)
+  ** must not sync: the compile has already resolved names by the old rules
+  ** and would not be redone. The sync after the compile sees the change. */
+  if( db->init.busy || db->nVdbeExec>0 || db->pParse || db->nDb<1
    || !doltliteNonlocalSlot(db) ) return 0;
   /* A checkout unloads the schema. Compiling would load it again, but with
   ** names still redirected by the rules of the branch just left. */

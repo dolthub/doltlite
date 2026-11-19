@@ -1,0 +1,87 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-nonlocal-vtab-first-read
+
+ifcapable !fts5||!rtree {
+  finish_test
+  return
+}
+
+# Arriving on a branch whose dolt_nonlocal_tables rules redirect virtual
+# tables: the first statement there already reads and writes the target's
+# tables, not the branch's own copies.
+proc fresh {} {
+  reset_db
+  db eval {
+    CREATE VIRTUAL TABLE f USING fts5(body);
+    CREATE VIRTUAL TABLE r USING rtree(id,x0,x1);
+    INSERT INTO f(rowid,body) VALUES(1,'alpha');
+    INSERT INTO r VALUES(1,0,1);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_checkout('-b','exp');
+    INSERT INTO dolt_nonlocal_tables VALUES('f','main',NULL,'immediate');
+    INSERT INTO dolt_nonlocal_tables VALUES('r','main',NULL,'immediate');
+    SELECT dolt_commit('-Am','rules');
+    SELECT dolt_checkout('main');
+    INSERT INTO f(rowid,body) VALUES(2,'beta');
+    INSERT INTO r VALUES(2,5,6);
+    SELECT dolt_commit('-Am','main write');
+  }
+}
+
+foreach {name sql expect} {
+  fts5-scan   {SELECT rowid FROM f ORDER BY rowid}        {1 2}
+  fts5-match  {SELECT rowid FROM f WHERE f MATCH 'beta'}  {2}
+  fts5-count  {SELECT count(*) FROM f}                    {2}
+  rtree-scan  {SELECT id FROM r ORDER BY id}              {1 2}
+  rtree-range {SELECT id FROM r WHERE x0>=5}              {2}
+  join        {SELECT f.rowid FROM f JOIN r ON r.id=f.rowid ORDER BY 1} {1 2}
+} {
+  do_test $name-after-checkout {
+    fresh
+    db eval {SELECT dolt_checkout('exp')}
+    db eval $sql
+  } $expect
+
+  do_test $name-again {
+    db eval $sql
+  } $expect
+
+  do_test $name-new-connection {
+    fresh
+    db eval {SELECT dolt_checkout('exp')}
+    db close
+    sqlite3 db test.db
+    db eval $sql
+  } $expect
+
+  do_test $name-in-transaction {
+    fresh
+    db eval {BEGIN; SELECT dolt_checkout('exp')}
+    set res [db eval $sql]
+    db eval COMMIT
+    set res
+  } $expect
+}
+
+do_test fts5-write-first {
+  fresh
+  db eval {
+    SELECT dolt_checkout('exp');
+    INSERT INTO f(rowid,body) VALUES(3,'gamma');
+    SELECT dolt_checkout('main');
+  }
+  db eval {SELECT rowid FROM f ORDER BY rowid}
+} {1 2 3}
+
+do_test rtree-write-first {
+  fresh
+  db eval {
+    SELECT dolt_checkout('exp');
+    INSERT INTO r VALUES(3,8,9);
+    SELECT dolt_checkout('main');
+  }
+  db eval {SELECT id FROM r ORDER BY id}
+} {1 2 3}
+
+finish_test
