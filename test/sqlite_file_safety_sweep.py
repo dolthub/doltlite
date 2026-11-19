@@ -172,8 +172,12 @@ class Session:
                                         stdin=subprocess.PIPE,
                                         stdout=subprocess.DEVNULL,
                                         stderr=self.err, cwd=directory)
+        # The shell opens the database before it reads a command. A step sent
+        # to the other session while this one is still opening races that
+        # open, so prove the shell is past it first.
+        self.send("")
 
-    def step(self, sql):
+    def send(self, sql):
         self.out.unlink(missing_ok=True)
         script = ".output %s\n%s\n.print __step__\n.output stdout\n" % (
             json.dumps(str(self.out)), sql)
@@ -182,8 +186,11 @@ class Session:
         deadline = time.monotonic() + 20
         while not self.out.exists() or not self.out.read_bytes().endswith(b"__step__\n"):
             if self.process.poll() is not None or time.monotonic() >= deadline:
-                raise RuntimeError("session stopped during: " + sql)
+                raise RuntimeError("session stopped during: " + (sql or "startup"))
             time.sleep(0.01)
+
+    def step(self, sql):
+        self.send(sql)
         errors = self.err_path.read_bytes()[self.seen:]
         self.seen += len(errors)
         return self.out.read_bytes()[:-len(b"__step__\n")] + b"!" + errors
@@ -230,6 +237,9 @@ def interleave_run(first, second, stock, journal, directory):
             session.close()
     for name in ("a.out", "b.out", "a.err", "b.err"):
         (directory / name).unlink()
+    (directory.parent / (directory.name + ".transcript")).write_text(
+        "".join("%d %s -> %r\n" % (step + 1, INTERLEAVE[step][1], line)
+                for step, line in enumerate(transcript)))
     final = run(stock, database, "PRAGMA journal_mode; PRAGMA integrity_check;"
                 "SELECT group_concat(id||who) FROM (SELECT * FROM t ORDER BY id);")
     return transcript, final, sorted(p.name for p in directory.iterdir())
@@ -241,8 +251,12 @@ def interleave_case(engine, stock, journal, doltlite_first, directory):
     actual = interleave_run(pair[0], pair[1], stock, journal, directory / "doltlite")
     for step, (want, got) in enumerate(zip(expected[0], actual[0])):
         if want != got:
-            raise AssertionError("step %d (%s) differs: stock=%r, DoltLite=%r" % (
-                step + 1, INTERLEAVE[step][1], want, got))
+            raise AssertionError(
+                "step %d (%s) differs: stock=%r, DoltLite=%r\n"
+                "stock transcript:\n%s\nDoltLite transcript:\n%s" % (
+                    step + 1, INTERLEAVE[step][1], want, got,
+                    (directory / "stock.transcript").read_text(errors="replace"),
+                    (directory / "doltlite.transcript").read_text(errors="replace")))
     if expected[1] != actual[1]:
         raise AssertionError("final state differs: stock=%r, DoltLite=%r" % (
             expected[1], actual[1]))
