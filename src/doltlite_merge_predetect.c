@@ -1558,9 +1558,12 @@ int mergePreNormalizeRenamedDependents(
       SchemaEntry *pDepOurs, *pDepTheirs, *pSurvivor;
       char **azRen;
       int nRen;
-      if( !pDepAnc->zType || strcmp(pDepAnc->zType, "index")!=0
-       || !pDepAnc->zName || !pDepAnc->zSql || !pDepAnc->zTblName
-       || sqlite3_stricmp(pDepAnc->zTblName, pAncT->zName)!=0 ){
+      if( !pDepAnc->zType || !pDepAnc->zName || !pDepAnc->zSql ) continue;
+      if( strcmp(pDepAnc->zType, "index")==0
+       || strcmp(pDepAnc->zType, "trigger")==0 ){
+        if( !pDepAnc->zTblName
+         || sqlite3_stricmp(pDepAnc->zTblName, pAncT->zName)!=0 ) continue;
+      }else if( strcmp(pDepAnc->zType, "view")!=0 ){
         continue;
       }
       pDepOurs = findSchemaEntry(aOursSchema, nOursSchema, pDepAnc->zName);
