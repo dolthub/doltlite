@@ -406,6 +406,15 @@ static int catalogPgnoRefFind(CatalogPgnoRef *aRef, int nRef, Pgno iTable){
   return lo<nRef && aRef[lo].iTable==iTable ? lo : -1;
 }
 
+/* A set of table numbers. Allocation failure leaves it null, and every
+** user then falls back to scanning. */
+static void catalogPgnoSetAdd(Bitvec **pp, Pgno iTable){
+  if( *pp && iTable && sqlite3BitvecSet(*pp, iTable)!=SQLITE_OK ){
+    sqlite3BitvecDestroy(*pp);
+    *pp = 0;
+  }
+}
+
 static void freeCatalogEntryMeta(CatalogEntryMeta *aMeta, int nMeta){
   int i;
   for(i=0; i<nMeta; i++){
@@ -446,6 +455,7 @@ static int addCatalogEntryMeta(
   CatalogEntryMeta **paMeta,
   int *pnMeta,
   int *pnAlloc,
+  Bitvec **ppSeen,
   Pgno iTable,
   const char *zType,
   const char *zName,
@@ -453,7 +463,11 @@ static int addCatalogEntryMeta(
 ){
   CatalogEntryMeta *aMeta = *paMeta;
   CatalogEntryMeta *pNew;
-  if( findCatalogEntryMetaByPgno(aMeta, *pnMeta, iTable) ) return SQLITE_OK;
+  if( *ppSeen ){
+    if( sqlite3BitvecTest(*ppSeen, iTable) ) return SQLITE_OK;
+  }else if( findCatalogEntryMetaByPgno(aMeta, *pnMeta, iTable) ){
+    return SQLITE_OK;
+  }
   if( *pnMeta>=*pnAlloc ){
     i64 nNew = *pnAlloc ? (i64)*pnAlloc * 2 : (i64)16;
     if( nNew > (i64)0x7fffffff/(i64)sizeof(CatalogEntryMeta) ){
@@ -479,6 +493,7 @@ static int addCatalogEntryMeta(
     return SQLITE_NOMEM;
   }
   (*pnMeta)++;
+  catalogPgnoSetAdd(ppSeen, iTable);
   return SQLITE_OK;
 }
 
@@ -488,6 +503,7 @@ static int buildLiveCatalogEntryMeta(Btree *pBtree, CatalogEntryMeta **ppMeta, i
   HashElem *k;
   CatalogNameRef *aNameRef = 0;
   CatalogEntryMeta *aMeta = 0;
+  Bitvec *pSeen = 0;
   int nNameRef = 0, nMeta = 0, nAlloc = 0, rc = SQLITE_OK, i;
   if( !pBtree || !(db = pBtree->db) || db->nDb<=0 ){
     *ppMeta = 0;
@@ -510,6 +526,7 @@ static int buildLiveCatalogEntryMeta(Btree *pBtree, CatalogEntryMeta **ppMeta, i
       nNameRef++;
     }
     qsort(aNameRef, nNameRef, sizeof(CatalogNameRef), catalogNameRefCmp);
+    pSeen = sqlite3BitvecCreate(0xffffffff);
   }
   for(k=sqliteHashFirst(&pSchema->tblHash); k; k=sqliteHashNext(k)){
     Table *pTab = (Table*)sqliteHashData(k);
@@ -522,7 +539,7 @@ static int buildLiveCatalogEntryMeta(Btree *pBtree, CatalogEntryMeta **ppMeta, i
     if( iEntry>=0 ) iTable = pBtree->cat.a[iEntry].iTable;
     if( iTable==0 ) iTable = pTab->tnum;
     if( iTable>1 ){
-      rc = addCatalogEntryMeta(&aMeta, &nMeta, &nAlloc, iTable,
+      rc = addCatalogEntryMeta(&aMeta, &nMeta, &nAlloc, &pSeen, iTable,
                                "table", pTab->zName, "");
       if( rc!=SQLITE_OK ) goto done;
     }
@@ -534,7 +551,8 @@ static int buildLiveCatalogEntryMeta(Btree *pBtree, CatalogEntryMeta **ppMeta, i
       if( iIndexTable==0 ) iIndexTable = pIdx->tnum;
       if( iIndexTable<=1 ) continue;
       if( iIndexTable==iTable ) continue;
-      rc = addCatalogEntryMeta(&aMeta, &nMeta, &nAlloc, iIndexTable, "index",
+      rc = addCatalogEntryMeta(&aMeta, &nMeta, &nAlloc, &pSeen, iIndexTable,
+                               "index",
                                pIdx->zName, pTab->zName);
       if( rc!=SQLITE_OK ) goto done;
     }
@@ -547,6 +565,7 @@ static int buildLiveCatalogEntryMeta(Btree *pBtree, CatalogEntryMeta **ppMeta, i
   }
 done:
   sqlite3_free(aNameRef);
+  sqlite3BitvecDestroy(pSeen);
   if( rc!=SQLITE_OK ){
     freeCatalogEntryMeta(aMeta, nMeta);
     return rc;
@@ -581,12 +600,27 @@ struct SchemaCatalogRow {
   char *zSql;
 };
 
-static int schemaCatalogHasPgno(SchemaCatalogRow *aRows, int nRows, Pgno iTable){
+static int schemaCatalogHasPgno(
+  SchemaCatalogRow *aRows,
+  int nRows,
+  Bitvec *pSet,
+  Pgno iTable
+){
   int i;
+  if( pSet && iTable ) return sqlite3BitvecTest(pSet, iTable);
   for(i=0; i<nRows; i++){
     if( aRows[i].oldPg==iTable ) return 1;
   }
   return 0;
+}
+
+static Bitvec *schemaCatalogPgnoSet(SchemaCatalogRow *aRows, int nRows){
+  Bitvec *pSet = 0;
+  int i;
+  if( nRows<CATALOG_INDEX_MIN_ENTRIES ) return 0;
+  pSet = sqlite3BitvecCreate(0xffffffff);
+  for(i=0; i<nRows; i++) catalogPgnoSetAdd(&pSet, aRows[i].oldPg);
+  return pSet;
 }
 
 static Pgno schemaCatalogTableOldPg(
@@ -605,9 +639,37 @@ static Pgno schemaCatalogTableOldPg(
   return 0;
 }
 
+static int schemaCatalogTypeNameCmp(const void *a, const void *b){
+  const SchemaCatalogRow *ra = *(SchemaCatalogRow *const*)a;
+  const SchemaCatalogRow *rb = *(SchemaCatalogRow *const*)b;
+  int c;
+  if( !ra->zType || !rb->zType ) return (ra->zType!=0) - (rb->zType!=0);
+  c = strcmp(ra->zType, rb->zType);
+  if( c ) return c;
+  if( !ra->zName || !rb->zName ) return (ra->zName!=0) - (rb->zName!=0);
+  return strcmp(ra->zName, rb->zName);
+}
+
+static int schemaCatalogHasDuplicateTypeName(SchemaCatalogRow *aRows, int nRows){
+  SchemaCatalogRow **ap;
+  int i, bDup = 0;
+  if( nRows<CATALOG_INDEX_MIN_ENTRIES ) return 1;
+  ap = sqlite3_malloc64((sqlite3_uint64)nRows * sizeof(*ap));
+  if( !ap ) return 1;
+  for(i=0; i<nRows; i++) ap[i] = &aRows[i];
+  qsort(ap, nRows, sizeof(*ap), schemaCatalogTypeNameCmp);
+  for(i=1; i<nRows && !bDup; i++){
+    bDup = ap[i]->zType && ap[i]->zName
+        && schemaCatalogTypeNameCmp(&ap[i-1], &ap[i])==0;
+  }
+  sqlite3_free(ap);
+  return bDup;
+}
+
 static void schemaCatalogDedupeTypeName(SchemaCatalogRow *aRows, int *pnRows){
   int i, nOut = 0;
   int nRows = *pnRows;
+  if( !schemaCatalogHasDuplicateTypeName(aRows, nRows) ) return;
   for(i=0; i<nRows; i++){
     int j, dup = -1;
     Pgno iTblPg;
@@ -937,7 +999,8 @@ static int loadSchemaCatalogRows(
 static int schemaCatalogRowWanted(
   const SchemaCatalogRow *pRow,
   struct TableEntry *aTables,
-  int nTables
+  int nTables,
+  Bitvec *pTables
 ){
   int i;
   if( !pRow ) return 0;
@@ -946,8 +1009,12 @@ static int schemaCatalogRowWanted(
   if( strcmp(pRow->zType, "table")!=0 && strcmp(pRow->zType, "index")!=0 ){
     return 1;
   }
-  for(i=0; i<nTables; i++){
-    if( aTables[i].iTable==pRow->oldPg ) return 1;
+  if( pTables && pRow->oldPg ){
+    if( sqlite3BitvecTest(pTables, pRow->oldPg) ) return 1;
+  }else{
+    for(i=0; i<nTables; i++){
+      if( aTables[i].iTable==pRow->oldPg ) return 1;
+    }
   }
   if( pRow->zType && strcmp(pRow->zType, "table")==0 && pRow->zName ){
     for(i=0; i<nTables; i++){
@@ -980,8 +1047,13 @@ static void filterSchemaCatalogRows(
 ){
   int i, nOut = 0;
   int nRows = *pnRows;
+  Bitvec *pTables = 0;
+  if( nTables>=CATALOG_INDEX_MIN_ENTRIES ){
+    pTables = sqlite3BitvecCreate(0xffffffff);
+    for(i=0; i<nTables; i++) catalogPgnoSetAdd(&pTables, aTables[i].iTable);
+  }
   for(i=0; i<nRows; i++){
-    if( schemaCatalogRowWanted(&aRows[i], aTables, nTables) ){
+    if( schemaCatalogRowWanted(&aRows[i], aTables, nTables, pTables) ){
       if( nOut!=i ){
         aRows[nOut] = aRows[i];
         memset(&aRows[i], 0, sizeof(aRows[i]));
@@ -995,10 +1067,11 @@ static void filterSchemaCatalogRows(
       memset(&aRows[i], 0, sizeof(aRows[i]));
     }
   }
+  sqlite3BitvecDestroy(pTables);
   *pnRows = nOut;
 }
 
-static int appendMissingSchemaCatalogRows(
+static int appendMissingSchemaCatalogRowsImpl(
   sqlite3 *db,
   const char *zDb,
   SchemaCatalogRow **paRows,
@@ -1006,7 +1079,8 @@ static int appendMissingSchemaCatalogRows(
   CatalogEntryMeta *aMeta,
   int nMeta,
   struct TableEntry *aTables,
-  int nTables
+  int nTables,
+  Bitvec **ppSet
 ){
   SchemaCatalogRow *aRows = *paRows;
   int nRows = *pnRows;
@@ -1022,7 +1096,7 @@ static int appendMissingSchemaCatalogRows(
   for(i=0; i<nMeta; i++){
     SchemaCatalogRow *pRow;
     int wanted = 0;
-    if( schemaCatalogHasPgno(aRows, nRows, aMeta[i].iTable) ) continue;
+    if( schemaCatalogHasPgno(aRows, nRows, *ppSet, aMeta[i].iTable) ) continue;
     if( !aMeta[i].zType || !aMeta[i].zName || !aMeta[i].zTblName ) continue;
     if( schemaCatalogHasTypeName(aRows, nRows, aMeta[i].zType, aMeta[i].zName) ){
       continue;
@@ -1124,6 +1198,7 @@ static int appendMissingSchemaCatalogRows(
       freeSchemaCatalogRows(aRows, nRows+1);
       return rc;
     }
+    catalogPgnoSetAdd(ppSet, pRow->oldPg);
     nRows++;
   }
 
@@ -1132,14 +1207,32 @@ static int appendMissingSchemaCatalogRows(
   return SQLITE_OK;
 }
 
-static int appendFallbackSchemaCatalogRows(
+static int appendMissingSchemaCatalogRows(
+  sqlite3 *db,
+  const char *zDb,
+  SchemaCatalogRow **paRows,
+  int *pnRows,
+  CatalogEntryMeta *aMeta,
+  int nMeta,
+  struct TableEntry *aTables,
+  int nTables
+){
+  Bitvec *pSet = schemaCatalogPgnoSet(*paRows, *pnRows);
+  int rc = appendMissingSchemaCatalogRowsImpl(db, zDb, paRows, pnRows, aMeta,
+                                              nMeta, aTables, nTables, &pSet);
+  sqlite3BitvecDestroy(pSet);
+  return rc;
+}
+
+static int appendFallbackSchemaCatalogRowsImpl(
   SchemaCatalogRow **paRows,
   int *pnRows,
   struct TableEntry *aTables,
   int nTables,
   SchemaEntry *aFallback,
   int nFallback,
-  int bVirtualTables
+  int bVirtualTables,
+  Bitvec **ppSet
 ){
   SchemaCatalogRow *aRows = *paRows;
   int nRows = *pnRows;
@@ -1156,7 +1249,7 @@ static int appendFallbackSchemaCatalogRows(
     SchemaEntry *pSe = 0;
     SchemaCatalogRow *pRow;
     if( aTables[i].iTable<=1 ) continue;
-    if( schemaCatalogHasPgno(aRows, nRows, aTables[i].iTable) ) continue;
+    if( schemaCatalogHasPgno(aRows, nRows, *ppSet, aTables[i].iTable) ) continue;
     for(j=0; j<nFallback; j++){
       if( !aFallback[j].zName || !aFallback[j].zType ) continue;
       if( aTables[i].zName ){
@@ -1200,6 +1293,7 @@ static int appendFallbackSchemaCatalogRows(
       freeSchemaCatalogRows(aRows, nRows+1);
       return SQLITE_NOMEM;
     }
+    catalogPgnoSetAdd(ppSet, pRow->oldPg);
     nRows++;
   }
 
@@ -1257,6 +1351,26 @@ static int appendFallbackSchemaCatalogRows(
   *paRows = aRows;
   *pnRows = nRows;
   return SQLITE_OK;
+}
+
+static int appendFallbackSchemaCatalogRows(
+  SchemaCatalogRow **paRows,
+  int *pnRows,
+  struct TableEntry *aTables,
+  int nTables,
+  SchemaEntry *aFallback,
+  int nFallback,
+  int bVirtualTables
+){
+  Bitvec *pSet;
+  int rc;
+  if( !aFallback || nFallback<=0 ) return SQLITE_OK;
+  pSet = schemaCatalogPgnoSet(*paRows, *pnRows);
+  rc = appendFallbackSchemaCatalogRowsImpl(paRows, pnRows, aTables, nTables,
+                                           aFallback, nFallback,
+                                           bVirtualTables, &pSet);
+  sqlite3BitvecDestroy(pSet);
+  return rc;
 }
 
 int doltliteSerializeCatalogEntries(
@@ -1747,6 +1861,7 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
   SchemaCatalogRow *aRows = 0;
   CatalogEntryMeta *aMeta = 0;
   CatalogPgnoRef *aRowRef = 0;
+  CatalogPgnoRef *aTabRef = 0;
   ProllyHash masterRoot;
   u8 masterFlags = 0;
   CatalogSerializeEntry *aSorted = 0;
@@ -1848,14 +1963,33 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
     {
       int bLive = (aTables==pBtree->cat.a);
       Pgno iNextPg = 2;
+      CatalogPgnoRef *aRef = 0;
+      if( nRows>=CATALOG_INDEX_MIN_ENTRIES ){
+        aRef = sqlite3_malloc64((sqlite3_uint64)nRows * sizeof(CatalogPgnoRef));
+      }
+      if( aRef ){
+        for(i=0; i<nRows; i++){
+          aRef[i].iTable = aRows[i].oldPg;
+          aRef[i].iEntry = i;
+        }
+        qsort(aRef, nRows, sizeof(CatalogPgnoRef), catalogPgnoRefCmp);
+      }
       for(i=0; i<nRows; i++){
         if( schemaCatalogRowIsVirtualTable(&aRows[i]) ){
           aRows[i].newPg = 0;
         }else if( strcmp(aRows[i].zType, "table")==0
                || strcmp(aRows[i].zType, "index")==0 ){
           Pgno reused = 0;
-          for(j=0; j<i; j++){
+          int k = aRef ? catalogPgnoRefFind(aRef, nRows, aRows[i].oldPg) : 0;
+          for(; k>=0 && k<nRows; k++){
             int jTab, iTab;
+            if( aRef ){
+              if( aRef[k].iTable!=aRows[i].oldPg ) break;
+              j = aRef[k].iEntry;
+            }else{
+              j = k;
+            }
+            if( j>=i ) break;
             if( aRows[j].oldPg!=aRows[i].oldPg || !aRows[j].newPg ) continue;
             if( !aRows[j].zType ) continue;
             jTab = strcmp(aRows[j].zType, "table")==0;
@@ -1881,6 +2015,7 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
           aRows[i].newPg = aRows[i].oldPg;
         }
       }
+      sqlite3_free(aRef);
     }
 
     memset(&mm, 0, sizeof(mm));
@@ -1889,6 +2024,16 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
       freeSchemaCatalogRows(aRows, nRows);
       freeCatalogEntryMeta(aMeta, nMeta);
       return rc;
+    }
+    if( nTables>=CATALOG_INDEX_MIN_ENTRIES ){
+      aTabRef = sqlite3_malloc64((sqlite3_uint64)nTables*sizeof(CatalogPgnoRef));
+    }
+    if( aTabRef ){
+      for(j=0; j<nTables; j++){
+        aTabRef[j].iTable = aTables[j].iTable;
+        aTabRef[j].iEntry = j;
+      }
+      qsort(aTabRef, nTables, sizeof(CatalogPgnoRef), catalogPgnoRefCmp);
     }
     for(i=0; i<nRows; i++){
       int nRec = 0;
@@ -1899,6 +2044,7 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
        && aRows[i].zSql!=0 && aRows[i].zSql[0]!=0 ){
         char *zCanon = doltliteCanonicalizeSchemaSql(aRows[i].zSql, aRows[i].zName);
         if( !zCanon ){
+          sqlite3_free(aTabRef);
           prollyMutMapFree(&mm);
           freeSchemaCatalogRows(aRows, nRows);
           freeCatalogEntryMeta(aMeta, nMeta);
@@ -1917,7 +2063,14 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
       }
       if( !schemaCatalogRowIsClusteredPrimaryKey(aRows, nRows, i) ){
         int bLiveCatalog = (aTables==pBtree->cat.a);
-        for(j=0; j<nTables; j++){
+        int k = aTabRef ? catalogPgnoRefFind(aTabRef,nTables,aRows[i].oldPg) : 0;
+        for(; k>=0 && k<nTables; k++){
+          if( aTabRef ){
+            if( aTabRef[k].iTable!=aRows[i].oldPg ) break;
+            j = aTabRef[k].iEntry;
+          }else{
+            j = k;
+          }
           if( aTables[j].iTable!=aRows[i].oldPg ) continue;
           /* Constructed catalogs mix numbering domains, so a number match
           ** alone can land on a different object; an index row carrying a
@@ -1932,6 +2085,7 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
         }
       }
       if( !pRec ){
+        sqlite3_free(aTabRef);
         prollyMutMapFree(&mm);
         freeSchemaCatalogRows(aRows, nRows);
         freeCatalogEntryMeta(aMeta, nMeta);
@@ -1940,12 +2094,14 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
       rc = prollyMutMapInsert(&mm, 0, 0, (i64)(i + 1), pRec, nRec);
       sqlite3_free(pRec);
       if( rc!=SQLITE_OK ){
+        sqlite3_free(aTabRef);
         prollyMutMapFree(&mm);
         freeSchemaCatalogRows(aRows, nRows);
         freeCatalogEntryMeta(aMeta, nMeta);
         return rc;
       }
     }
+    sqlite3_free(aTabRef);
     memset(&masterEntry, 0, sizeof(masterEntry));
     masterEntry.iTable = 1;
     memset(&masterEntry.root, 0, sizeof(masterEntry.root));
@@ -1982,7 +2138,7 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
     for(i=0; i<nMeta; i++){
       if( aRowRef
         ? catalogPgnoRefFind(aRowRef, nRows, aMeta[i].iTable)>=0
-        : schemaCatalogHasPgno(aRows, nRows, aMeta[i].iTable) ){
+        : schemaCatalogHasPgno(aRows, nRows, 0, aMeta[i].iTable) ){
         continue;
       }
       aMeta[i].iPersistTable = iNextHidden++;
