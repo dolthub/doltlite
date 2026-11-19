@@ -1,0 +1,71 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc fk_rebuild {fks} {
+  return "CREATE TABLE n(id INTEGER PRIMARY KEY, a INT, b INT, c INT$fks);
+          INSERT INTO n SELECT * FROM t; DROP TABLE t;
+          ALTER TABLE n RENAME TO t;"
+}
+set fk_a {, FOREIGN KEY(a) REFERENCES p(pid)}
+set fk_b {, FOREIGN KEY(b) REFERENCES p(pid)}
+
+proc fk_setup {base ours theirs} {
+  reset_db
+  execsql "
+    CREATE TABLE p(pid INTEGER PRIMARY KEY);
+    INSERT INTO p VALUES(1),(2);
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT, c INT$base);
+    INSERT INTO t VALUES(1,1,2,3);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_checkout('-b','feat');
+  "
+  execsql $theirs
+  execsql {SELECT dolt_commit('-Am','feat'); SELECT dolt_checkout('main')}
+  execsql $ours
+  execsql {SELECT dolt_commit('-Am','main')}
+}
+
+proc fk_cols {} {
+  db eval {SELECT "from" FROM pragma_foreign_key_list('t') ORDER BY 1}
+}
+
+set rename {ALTER TABLE t RENAME COLUMN c TO cy}
+foreach {name base ours theirs fks} {
+  theirs-drops-only  A  rename  {}  {}
+  ours-drops-only    A  {}  rename  {}
+  theirs-drops-one   AB rename  B   b
+  ours-drops-one     AB B   rename  b
+} {
+  set map [list A $fk_a B $fk_b AB "$fk_a$fk_b" {} {}]
+  set sides {}
+  foreach side [list $ours $theirs] {
+    lappend sides [expr {$side eq "rename" ? $rename
+                         : [fk_rebuild [dict get $map $side]]}]
+  }
+  foreach op {dolt_merge dolt_cherry_pick} {
+    fk_setup [dict get $map $base] {*}$sides
+    do_test merge-dropped-fk-$name-$op {
+      execsql "SELECT ${op}('feat')"
+      list [fk_cols] \
+        [execsql {SELECT name FROM pragma_table_info('t') WHERE cid=3}] \
+        [execsql {SELECT * FROM t; PRAGMA integrity_check}]
+    } [list $fks cy {1 1 2 3 ok}]
+  }
+}
+
+fk_setup "$fk_a$fk_b" $rename {UPDATE t SET b=1}
+do_test merge-dropped-fk-both-keep {
+  execsql {SELECT dolt_merge('feat')}
+  list [fk_cols] [execsql {SELECT * FROM t}]
+} {{a b} {1 1 1 3}}
+
+fk_setup {} $rename [fk_rebuild $fk_a]
+do_test merge-dropped-fk-revert-add {
+  execsql {SELECT dolt_merge('feat')}
+  set added [fk_cols]
+  set h [db one {SELECT commit_hash FROM dolt_log WHERE message='feat'}]
+  execsql "SELECT dolt_revert('$h')"
+  list $added [fk_cols]
+} {a {}}
+
+finish_test

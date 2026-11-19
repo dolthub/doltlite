@@ -32,6 +32,7 @@ doltlite_serialize_large
 doltlite_sqlite_journal_mode
 doltlite_recover_rtree
 doltlite_recover_savepointfault
+doltlite_merge_dropped_fk
 doltlite_recover_shared_ioerr
 doltlite_recover_nested_ioerr
 doltlite_recover_utf16_errtext
