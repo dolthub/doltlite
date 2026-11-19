@@ -278,14 +278,14 @@ static int ancestorGraphHeights(AncestorGraph *pGraph){
   int rc = SQLITE_OK;
   int i;
 
+  if( pGraph->nNode<=0 ) return SQLITE_OK;
   aStack = sqlite3_malloc64((sqlite3_uint64)pGraph->nNode * sizeof(int));
-  aPushed = sqlite3_malloc64((sqlite3_uint64)pGraph->nNode);
+  aPushed = sqlite3MallocZero((u64)pGraph->nNode);
   if( !aStack || !aPushed ){
     sqlite3_free(aStack);
     sqlite3_free(aPushed);
     return SQLITE_NOMEM;
   }
-  memset(aPushed, 0, (size_t)pGraph->nNode);
   for(i=0; i<pGraph->nNode && rc==SQLITE_OK; i++){
     if( pGraph->aNode[i].height>0 ) continue;
     aPushed[i] = 1;
