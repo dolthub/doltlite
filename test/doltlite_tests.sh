@@ -136,6 +136,8 @@ null_pass|PASS|" "$DB"
 
 run_test "runner_validation_results" \
   "INSERT INTO dolt_tests VALUES
+     ('leading_semicolon','validation',';SELECT 1','expected_rows','==','1'),
+     ('trailing_comment','validation','SELECT 1; -- c','expected_rows','==','1'),
      ('multi_stmt','validation','SELECT 1; SELECT 2','expected_rows','==','1'),
      ('write_stmt','validation','CREATE TABLE nope(x INT)','expected_rows','==','1'),
      ('command_stmt','validation','SELECT dolt_branch(''side_effect'')','expected_rows','==','1'),
@@ -156,6 +158,7 @@ run_test "runner_validation_results" \
    CREATE TABLE pragma_guard(id INT);
    SELECT count(*) FROM sqlite_master WHERE name='pragma_guard';" \
   "command_stmt|FAIL|Cannot execute write queries
+leading_semicolon|FAIL|Can only run exactly one query
 many_cols|FAIL|expected_single_value expects exactly one cell. Received multiple columns
 many_rows|FAIL|expected_single_value expects exactly one cell. Received multiple rows
 multi_stmt|FAIL|Can only run exactly one query
@@ -167,6 +170,7 @@ recursive_bare|FAIL|Cannot call dolt_test_run in dolt_tests
 recursive_comment|FAIL|Cannot call dolt_test_run in dolt_tests
 recursive_quoted|FAIL|Cannot call dolt_test_run in dolt_tests
 recursive_space|FAIL|Cannot call dolt_test_run in dolt_tests
+trailing_comment|FAIL|Can only run exactly one query
 write_stmt|FAIL|Cannot execute write queries
 zero_rows|FAIL|expected_single_value expects exactly one cell. Received 0 rows
 0
