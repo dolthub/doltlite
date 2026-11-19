@@ -49,6 +49,7 @@ doltlite_fts_reverse_pending_delete
 doltlite_data_version
 doltlite_page_size_default
 doltlite_savepoint_release
+doltlite_merge_key_only_rows
 doltlite_default_materialization
 doltlite_identifier_case
 doltlite_patch_rowid_alias

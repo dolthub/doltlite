@@ -709,6 +709,8 @@ int mergeVbBind(
   VbTable **ppCheck, VirtualBaseCells **ppCollect
 );
 int mergeVbOneSided(const ThreeWayChange *p, MergeVbSides *pSides);
+int mergeWithKeyRecords(sqlite3*, const char *zTable, int bDropPolicy,
+                        const ThreeWayChange*, ThreeWayDiffCallback, void*);
 void mergeVbConflictChange(
   const ThreeWayChange *p, const MergeVbSides *pSides, ThreeWayChange *pOut
 );
