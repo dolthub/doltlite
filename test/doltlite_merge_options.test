@@ -50,7 +50,10 @@ foreach storage {file memory} {
               if {![sqlite3_get_autocommit db]} {db eval ROLLBACK}
               continue
             }
-            do_test $prefix.result {lindex [catchsql "SELECT dolt_merge($arguments,'source')"] 0} 0
+            set subtype [expr {$graph eq "ff" && $mode in {default ffonly} ? 70 : 0}]
+            do_test $prefix.result {
+              catchsql "SELECT subtype(dolt_merge($arguments,'source'))"
+            } [list 0 $subtype]
             do_execsql_test $prefix.rows {SELECT id FROM t ORDER BY id} $rows
             if {$graph eq "ff" && $mode in {default ffonly}} {
               do_test $prefix.head {db one {SELECT dolt_hashof('HEAD')}} $target
@@ -99,5 +102,18 @@ foreach options {{'--commit','--no-commit','source'}
     list [lindex [catchsql "SELECT dolt_merge($options)"] 0] [merge_options_state]
   } [list 1 $before]
 }
+
+reset_db
+db eval {
+  CREATE TABLE t(id INT PRIMARY KEY);
+  SELECT dolt_commit('-Am','base');
+  SELECT dolt_branch('source');
+}
+do_execsql_test merge-options-up-to-date-subtype {
+  SELECT subtype(dolt_merge('source'));
+} 0
+do_execsql_test merge-options-up-to-date-value {
+  SELECT dolt_merge('source');
+} {{Already up to date}}
 
 finish_test

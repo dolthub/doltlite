@@ -947,6 +947,8 @@ static int mergeAbortInPlace(sqlite3 *db){
   return SQLITE_OK;
 }
 
+#define DOLTLITE_MERGE_FAST_FORWARD_SUBTYPE 'F'
+
 static int mergeFastForward(
   sqlite3 *db,
   sqlite3_context *context,
@@ -1049,6 +1051,9 @@ static int mergeFastForward(
   AtomicStore(&db->u1.isInterrupted, 0);
   doltliteHashToHex(pTheirHead, hx);
   sqlite3_result_text(context, hx, -1, SQLITE_TRANSIENT);
+  if( !squash && (context->pFunc->funcFlags & SQLITE_RESULT_SUBTYPE) ){
+    sqlite3_result_subtype(context, DOLTLITE_MERGE_FAST_FORWARD_SUBTYPE);
+  }
   return SQLITE_OK;
 }
 
