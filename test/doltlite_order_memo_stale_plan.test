@@ -1,0 +1,98 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc run_stmt {stmt} {
+  set rows {}
+  while {[sqlite3_step $stmt] eq "SQLITE_ROW"} {
+    lappend rows [sqlite3_column_text $stmt 0]
+  }
+  sqlite3_reset $stmt
+  set rows
+}
+
+set numeric_setup {
+  CREATE TABLE m(k INTEGER PRIMARY KEY, a INT, b INT);
+  CREATE INDEX mab ON m(a, b DESC);
+  INSERT INTO m VALUES(1,5,1),(2,6,1),(3,7,1);
+}
+set numeric_query {SELECT count(*) FROM m WHERE a>=9007199254740992}
+set numeric_insert {
+  INSERT INTO m VALUES(10,9007199254740993,1),(11,9007199254740992,1),
+                      (13,9007199254740994,1);
+}
+set nocase_setup {
+  CREATE TABLE m(k INTEGER PRIMARY KEY, c TEXT COLLATE NOCASE);
+  CREATE INDEX mc ON m(c);
+  INSERT INTO m VALUES(1,'a'),(2,'ab'),(3,'abc'),(4,'b');
+}
+set nocase_query {
+  SELECT count(*) FROM m
+   WHERE c BETWEEN 'ab'||char(0)||'m' AND 'ab'||char(0)||'m'
+}
+set nocase_insert {
+  INSERT INTO m VALUES(10,'ab'||char(0)||'a'),(11,'AB'||char(0)||'z');
+}
+
+foreach {kind expected} {numeric 3 nocase 2} {
+  foreach {name mid peer} {
+    rollback {BEGIN; INSERT INTO m(k) VALUES(99); ROLLBACK} 0
+    savepoint {SAVEPOINT s; INSERT INTO m(k) VALUES(99); ROLLBACK TO s; RELEASE s} 0
+    plain {} 0
+    peer {} 1
+    peer-after-rollback {BEGIN; INSERT INTO m(k) VALUES(99); ROLLBACK} 1
+  } {
+    reset_db
+    execsql [set ${kind}_setup]
+    set stmt [sqlite3_prepare_v2 db [set ${kind}_query] -1 TAIL]
+    do_test order-memo-$kind-$name-before {run_stmt $stmt} 0
+    execsql $mid
+    if {$peer} {
+      sqlite3 db2 test.db
+      db2 eval [set ${kind}_insert]
+      db2 close
+    } else {
+      execsql [set ${kind}_insert]
+    }
+    do_test order-memo-$kind-$name-cached {run_stmt $stmt} $expected
+    do_execsql_test order-memo-$kind-$name-fresh [set ${kind}_query] $expected
+    sqlite3_finalize $stmt
+  }
+}
+
+reset_db
+do_execsql_test order-memo-rollback-to-nocase {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT COLLATE NOCASE);
+  CREATE INDEX ia ON t(a);
+  INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c');
+  BEGIN;
+  INSERT INTO t VALUES(10, 'a'||char(0)||'c');
+  INSERT INTO t VALUES(11, 'a'||char(0)||'bb');
+  INSERT INTO t VALUES(12, 'a'||char(0)||'b');
+  SAVEPOINT s;
+  DELETE FROM t WHERE id IN (10,11,12);
+  SELECT id FROM t WHERE a >= 'a' ORDER BY a, id;
+  ROLLBACK TO s;
+  SELECT id FROM t ORDER BY a, id;
+  SELECT count(*) FROM (SELECT DISTINCT a FROM t);
+  SELECT id FROM t WHERE a > 'a' AND a < 'b' ORDER BY a LIMIT 1;
+  COMMIT;
+} {1 2 3 1 10 12 11 2 3 5 10}
+
+reset_db
+do_execsql_test order-memo-rollback-to-numeric {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, a, b);
+  CREATE INDEX ti ON t(a, b DESC);
+  INSERT INTO t VALUES(1,1,'x'),(2,2,'x');
+  BEGIN;
+  INSERT INTO t VALUES(11,9007199254740992,'x'),(12,9007199254740993,'x'),
+                      (13,9007199254740994,'x');
+  SAVEPOINT s;
+  DELETE FROM t WHERE id>10;
+  SELECT id FROM t WHERE a >= 1 ORDER BY a, id;
+  ROLLBACK TO s;
+  SELECT id FROM t WHERE a > 9007199254740992 ORDER BY a;
+  SELECT count(*) FROM t WHERE a > 9007199254740992;
+  COMMIT;
+} {1 2 12 13 2}
+
+finish_test

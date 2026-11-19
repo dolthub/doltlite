@@ -366,6 +366,7 @@ static int inheritPendingSnapshots(
 static int rollbackMutMapsToSavepoint(Btree *pBtree, int level,
                                        int iFromSavepoint){
   int k, rc;
+  doltliteBtreeDropOrderMemos(pBtree);
   for(k=0; k<pBtree->cat.n; k++){
     struct TableEntry *pTE = &pBtree->cat.a[k];
     ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;

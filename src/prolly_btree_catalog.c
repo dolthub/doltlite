@@ -2771,15 +2771,23 @@ int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
   }
 
   if( pBtree->db ){
-    for(i=0; i<pBtree->cat.n; i++){
+    int bExpired = 0;
+    for(i=0; i<pBtree->cat.n && !bExpired; i++){
       struct TableEntry *pOld = &pBtree->cat.a[i];
       struct TableEntry *pNew;
-      if( pOld->nocaseNulState!=1 ) continue;
+      if( pOld->nocaseNulState!=1 && !pOld->orderedPlanMask ) continue;
       pNew = catFind(&catNew, pOld->iTable);
-      if( !pNew || prollyHashCompare(&pOld->root, &pNew->root)!=0 ){
+      if( !pNew || prollyHashCompare(&pOld->root, &pNew->root)!=0
+       || (pOld->orderedPlanMask & ORDERED_PLAN_PENDING) ){
         sqlite3ExpirePreparedStatements(pBtree->db, 0);
-        break;
+        bExpired = 1;
       }
+    }
+    /* Plans that survive still need an offending insert to expire them. */
+    for(i=0; i<pBtree->cat.n && !bExpired; i++){
+      struct TableEntry *pNew = pBtree->cat.a[i].orderedPlanMask
+          ? catFind(&catNew, pBtree->cat.a[i].iTable) : 0;
+      if( pNew ) pNew->orderedPlanMask = pBtree->cat.a[i].orderedPlanMask;
     }
   }
   btreeFreeCatalogTables(pBtree);

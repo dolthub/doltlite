@@ -881,6 +881,8 @@ void doltliteBtreeCarryNocaseNulMemo(struct TableEntry*, ProllyMutMap*,
 void doltliteBtreeCarryNumericDescMemo(struct TableEntry*, ProllyMutMap*,
                                        const ProllyHash*);
 int doltliteBtreeNocaseNulInsert(BtCursor*, const u8*, int);
+int doltliteBtreeNumericDescInsert(BtCursor*, const u8*, int);
+void doltliteBtreeDropOrderMemos(Btree*);
 int flushAllPending(Btree*, BtShared*, Pgno);
 void doltliteBtreeReleasePresence(Btree *p);
 int flushDeferredEdits(Btree*, BtShared*);

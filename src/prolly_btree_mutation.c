@@ -1393,16 +1393,10 @@ static int btCursorInsertImpl(
   }
 
   if( rc==SQLITE_OK && !pCur->curIntKey ){
-    struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
     rc = doltliteBtreeNocaseNulInsert(
         pCur, (const u8*)pPayload->pKey, (int)pPayload->nKey);
-    if( rc==SQLITE_OK && pTE && pTE->numericDescState==1 ){
-      int has = 0;
-      rc = sortKeyHasWideNumericDesc(pSortKey, nSortKey, &has);
-      if( rc==SQLITE_OK && has ){
-        pTE->numericDescState = 0;
-        sqlite3ExpirePreparedStatements(pCur->pBtree->db, 1);
-      }
+    if( rc==SQLITE_OK ){
+      rc = doltliteBtreeNumericDescInsert(pCur, pSortKey, nSortKey);
     }
   }
   if( rc!=SQLITE_OK ){
