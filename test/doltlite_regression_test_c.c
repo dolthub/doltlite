@@ -17721,6 +17721,41 @@ static void run_incrblob_legacy_engine_write(void){
   removeDbFiles(dbpath);
 }
 
+static void run_incrblob_read_after_refused_write(void){
+  char dbpath[512];
+  sqlite3 *db = 0;
+  sqlite3_blob *pBlob = 0;
+  char buf[10];
+
+  printf("=== Incrblob Read After Refused Write Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_incrblob_refused_write");
+  removeDbFiles(dbpath);
+
+  check("incrblob_refused_open_db", open_db(dbpath, &db)==SQLITE_OK);
+  if( !db ) return;
+  check("incrblob_refused_setup", execSql(db,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY, b BLOB);"
+      "INSERT INTO t VALUES(13,zeroblob(5000)),(14,zeroblob(10));")==SQLITE_OK);
+  check("incrblob_refused_blob_open",
+        sqlite3_blob_open(db, "main", "t", "b", 13, 0, &pBlob)==SQLITE_OK);
+  if( pBlob ){
+    memset(buf, 1, sizeof(buf));
+    check("incrblob_refused_write_readonly",
+          sqlite3_blob_write(pBlob, buf, 10, 0)==SQLITE_READONLY);
+    check("incrblob_refused_update_other_row", execSql(db,
+        "UPDATE t SET b=zeroblob(20) WHERE id=14")==SQLITE_OK);
+    check("incrblob_refused_read_ok",
+          sqlite3_blob_read(pBlob, buf, 10, 0)==SQLITE_OK && buf[0]==0);
+    check("incrblob_refused_update_same_row", execSql(db,
+        "UPDATE t SET b=zeroblob(30) WHERE id=13")==SQLITE_OK);
+    check("incrblob_refused_read_aborts",
+          sqlite3_blob_read(pBlob, buf, 10, 0)==SQLITE_ABORT);
+    check("incrblob_refused_close", sqlite3_blob_close(pBlob)==SQLITE_OK);
+  }
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_incrblob_chunked_and_multihandle(void){
   char dbpath[512];
   sqlite3 *db = 0;
@@ -20830,6 +20865,7 @@ static const RegressionCase aCases[] = {
   { "prolly_diff_leaf_record_corruption", "Prolly Diff Leaf Corruption Test", run_prolly_diff_leaf_surfaces_record_corruption },
   { "incrblob_legacy_engine_write", "Incrblob Legacy Engine Write Test", run_incrblob_legacy_engine_write },
   { "incrblob_chunked_and_multihandle", "Incrblob Chunked Record And Multi-Handle Test", run_incrblob_chunked_and_multihandle },
+  { "incrblob_read_after_refused_write", "Incrblob Read After Refused Write Test", run_incrblob_read_after_refused_write },
   { "rowid_named_pk_keeps_rowid_table", "Rowid-Named PK Keeps Rowid Table Test", run_rowid_named_pk_keeps_rowid_table },
   { "clustered_pk_blob_open", "Clustered PK Blob Open Test", run_clustered_pk_blob_open },
   { "clustered_blob_lookup", "Clustered Blob Lookup Cache Test", run_clustered_blob_lookup },
