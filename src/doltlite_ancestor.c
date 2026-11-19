@@ -268,29 +268,53 @@ static int ancestorGraphCompareCandidate(
   return prollyHashCompare(&pLeft->hash, &pRight->hash);
 }
 
+/* Depth-first, so every commit is settled once however the nodes are
+** ordered. A node met again before it has a height is still on the stack,
+** which only a cycle can cause. */
 static int ancestorGraphHeights(AncestorGraph *pGraph){
-  int nKnown = 0;
-  while( nKnown<pGraph->nNode ){
-    int nBefore = nKnown;
-    int i;
-    for(i=0; i<pGraph->nNode; i++){
-      AncestorNode *pNode = &pGraph->aNode[i];
+  int *aStack;
+  u8 *aPushed;
+  int nStack = 0;
+  int rc = SQLITE_OK;
+  int i;
+
+  aStack = sqlite3_malloc64((sqlite3_uint64)pGraph->nNode * sizeof(int));
+  aPushed = sqlite3_malloc64((sqlite3_uint64)pGraph->nNode);
+  if( !aStack || !aPushed ){
+    sqlite3_free(aStack);
+    sqlite3_free(aPushed);
+    return SQLITE_NOMEM;
+  }
+  memset(aPushed, 0, (size_t)pGraph->nNode);
+  for(i=0; i<pGraph->nNode && rc==SQLITE_OK; i++){
+    if( pGraph->aNode[i].height>0 ) continue;
+    aPushed[i] = 1;
+    aStack[nStack++] = i;
+    while( nStack>0 ){
+      AncestorNode *pNode = &pGraph->aNode[aStack[nStack-1]];
       i64 best = 0;
+      int iPending = -1;
       int j;
-      int ready = 1;
-      if( pNode->height>0 ) continue;
       for(j=0; j<pNode->nParent; j++){
         i64 h = pGraph->aNode[pNode->aParent[j]].height;
-        if( h<=0 ){ ready = 0; break; }
+        if( h<=0 ){ iPending = pNode->aParent[j]; break; }
         if( h>best ) best = h;
       }
-      if( !ready ) continue;
-      pNode->height = best + 1;
-      nKnown++;
+      if( iPending<0 ){
+        pNode->height = best + 1;
+        nStack--;
+      }else if( aPushed[iPending] ){
+        rc = SQLITE_CORRUPT;
+        break;
+      }else{
+        aPushed[iPending] = 1;
+        aStack[nStack++] = iPending;
+      }
     }
-    if( nKnown==nBefore ) return SQLITE_CORRUPT;
   }
-  return SQLITE_OK;
+  sqlite3_free(aStack);
+  sqlite3_free(aPushed);
+  return rc;
 }
 
 int doltliteFindAncestors(
