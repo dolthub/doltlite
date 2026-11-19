@@ -182,7 +182,9 @@ static void dotFreeNames(DotName *aName, int nName){
 
 /* Whether zTable already has the index zIndex. Index names are global, so
 ** the name held by another table blocks restoring it; that is reported
-** with the owning table rather than as "index already exists". */
+** with the owning table rather than as "index already exists". A table or
+** view holding the name is not in the source, which has the index, and
+** gives the name back as it does on a hard reset. */
 int doltliteCheckoutIndexOwner(
   sqlite3 *db,
   const char *zTable,
@@ -210,6 +212,16 @@ int doltliteCheckoutIndexOwner(
   }
   *pExists = zOwner!=0;
   sqlite3_free(zOwner);
+  if( rc==SQLITE_OK && !*pExists ){
+    Table *pHolder = sqlite3FindTable(db, zIndex, "main");
+    if( pHolder ){
+      char *zDrop = sqlite3_mprintf("DROP %s \"%w\"",
+          IsView(pHolder) ? "VIEW" : "TABLE", zIndex);
+      if( !zDrop ) return SQLITE_NOMEM;
+      rc = sqlite3_exec(db, zDrop, 0, 0, 0);
+      sqlite3_free(zDrop);
+    }
+  }
   return rc;
 }
 

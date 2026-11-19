@@ -1,0 +1,63 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-checkout-index-name-taken
+
+# Index names share a namespace with tables and views. A committed index
+# that was dropped, with an uncommitted table or view now holding its name,
+# is restored by dolt_checkout as it is by dolt_reset('--hard').
+proc taken_setup {holder} {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT);
+    CREATE INDEX ix ON t(a);
+    INSERT INTO t VALUES(1,'a1'),(2,'a2');
+    SELECT dolt_commit('-Am','base');
+    CREATE TABLE keep(q);
+    INSERT INTO keep VALUES(9);
+    DROP INDEX ix;
+    INSERT INTO t VALUES(3,'a3');
+  }
+  db eval $holder
+}
+
+set n 0
+foreach holder {
+  {CREATE TABLE ix(q); INSERT INTO ix VALUES(7)}
+  {CREATE VIEW ix AS SELECT a FROM t}
+  {CREATE VIEW ix AS SELECT a FROM t;
+   CREATE TRIGGER ixtr INSTEAD OF INSERT ON ix BEGIN SELECT 1; END}
+} {
+  incr n
+  foreach {tag cmd} {
+    dot   {SELECT dolt_checkout('.')}
+    table {SELECT dolt_checkout('t')}
+    head  {SELECT dolt_checkout('HEAD','--','t')}
+    reset {SELECT dolt_reset('--hard')}
+  } {
+    do_test $n-$tag-restore {
+      taken_setup $holder
+      db eval $cmd
+      db eval {SELECT type, name FROM sqlite_schema ORDER BY name}
+    } {index ix table keep table t}
+
+    do_test $n-$tag-rows {
+      db eval {SELECT id FROM t INDEXED BY ix WHERE a>='a1' ORDER BY a}
+    } {1 2}
+
+    do_test $n-$tag-clean {
+      db eval {
+        SELECT table_name FROM dolt_status ORDER BY 1;
+        SELECT q FROM keep;
+        PRAGMA integrity_check;
+      }
+    } {keep 9 ok}
+  }
+}
+
+# The name held by another table's index is still refused.
+do_test other-table-index {
+  taken_setup {CREATE INDEX ix ON keep(q)}
+  catchsql {SELECT dolt_checkout('t')}
+} {1 {cannot check out table t: its index ix is now an index of table keep; drop that index and retry}}
+
+finish_test
