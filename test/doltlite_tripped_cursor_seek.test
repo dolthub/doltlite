@@ -1,0 +1,68 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc tripped_setup {} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, b, c);
+    CREATE INDEX tb ON t(b);
+    INSERT INTO t VALUES(1,'main1',10),(2,'main2',20),(3,'main3',30),(4,'main4',40);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_checkout('-b','other');
+    DROP INDEX tb;
+    CREATE TABLE s(id INTEGER PRIMARY KEY, secret, n);
+    INSERT INTO s VALUES(1,'S1',-1),(2,'S2',-2),(3,'S3',-3),(4,'S4',-4);
+    CREATE INDEX sb ON s(secret);
+    SELECT dolt_commit('-Am','other');
+    SELECT dolt_checkout('main');
+  }
+}
+
+proc tripped_run {query between} {
+  set rows {}
+  set rc [catch {
+    db eval $query {
+      lappend rows $b
+      if {[llength $rows]==1} {db eval $between}
+    }
+  } msg]
+  list $rc [string match {*abort*} $msg] $rows
+}
+
+foreach {name query first} {
+  rowid-in {SELECT b FROM t WHERE id IN (1,2,3,4)} main1
+  index-in {SELECT b FROM t WHERE b IN ('main1','main2','main3')} main1
+  rowid-join {SELECT t.b FROM (SELECT 1 AS k UNION ALL SELECT 2 UNION ALL SELECT 3) JOIN t ON t.id=k} main1
+} {
+  foreach {op between} {
+    checkout {SELECT dolt_checkout('other')}
+    reset {SELECT dolt_reset('--hard','other')}
+  } {
+    tripped_setup
+    do_test tripped-$name-$op {
+      tripped_run $query $between
+    } [list 1 1 $first]
+    do_execsql_test tripped-$name-$op-after {
+      SELECT count(*) FROM s;
+      PRAGMA integrity_check;
+    } {4 ok}
+  }
+}
+
+reset_db
+do_test tripped-rollback-schema {
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, b, c);
+    INSERT INTO t VALUES(1,'main1',10),(2,'main2',20),(3,'main3',30);
+    BEGIN;
+    ALTER TABLE t RENAME TO t2;
+    CREATE TABLE t(id INTEGER PRIMARY KEY, b, c);
+    INSERT INTO t SELECT id,'NEW',0 FROM t2;
+  }
+  tripped_run {SELECT b FROM t WHERE id IN (1,2,3)} ROLLBACK
+} {1 1 NEW}
+do_execsql_test tripped-rollback-schema-after {
+  SELECT b FROM t ORDER BY id;
+} {main1 main2 main3}
+
+finish_test
