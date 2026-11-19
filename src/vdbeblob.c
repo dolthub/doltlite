@@ -121,7 +121,9 @@ static int blobSeekToRow(Incrblob *p, sqlite3_int64 iRow, char **pzErr){
 static int blobSeekToRowForAccess(Incrblob *p){
   char *zErr = 0;
   Vdbe *v = (Vdbe*)p->pStmt;
-  int rc = blobSeekToRow(p, v->aMem[1].u.i, &zErr);
+  int rc;
+  v->rc = SQLITE_OK;
+  rc = blobSeekToRow(p, v->aMem[1].u.i, &zErr);
   sqlite3DbFree(p->db, zErr);
   return rc;
 }
