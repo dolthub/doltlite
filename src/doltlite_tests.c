@@ -560,9 +560,19 @@ static int testPrepare(sqlite3 *db, const char *zQuery,
   sqlite3_stmt *pStmt = 0;
   sqlite3_stmt *pExtra = 0;
   TestAuth auth;
+  const u8 *zFirst = (const u8*)zQuery;
   const char *zTail = 0;
-  const char *zNext = 0;
   int rc;
+  while( *zFirst ){
+    int eToken;
+    i64 nToken = sqlite3GetToken(zFirst, &eToken);
+    if( eToken!=TK_SPACE && eToken!=TK_COMMENT ) break;
+    zFirst += nToken;
+  }
+  if( *zFirst==';' ){
+    *pzMessage = sqlite3_mprintf("Can only run exactly one query");
+    return SQLITE_OK;
+  }
   auth.db = db;
   auth.xAuth = db->xAuth;
   auth.pAuthArg = db->pAuthArg;
@@ -597,41 +607,26 @@ static int testPrepare(sqlite3 *db, const char *zQuery,
     *pzMessage = sqlite3_mprintf("Cannot execute write queries");
     return SQLITE_OK;
   }
-  while( zTail && zTail[0] ){
+  while( zTail && sqlite3Isspace(*zTail) ) zTail++;
+  if( zTail && zTail[0] ){
     auth.hasCommand = 0;
     auth.hasPragma = 0;
     auth.hasTestRun = 0;
     db->xAuth = testAuthorizer;
     db->pAuthArg = &auth;
-    rc = sqlite3_prepare_v2(db, zTail, -1, &pExtra, &zNext);
+    rc = sqlite3_prepare_v2(db, zTail, -1, &pExtra, 0);
     db->xAuth = auth.xAuth;
     db->pAuthArg = auth.pAuthArg;
+    sqlite3_finalize(pExtra);
+    sqlite3_finalize(pStmt);
     if( auth.hasPragma ){
-      sqlite3_finalize(pExtra);
-      sqlite3_finalize(pStmt);
       *pzMessage = sqlite3_mprintf("Cannot execute PRAGMA queries");
-      return SQLITE_OK;
-    }
-    if( rc!=SQLITE_OK ){
-      sqlite3_finalize(pStmt);
+    }else if( rc==SQLITE_OK && auth.hasTestRun ){
+      *pzMessage = sqlite3_mprintf("Cannot call dolt_test_run in dolt_tests");
+    }else{
       *pzMessage = sqlite3_mprintf("Can only run exactly one query");
-      return SQLITE_OK;
     }
-    if( auth.hasTestRun ){
-      sqlite3_finalize(pExtra);
-      sqlite3_finalize(pStmt);
-      *pzMessage = sqlite3_mprintf(
-          "Cannot call dolt_test_run in dolt_tests");
-      return SQLITE_OK;
-    }
-    if( pExtra ){
-      sqlite3_finalize(pExtra);
-      sqlite3_finalize(pStmt);
-      *pzMessage = sqlite3_mprintf("Can only run exactly one query");
-      return SQLITE_OK;
-    }
-    if( !zNext || zNext==zTail ) break;
-    zTail = zNext;
+    return SQLITE_OK;
   }
   if( !sqlite3_stmt_readonly(pStmt) ){
     sqlite3_finalize(pStmt);

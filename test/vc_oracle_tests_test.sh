@@ -309,8 +309,17 @@ INSERT INTO dolt_tests VALUES
 
 oracle_results "delimiter_optional" "
 INSERT INTO dolt_tests VALUES
+ ('comment_before_end','delimiter','SELECT 1 /* ; */;','expected_rows','==','1'),
+ ('comment_without_delimiter','delimiter','SELECT 1 -- c','expected_rows','==','1'),
+ ('leading_comment_semicolon','delimiter','/* c */ ;SELECT 1','expected_rows','==','1'),
+ ('leading_semicolon','delimiter',';SELECT 1','expected_rows','==','1'),
+ ('literal_semicolon','delimiter','SELECT '';'';','expected_rows','==','1'),
  ('no_semicolon','delimiter','SELECT 1','expected_rows','==','1'),
- ('semicolon','delimiter','SELECT 1;','expected_rows','==','1');
+ ('semicolon','delimiter','SELECT 1;','expected_rows','==','1'),
+ ('semicolon_block_comment','delimiter','SELECT 1; /* c */','expected_rows','==','1'),
+ ('semicolon_line_comment','delimiter','SELECT 1; -- c','expected_rows','==','1'),
+ ('semicolon_spaces','delimiter','SELECT 1;   ','expected_rows','==','1'),
+ ('two_semicolons','delimiter','SELECT 1;;','expected_rows','==','1');
 " "'delimiter'"
 
 oracle_results "name_precedes_group" "
