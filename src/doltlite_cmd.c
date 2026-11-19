@@ -1507,9 +1507,18 @@ static int cmdRollbackAutocommitToSaved(
   sqlite3 *db,
   DoltliteTxnState *pSaved
 ){
+  int rc;
+  /* The saved catalog holds the writes a top-level savepoint made before
+  ** the command. Persisting it would make them durable inside a
+  ** transaction that can still roll back, so end the transaction. */
+  if( doltliteSavepointIsTopLevelTxn(db) ){
+    rc = doltliteRestoreTxnStateOnFailure(db, pSaved, SQLITE_OK);
+    if( rc==SQLITE_OK ) rc = doltliteVcSealTopLevelSavepointTxn(db);
+    return rc;
+  }
   /* One durable write: persisting the catalog before the merge and
   ** violation state are restored would leave them paired on a crash. */
-  int rc = doltliteApplyHardReset(db, &pSaved->sessionCatalogHash);
+  rc = doltliteApplyHardReset(db, &pSaved->sessionCatalogHash);
   if( rc==SQLITE_OK ){
     rc = doltliteSetSessionBranch(db, pSaved->zSessionBranch);
   }

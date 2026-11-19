@@ -47,4 +47,61 @@ foreach {name flags pending tables} {
   }
 }
 
+foreach {name ours theirs msg} {
+  violations {DELETE FROM p} {INSERT INTO c VALUES(1,1)}
+             {constraint violations}
+  both {DELETE FROM p; UPDATE t SET v='main' WHERE id=1}
+       {INSERT INTO c VALUES(1,1); UPDATE t SET v='feat' WHERE id=1}
+       {conflict}
+} {
+  reset_db
+  execsql {
+    PRAGMA foreign_keys=ON;
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    CREATE TABLE u(id INTEGER PRIMARY KEY, w TEXT);
+    CREATE TABLE p(id INTEGER PRIMARY KEY);
+    CREATE TABLE c(id INTEGER PRIMARY KEY, pid REFERENCES p(id));
+    INSERT INTO t VALUES(1,'a');
+    INSERT INTO p VALUES(1);
+    SELECT dolt_commit('-Am','init');
+    SELECT dolt_checkout('-b','feat');
+  }
+  execsql $theirs
+  execsql {SELECT dolt_commit('-Am','feat'); SELECT dolt_checkout('main')}
+  execsql $ours
+  execsql {SELECT dolt_commit('-Am','main')}
+  set head [execsql {SELECT dolt_hashof('HEAD')}]
+  set prefix merge-savepoint-$name
+  execsql {SAVEPOINT s; INSERT INTO u VALUES(1,'x')}
+  do_test $prefix-peer-before {
+    sqlite3 peer test.db
+    set n [peer eval {SELECT count(*) FROM u}]
+    peer close
+    set n
+  } 0
+  # The transaction ends with the merge undone, so what a peer can read is
+  # what this connection can no longer roll back.
+  do_test $prefix-refused {
+    set result [catchsql {SELECT dolt_merge('feat')}]
+    list [lindex $result 0] [regexp $msg [lindex $result 1]] \
+         [sqlite3_get_autocommit db]
+  } {1 1 1}
+  foreach who {same peer reopen} {
+    if {$who eq "reopen"} {db close; sqlite3 db test.db}
+    if {$who eq "peer"} {sqlite3 peer test.db; set c peer} else {set c db}
+    do_test $prefix-$who {
+      $c eval {
+        SELECT count(*) FROM u;
+        SELECT count(*) FROM c;
+        SELECT count(*) FROM dolt_conflicts;
+        SELECT count(*) FROM dolt_constraint_violations;
+        SELECT is_merging FROM dolt_merge_status;
+        SELECT dolt_hashof('HEAD');
+        PRAGMA integrity_check;
+      }
+    } [list 1 0 0 0 0 {*}$head ok]
+    if {$who eq "peer"} {peer close}
+  }
+}
+
 finish_test
