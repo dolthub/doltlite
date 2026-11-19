@@ -337,13 +337,23 @@ int chunkStoreReadDiskBranchTip(ChunkStore *cs, const char *zName,
   return SQLITE_OK;
 }
 
+static int csOpenDiskBranchWorkingSet(ChunkStore *cs, const char *zName,
+                                      ProllyHash *pWorkingSet, int *pFound){
+  ChunkStore tmp;
+  int rc = chunkStoreOpen(&tmp, cs->file.pVfs, cs->file.zFilename,
+                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
+  if( rc!=SQLITE_OK ) return rc;
+  if( chunkStoreGetBranchWorkingSet(&tmp, zName, pWorkingSet)==SQLITE_OK ){
+    *pFound = 1;
+  }
+  chunkStoreClose(&tmp);
+  return SQLITE_OK;
+}
+
 /* Same short-circuit as the tip read. An insert does not move the branch
 ** tip, so the tip check cannot see it. */
 int chunkStoreReadDiskBranchWorkingSet(ChunkStore *cs, const char *zName,
                                        ProllyHash *pWorkingSet, int *pFound){
-  ChunkStore tmp;
-  int rc;
-
   *pFound = 0;
   memset(pWorkingSet, 0, sizeof(*pWorkingSet));
   if( cs->bPublishDeferred ){
@@ -361,14 +371,7 @@ int chunkStoreReadDiskBranchWorkingSet(ChunkStore *cs, const char *zName,
     }
     return SQLITE_OK;
   }
-  rc = chunkStoreOpen(&tmp, cs->file.pVfs, cs->file.zFilename,
-                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
-  if( rc!=SQLITE_OK ) return rc;
-  if( chunkStoreGetBranchWorkingSet(&tmp, zName, pWorkingSet)==SQLITE_OK ){
-    *pFound = 1;
-  }
-  chunkStoreClose(&tmp);
-  return SQLITE_OK;
+  return csOpenDiskBranchWorkingSet(cs, zName, pWorkingSet, pFound);
 }
 
 int chunkStoreHasPeers(ChunkStore *cs){
@@ -521,6 +524,7 @@ int chunkStoreReadPublishedBranchWorkingSet(
   ProllyHash refsHash;
   u8 *data = 0;
   int nData = 0;
+  int bHas = 0;
   int rc;
 
   if( cs->isMemory || cs->isBuffer || !cs->file.zFilename ){
@@ -536,6 +540,14 @@ int chunkStoreReadPublishedBranchWorkingSet(
   }
   *pFound = 0;
   memset(pWorkingSet, 0, sizeof(*pWorkingSet));
+  /* A peer's refs blob enters this handle's index when the handle reloads,
+  ** which a lock taken under a pinned snapshot or inside another hold does
+  ** not do. */
+  rc = chunkStoreHas(cs, &refsHash, &bHas);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !bHas ){
+    return csOpenDiskBranchWorkingSet(cs, zName, pWorkingSet, pFound);
+  }
   rc = chunkStoreGet(cs, &refsHash, &data, &nData);
   if( rc!=SQLITE_OK ) return rc;
   memset(&view, 0, sizeof(view));
