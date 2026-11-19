@@ -11,6 +11,7 @@ doltlite_apply_read_error
 doltlite_reset_read_error
 doltlite_recover_incrblob
 doltlite_blob_lookup
+doltlite_blob_handle_after_rollback
 doltlite_recover_jrnlwal_1
 doltlite_recover_jrnlwal_2
 doltlite_recover_jrnlwal_3

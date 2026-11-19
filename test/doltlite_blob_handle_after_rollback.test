@@ -1,0 +1,87 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-blob-handle-after-rollback
+
+ifcapable !incrblob {
+  finish_test
+  return
+}
+
+# A ROLLBACK expires an open blob handle. As in stock SQLite, the handle then
+# holds the error: an access fails with SQLITE_ABORT, closing it reports the
+# error, and an autocommit write made in between is rolled back with it.
+proc fresh {flags} {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, b BLOB);
+    INSERT INTO t VALUES(1,zeroblob(100)),(2,zeroblob(100)),(3,zeroblob(100));
+    BEGIN;
+  }
+  sqlite3_blob_open db main t b 1 $flags ::B
+  db eval ROLLBACK
+}
+
+do_test write-then-close {
+  fresh 1
+  db eval {DELETE FROM t WHERE id=2}
+  list [catch {sqlite3_blob_write $::B 0 A 1} msg] $msg \
+       [sqlite3_blob_close $::B] \
+       [db eval {SELECT id FROM t ORDER BY id}]
+} {1 SQLITE_ABORT SQLITE_ABORT {1 2 3}}
+
+# A rollback does not expire a read-only handle.
+do_test read-only-handle {
+  fresh 0
+  list [string length [sqlite3_blob_read $::B 0 1]] [sqlite3_blob_close $::B]
+} {1 {}}
+
+do_test second-access-still-aborts {
+  fresh 1
+  catch {sqlite3_blob_write $::B 0 A 1}
+  list [catch {sqlite3_blob_write $::B 0 A 1} msg] $msg \
+       [catch {sqlite3_blob_read $::B 0 1} msg] $msg \
+       [sqlite3_blob_close $::B]
+} {1 SQLITE_ABORT 1 SQLITE_ABORT SQLITE_ABORT}
+
+do_test reopen {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, b BLOB);
+    INSERT INTO t VALUES(1,zeroblob(100)),(2,zeroblob(100)),(3,zeroblob(100));
+    BEGIN;
+  }
+  set fd [db incrblob t b 1]
+  db eval ROLLBACK
+  db eval {DELETE FROM t WHERE id=2}
+  list [catch {sqlite3_blob_reopen $fd 3} msg] $msg \
+       [catch {close $fd} msg] $msg \
+       [db eval {SELECT id FROM t ORDER BY id}]
+} {1 SQLITE_ABORT 0 {} {1 2 3}}
+
+do_test usable-after-close {
+  fresh 1
+  catch {sqlite3_blob_write $::B 0 A 1}
+  sqlite3_blob_close $::B
+  db eval {DELETE FROM t WHERE id=2}
+  sqlite3_blob_open db main t b 3 1 ::B
+  sqlite3_blob_write $::B 0 A 1
+  sqlite3_blob_close $::B
+  db eval {SELECT id, hex(substr(b,1,1)) FROM t ORDER BY id}
+} {1 00 3 41}
+
+# A SQL write to the handle's own row still invalidates it without an error
+# left to report: what ran in between is kept.
+do_test row-written-by-sql {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, b BLOB);
+    INSERT INTO t VALUES(1,zeroblob(100)),(2,zeroblob(100));
+  }
+  sqlite3_blob_open db main t b 1 1 ::B
+  db eval {UPDATE t SET b=zeroblob(50) WHERE id=1}
+  list [catch {sqlite3_blob_write $::B 0 A 1} msg] $msg \
+       [sqlite3_blob_close $::B] \
+       [db eval {SELECT id, length(b) FROM t ORDER BY id}]
+} {1 SQLITE_ABORT {} {1 50 2 100}}
+
+finish_test

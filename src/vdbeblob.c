@@ -438,6 +438,16 @@ int sqlite3_blob_close(sqlite3_blob *pBlob){
   return rc;
 }
 
+#ifdef DOLTLITE_PROLLY
+/* The error a faulted cursor holds: SQLITE_ABORT when a write to its row
+** invalidated the handle, the rollback's code when a rollback tripped it. */
+static int blobCursorFault(BtCursor *pCsr){
+  int bDiff = 0;
+  int rc = sqlite3BtreeCursorRestore(pCsr, &bDiff);
+  return rc==SQLITE_OK ? SQLITE_ABORT : rc;
+}
+#endif
+
 /*
 ** Perform a read or write operation on a blob
 */
@@ -470,7 +480,13 @@ static int blobReadWrite(
     */
     rc = SQLITE_ABORT;
 #ifdef DOLTLITE_PROLLY
-  }else if( (iReseek = sqlite3BtreeIncrblobCursorReseek(p->pCsr))!=0
+  }else if( (iReseek = sqlite3BtreeIncrblobCursorReseek(p->pCsr))<0
+         && (rc = blobCursorFault(p->pCsr))!=SQLITE_ABORT ){
+    /* doltlite: a rollback tripped the cursor. As in stock, the statement
+    ** stays open holding the error, so closing the handle rolls back what
+    ** ran since instead of committing it. */
+    v->rc = rc;
+  }else if( iReseek!=0
          && (iReseek<0 || blobSeekToRowForAccess(p)!=SQLITE_OK) ){
     /* doltlite: a blob write re-inserts the row, which saves every cursor
     ** on the table (stock incrblob cursors never move). Re-seek to rebuild
@@ -593,6 +609,14 @@ int sqlite3_blob_reopen(sqlite3_blob *pBlob, sqlite3_int64 iRow){
     ** already been invalidated. Return SQLITE_ABORT in this case.
     */
     rc = SQLITE_ABORT;
+#ifdef DOLTLITE_PROLLY
+  }else if( sqlite3BtreeIncrblobCursorReseek(p->pCsr)<0
+         && (rc = blobCursorFault(p->pCsr))!=SQLITE_ABORT ){
+    ((Vdbe*)p->pStmt)->rc = rc;
+    rc = sqlite3_finalize(p->pStmt);
+    p->pStmt = 0;
+    sqlite3Error(db, rc);
+#endif
   }else{
     char *zErr;
     ((Vdbe*)p->pStmt)->rc = SQLITE_OK;
