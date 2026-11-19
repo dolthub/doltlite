@@ -1188,7 +1188,11 @@ int doltliteHistoricalModuleStale(sqlite3 *db, Module *pMod){
       return 0;
     }
   }else if( sqlite3_strnicmp(zName, "dolt_blame_", 11)==0 ){
-    return zName[11] ? doltliteBlameModuleStale(db, pMod) : 0;
+    if( zName[11]==0
+     || doltliteShieldInner(pMod)!=doltliteBlameTableModule() ){
+      return 0;
+    }
+    return doltliteBlameModuleStale(db, pMod);
   }else if( sqlite3_strnicmp(zName, "dolt_at_", 8)!=0 ){
     return 0;
   }
