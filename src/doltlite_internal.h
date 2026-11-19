@@ -777,9 +777,14 @@ static SQLITE_INLINE int doltliteVtabOpenCursor(
 ** reads of it only gives a sandbox a way to fail the constructor. */
 static SQLITE_INLINE int doltliteDeclareVtab(sqlite3 *db, const char *zSchema){
   DoltliteAuthShield shield;
+  int nColumnLimit = db->aLimit[SQLITE_LIMIT_COLUMN];
   int rc;
   doltliteAuthShieldEnter(db, &shield);
+  /* dolt_conflicts_<t> carries three copies of the table's columns and
+  ** dolt_diff_<t> two, so a table at the column limit needs more. */
+  db->aLimit[SQLITE_LIMIT_COLUMN] = 3*nColumnLimit + 16;
   rc = sqlite3_declare_vtab(db, zSchema);
+  db->aLimit[SQLITE_LIMIT_COLUMN] = nColumnLimit;
   doltliteAuthShieldLeave(&shield);
   return rc;
 }

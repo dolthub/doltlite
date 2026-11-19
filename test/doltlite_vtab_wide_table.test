@@ -1,0 +1,74 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-vtab-wide-table
+
+# dolt_conflicts_<t> declares three copies of the table's columns,
+# dolt_diff_<t> two and dolt_history_<t> one, each with a few of its own.
+# They have to work for a table at SQLite's column limit.
+proc wide_setup {n} {
+  reset_db
+  set cols {}
+  for {set i 0} {$i<$n-1} {incr i} { lappend cols "c$i INT" }
+  db eval "CREATE TABLE t(id INTEGER PRIMARY KEY, [join $cols ,])"
+  db eval {
+    INSERT INTO t(id,c0) VALUES(1,1),(2,2);
+    SELECT dolt_commit('-Am','c1');
+    SELECT dolt_branch('b');
+    UPDATE t SET c0=10 WHERE id=1;
+    SELECT dolt_commit('-Am','main');
+    SELECT dolt_checkout('b');
+    UPDATE t SET c0=20 WHERE id=1;
+    SELECT dolt_commit('-Am','b');
+    SELECT dolt_checkout('main');
+    BEGIN;
+  }
+  catch {db eval {SELECT dolt_merge('b')}}
+}
+
+foreach n {667 998 2000} {
+  set last c[expr {$n-2}]
+  do_test conflicts-$n {
+    wide_setup $n
+    db eval "SELECT count(*), base_c0, our_c0, their_c0, our_$last
+             FROM dolt_conflicts_t"
+  } {1 1 10 20 {}}
+
+  do_test diff-$n {
+    db eval "SELECT from_c0, to_c0, to_$last FROM dolt_diff_t
+             WHERE to_id=1 AND to_commit<>'WORKING' ORDER BY to_c0"
+  } {{} 1 {} 1 10 {}}
+
+  do_test history-$n {
+    db eval "SELECT count(*), max(c0), max($last) FROM dolt_history_t"
+  } {4 10 {}}
+
+  do_test resolve-row-$n {
+    db eval {
+      UPDATE t SET c0=30 WHERE id=1;
+      DELETE FROM dolt_conflicts_t;
+      SELECT count(*) FROM dolt_conflicts;
+    }
+  } {0}
+
+  do_test commit-$n {
+    db eval {
+      SELECT dolt_commit('-Am','merged') IS NOT NULL;
+      COMMIT;
+      SELECT c0 FROM t ORDER BY id;
+    }
+  } {1 30 2}
+}
+
+do_test resolve-command-2000 {
+  wide_setup 2000
+  db eval {
+    SELECT dolt_conflicts_resolve('--theirs','t');
+    SELECT count(*) FROM dolt_conflicts;
+    SELECT c0 FROM t ORDER BY id;
+  }
+  set res [db eval {SELECT c0 FROM t ORDER BY id}]
+  db eval ROLLBACK
+  set res
+} {20 2}
+
+finish_test
