@@ -641,6 +641,7 @@ int doltliteMutateRefsExpected(
   ChunkStoreRefsSnapshot snapshot;
   const BranchRef *aBr = 0;
   CsWorkingSetMask *aMask = 0;
+  u8 *aLands = 0;
   int nMask = 0;
   int nMasked = 0;
   int bMask;
@@ -708,12 +709,13 @@ int doltliteMutateRefsExpected(
   if( rc==SQLITE_OK ) rc = xMutate(db, cs, pArg);
   /* PersistWorkingSet refuses a conflicted working set. Walk the refs about
   ** to land, not the session hash, so abort helpers can still finish. */
+  if( rc==SQLITE_OK ) rc = chunkStoreWorkingSetsToLand(cs, &aLands);
   if( rc==SQLITE_OK ){
     refsTableGetBranches(&cs->refs, &nBr, &aBr);
     for(iBr=0; rc==SQLITE_OK && iBr<nBr; iBr++){
       ProllyHash conflicts;
       int loadRc;
-      if( !aBr[iBr].zName ) continue;
+      if( !aBr[iBr].zName || !aLands[iBr] ) continue;
       loadRc = btreeLoadWorkingSetBlob(cs, aBr[iBr].zName, 0, 0, 0, 0, 0,
                                        &conflicts, 0, 0, 0, 0, 0, 0);
       if( loadRc==SQLITE_EMPTY ) continue;
@@ -741,6 +743,7 @@ int doltliteMutateRefsExpected(
     chunkStoreUnmaskWorkingSets(cs, aMask, nMask);
     rc = chunkStoreSerializeRefs(cs);
   }
+  sqlite3_free(aLands);
   chunkStoreFreeWorkingSetMask(aMask, nMask);
   if( haveSnapshot ){
     if( rc==SQLITE_OK ){
