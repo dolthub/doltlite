@@ -17756,6 +17756,44 @@ static void run_incrblob_read_after_refused_write(void){
   removeDbFiles(dbpath);
 }
 
+static void run_published_working_set_after_peer_publish(void){
+  char dbpath[512];
+  sqlite3 *db = 0;
+  sqlite3 *peer = 0;
+  ChunkStore *cs;
+  ProllyHash published, disk;
+  int foundPublished = 0, foundDisk = 0;
+
+  printf("=== Published Working Set After Peer Publish Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_published_ws_peer");
+  removeDbFiles(dbpath);
+  check("published_ws_open", open_db(dbpath, &db)==SQLITE_OK);
+  check("published_ws_open_peer", open_db(dbpath, &peer)==SQLITE_OK);
+  if( !db || !peer ) return;
+  check("published_ws_setup", execSql(db,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY, v);"
+      "INSERT INTO t VALUES(1,1);"
+      "SELECT dolt_commit('-Am','c1');"
+      "BEGIN; SELECT count(*) FROM t;")==SQLITE_OK);
+  check("published_ws_peer_publish", execSql(peer,
+      "SELECT dolt_tag('peer_tag')")==SQLITE_OK);
+  /* The transaction pins its snapshot, so this lock does not reload and
+  ** the peer's refs are not in the handle's chunk index. */
+  cs = doltliteGetChunkStore(db);
+  check("published_ws_lock", doltliteLockAndRefreshBusy(db, cs)==SQLITE_OK);
+  check("published_ws_read", chunkStoreReadPublishedBranchWorkingSet(
+      cs, "main", &published, &foundPublished)==SQLITE_OK);
+  check("published_ws_read_disk", chunkStoreReadDiskBranchWorkingSet(
+      cs, "main", &disk, &foundDisk)==SQLITE_OK);
+  check("published_ws_same", foundPublished==foundDisk
+      && (!foundDisk || prollyHashCompare(&published, &disk)==0));
+  chunkStoreUnlock(cs);
+  check("published_ws_rollback", execSql(db, "ROLLBACK")==SQLITE_OK);
+  sqlite3_close(peer);
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_incrblob_chunked_and_multihandle(void){
   char dbpath[512];
   sqlite3 *db = 0;
@@ -20866,6 +20904,7 @@ static const RegressionCase aCases[] = {
   { "incrblob_legacy_engine_write", "Incrblob Legacy Engine Write Test", run_incrblob_legacy_engine_write },
   { "incrblob_chunked_and_multihandle", "Incrblob Chunked Record And Multi-Handle Test", run_incrblob_chunked_and_multihandle },
   { "incrblob_read_after_refused_write", "Incrblob Read After Refused Write Test", run_incrblob_read_after_refused_write },
+  { "published_working_set_after_peer_publish", "Published Working Set After Peer Publish Test", run_published_working_set_after_peer_publish },
   { "rowid_named_pk_keeps_rowid_table", "Rowid-Named PK Keeps Rowid Table Test", run_rowid_named_pk_keeps_rowid_table },
   { "clustered_pk_blob_open", "Clustered PK Blob Open Test", run_clustered_pk_blob_open },
   { "clustered_blob_lookup", "Clustered Blob Lookup Cache Test", run_clustered_blob_lookup },
