@@ -775,7 +775,7 @@ static int checkoutReconcileTableIndexes(
                                     &exists);
     if( rc!=SQLITE_OK ) return rc;
     if( !exists ){
-      rc = sqlite3_exec(db, aSourceSchema[j].zSql, 0, 0, 0);
+      rc = doltliteExecStoredSql(db, aSourceSchema[j].zSql);
       if( rc!=SQLITE_OK ) return rc;
     }
   }

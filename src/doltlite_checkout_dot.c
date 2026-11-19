@@ -371,7 +371,7 @@ static int restoreTableDependents(
   int i;
   int rc = SQLITE_OK;
   for(i=0; rc==SQLITE_OK && i<p->nTrigger; i++){
-    rc = sqlite3_exec(db, p->azTrigger[i], 0, 0, 0);
+    rc = doltliteExecStoredSql(db, p->azTrigger[i]);
   }
   if( rc!=SQLITE_OK || !p->hasSeq ) return rc;
   pTab = sqlite3FindTable(db, zName, "main");
@@ -499,7 +499,7 @@ int doltliteCheckoutRebuildTable(
     sqlite3_free(zDrop);
   }
   if( rc==SQLITE_OK && zSourceSql ){
-    rc = sqlite3_exec(db, zSourceSql, 0, 0, 0);
+    rc = doltliteExecStoredSql(db, zSourceSql);
     if( rc==SQLITE_OK ) rc = restoreTableDependents(db, zName, &kept);
   }
   keptClear(&kept);

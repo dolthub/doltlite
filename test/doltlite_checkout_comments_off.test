@@ -1,0 +1,36 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {name change} {
+  table {ALTER TABLE k RENAME COLUMN w TO w2}
+  dot {ALTER TABLE k RENAME COLUMN w TO w2; DROP VIEW vw}
+  index {DROP INDEX kv}
+} {
+  reset_db
+  execsql {
+    CREATE TABLE k(k TEXT PRIMARY KEY, v, w);
+    CREATE TRIGGER trg AFTER INSERT ON k BEGIN /* audit */ SELECT 1; END;
+    CREATE VIEW vw AS SELECT /* cols */ * FROM k;
+    CREATE INDEX kv ON k(v /* by value */);
+    INSERT INTO k VALUES('a',1,2);
+    SELECT dolt_commit('-Am','base');
+  }
+  sqlite3_db_config db COMMENTS 0
+  execsql $change
+  set target [expr {$name eq "dot" ? "." : "k"}]
+  do_test checkout-comments-off-$name {
+    list [catchsql "SELECT dolt_checkout('$target')"] \
+      [execsql {
+        SELECT count(*) FROM dolt_status;
+        SELECT name FROM pragma_table_info('k') ORDER BY cid;
+        SELECT name FROM sqlite_schema
+         WHERE type IN ('trigger','view','index') AND sql IS NOT NULL ORDER BY 1;
+        SELECT * FROM vw;
+      }]
+  } {{0 0} {0 k v w kv trg vw a 1 2}}
+  do_test checkout-comments-off-$name-still-off {
+    catchsql {SELECT /* no */ 1}
+  } {1 {unrecognized token: "/* no */"}}
+}
+
+finish_test
