@@ -1,0 +1,67 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc strict_rebuild {opt} {
+  return "CREATE TABLE n(id INTEGER PRIMARY KEY, a INT, b TEXT, c INT) $opt;
+          INSERT INTO n SELECT * FROM t; DROP TABLE t;
+          ALTER TABLE n RENAME TO t;"
+}
+
+proc strict_setup {opt ours theirs} {
+  reset_db
+  execsql "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b TEXT, c INT) $opt"
+  execsql {
+    INSERT INTO t VALUES(1,1,'x',1);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_checkout('-b','feat');
+  }
+  execsql $theirs
+  execsql {SELECT dolt_commit('-Am','feat'); SELECT dolt_checkout('main')}
+  execsql $ours
+  execsql {SELECT dolt_commit('-Am','main')}
+}
+
+set rename {ALTER TABLE t RENAME COLUMN c TO cy}
+foreach {name opt ours theirs strict} {
+  theirs-adds   {}     rename strict 1
+  ours-adds     {}     strict rename 1
+  theirs-drops  STRICT rename plain  0
+  ours-drops    STRICT plain  rename 0
+} {
+  foreach op {dolt_merge dolt_cherry_pick} {
+    set sides {}
+    foreach side [list $ours $theirs] {
+      lappend sides [switch $side {
+        rename {set rename}
+        strict {strict_rebuild STRICT}
+        plain {strict_rebuild {}}
+      }]
+    }
+    strict_setup $opt {*}$sides
+    do_test merge-strict-$name-$op {
+      execsql "SELECT ${op}('feat')"
+      set sql [db one {SELECT sql FROM sqlite_schema WHERE name='t'}]
+      list [regexp {cy INT\)} $sql] [regexp {STRICT} $sql] \
+        [catch {execsql {INSERT INTO t VALUES(9,'text','y',9)}}] \
+        [execsql {PRAGMA integrity_check}]
+    } [list 1 $strict $strict ok]
+  }
+}
+
+strict_setup {} $rename [strict_rebuild STRICT]
+do_test merge-strict-revert {
+  execsql {SELECT dolt_merge('feat')}
+  set h [db one {SELECT commit_hash FROM dolt_log WHERE message='feat'}]
+  execsql "SELECT dolt_revert('$h')"
+  db one {SELECT sql FROM sqlite_schema WHERE name='t'}
+} {CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b TEXT, cy INT)}
+
+strict_setup {} "$rename; INSERT INTO t VALUES(2,'txt','y',2)" \
+    [strict_rebuild STRICT]
+do_test merge-strict-violation {
+  set result [catchsql {SELECT dolt_merge('feat')}]
+  list [lindex $result 0] [regexp {constraint violations} [lindex $result 1]] \
+    [execsql {SELECT typeof(a) FROM t ORDER BY id}]
+} {1 1 {integer text}}
+
+finish_test
