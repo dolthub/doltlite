@@ -528,6 +528,10 @@ struct BtCursor {
   u8 aSeekSortKey[40];
   u8 mmActive;
   u8 mmPhysActive;
+  /* Tripped because the catalog under the cursor was replaced or rolled
+  ** back. A seek must not revive it: its table number may name another
+  ** table now. A cursor faulted because its row changed can re-seek. */
+  u8 bCatalogGone;
   u8 mmExactMiss;
   u8 deferredTreeSeek;
   u8 deferredMergedSeek;
