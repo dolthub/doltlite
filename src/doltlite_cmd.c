@@ -685,8 +685,9 @@ int doltliteCreateCommandFunc(
   void (*xFunc)(sqlite3_context*,int,sqlite3_value**)
 ){
   int eScope = doltliteCommandScope(zName);
-  return sqlite3_create_function(db, zName, nArg,
-      DOLTLITE_COMMAND_FUNC_FLAGS, (void*)xFunc,
+  int flags = DOLTLITE_COMMAND_FUNC_FLAGS;
+  if( sqlite3_stricmp(zName, "dolt_merge")==0 ) flags |= SQLITE_RESULT_SUBTYPE;
+  return sqlite3_create_function(db, zName, nArg, flags, (void*)xFunc,
       eScope==DOLTLITE_CMD_UNSCOPED ? doltliteUnscopedCommandFunc
       : eScope==DOLTLITE_CMD_NOWAIT ? doltliteNoWaitCommandFunc
       : eScope==DOLTLITE_CMD_ATOMIC ? doltliteAtomicCommandFunc
