@@ -1465,7 +1465,14 @@ static int cmdRollbackAutocommitConflict(
   DoltliteTxnState *pSaved
 ){
   int rc;
-  int hadTopLevelSavepoint = db->pSavepoint!=0 && db->nSavepoint==0;
+  if( doltliteSavepointIsTopLevelTxn(db) ){
+    /* The saved catalog holds the savepoint's own unflushed writes;
+    ** RollbackAll would drop their chunks and then publish a catalog
+    ** that names them. Undo the merge inside the transaction instead. */
+    rc = doltliteRestoreTxnStateOnFailure(db, pSaved, SQLITE_OK);
+    if( rc==SQLITE_OK ) rc = doltliteVcSealTopLevelSavepointTxn(db);
+    goto report;
+  }
   sqlite3RollbackAll(db, SQLITE_OK);
   rc = doltliteRestoreTxnState(db, pSaved);
   /* Restore merge markers even if the catalog restore failed; pSaved is
@@ -1484,9 +1491,7 @@ static int cmdRollbackAutocommitConflict(
     rc = cmdPersistRestored(db, &pSaved->sessionCatalogHash);
   }
   doltliteTxnStateClear(pSaved);
-  if( rc==SQLITE_OK && hadTopLevelSavepoint ){
-    rc = doltliteVcSealTopLevelSavepointTxn(db);
-  }
+report:
   if( rc==SQLITE_OK ){
     sqlite3_result_error(ctx,
       "cannot merge: conflicts detected, autocommit transaction rolled back. "

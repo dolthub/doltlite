@@ -1,0 +1,50 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {name flags pending tables} {
+  plain {} {INSERT INTO u VALUES(1,'x')} 2
+  no-commit {'--no-commit',} {INSERT INTO u VALUES(1,'x')} 2
+  squash {'--squash',} {INSERT INTO u VALUES(1,'x')} 2
+  ddl {} {CREATE TABLE n(a); INSERT INTO u VALUES(1,'x')} 3
+} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    CREATE TABLE u(id INTEGER PRIMARY KEY, w TEXT);
+    INSERT INTO t VALUES(1,'a');
+    SELECT dolt_commit('-Am','init');
+    SELECT dolt_checkout('-b','conf');
+    UPDATE t SET v='conf' WHERE id=1;
+    SELECT dolt_commit('-Am','conf');
+    SELECT dolt_checkout('main');
+    UPDATE t SET v='main' WHERE id=1;
+    SELECT dolt_commit('-Am','main');
+  }
+  set head [execsql {SELECT dolt_hashof('HEAD')}]
+  set prefix merge-savepoint-conflict-$name
+  set state [list main 1 $tables 0 0 {*}$head ok]
+  execsql "SAVEPOINT s; $pending"
+  do_test $prefix-refused {
+    set result [catchsql "SELECT dolt_merge(${flags}'conf')"]
+    list [lindex $result 0] [regexp {conflicts detected} [lindex $result 1]] \
+         [sqlite3_get_autocommit db]
+  } {1 1 1}
+  foreach who {same peer reopen} {
+    if {$who eq "reopen"} {db close; sqlite3 db test.db}
+    if {$who eq "peer"} {sqlite3 peer test.db; set c peer} else {set c db}
+    do_test $prefix-$who {
+      $c eval {
+        SELECT v FROM t;
+        SELECT count(*) FROM u;
+        SELECT count(*) FROM sqlite_schema;
+        SELECT count(*) FROM dolt_conflicts;
+        SELECT is_merging FROM dolt_merge_status;
+        SELECT dolt_hashof('HEAD');
+        PRAGMA integrity_check;
+      }
+    } $state
+    if {$who eq "peer"} {peer close}
+  }
+}
+
+finish_test
