@@ -84,6 +84,7 @@ doltlite_constraint_rowid
 doltlite_clean_temp_shadow
 doltlite_merge_generated
 doltlite_merge_generated_notnull
+doltlite_merge_theirs_stored_column
 doltlite_merge_virtual_affinity
 doltlite_merge_schema_errors
 doltlite_merge_column_ancestry

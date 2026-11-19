@@ -498,6 +498,10 @@ void sqlite3AlterFinishAddColumn(Parse *pParse, Token *pColDef){
       sqlite3ValueFree(pVal);
     }
   }else if( pCol->colFlags & COLFLAG_STORED ){
+#ifdef DOLTLITE_PROLLY
+    /* doltlite: a merge has already written the column into every row. */
+    if( (db->mDbFlags & DBFLAG_MergeSchemaAdd)==0 )
+#endif
     sqlite3ErrorIfNotEmpty(pParse, zDb, zTab, "cannot add a STORED column");
   }
 

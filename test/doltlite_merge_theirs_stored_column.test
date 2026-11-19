@@ -1,0 +1,108 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-merge-theirs-stored-column
+
+# Their branch adds a STORED generated column (by rebuilding the table, the
+# only way SQLite allows) while ours changed the same table. The merge adds
+# the column to our table and every row holds the value its expression gives.
+set STORED {
+  CREATE TABLE t9(id INTEGER PRIMARY KEY, a INT, c INT,
+                  s INT GENERATED ALWAYS AS (a+c) STORED);
+  INSERT INTO t9(id,a,c) SELECT id,a,c FROM t;
+  DROP TABLE t;
+  ALTER TABLE t9 RENAME TO t;
+}
+
+proc try_merge {ours theirs {cmd {SELECT dolt_merge('br')}}} {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, c INT);
+    INSERT INTO t VALUES (1,10,1),(2,20,2);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('br');
+  }
+  db eval $ours
+  db eval {
+    SELECT dolt_commit('-Am','ours');
+    SELECT dolt_checkout('br');
+  }
+  db eval $theirs
+  db eval {
+    SELECT dolt_commit('-Am','theirs');
+    SELECT dolt_checkout('main');
+  }
+  set rc [catch {db eval $cmd} msg]
+  if {$rc} { return $msg }
+  list [db eval {SELECT id, s FROM t ORDER BY id}] \
+       [db eval {SELECT count(*) FROM t WHERE s IS NOT a+c}] \
+       [db eval {PRAGMA integrity_check}]
+}
+
+do_test ours-add-column {
+  list [try_merge {ALTER TABLE t ADD COLUMN d INT DEFAULT 5} $STORED] \
+       [db eval {SELECT id, a, c, d, s FROM t ORDER BY id}]
+} {{{1 11 2 22} 0 ok} {1 10 1 5 11 2 20 2 5 22}}
+
+do_test ours-updates-rows {
+  try_merge {UPDATE t SET a=a+100} $STORED
+} {{1 111 2 122} 0 ok}
+
+do_test ours-inserts-and-deletes {
+  try_merge {INSERT INTO t VALUES(3,30,3); DELETE FROM t WHERE id=1} $STORED
+} {{2 22 3 33} 0 ok}
+
+do_test both-change-rows {
+  try_merge {UPDATE t SET a=11 WHERE id=1; INSERT INTO t VALUES(3,30,3)} \
+            "$STORED ; UPDATE t SET c=7 WHERE id=2; INSERT INTO t(id,a,c) VALUES(4,40,4)"
+} {{1 12 2 27 3 33 4 44} 0 ok}
+
+do_test ours-add-index {
+  list [try_merge {CREATE INDEX ta ON t(a); UPDATE t SET a=a+1} $STORED] \
+       [db eval {SELECT id FROM t WHERE a=11}]
+} {{{1 12 2 23} 0 ok} 1}
+
+do_test ours-add-column-and-rows {
+  try_merge {
+    ALTER TABLE t ADD COLUMN d INT DEFAULT 5;
+    INSERT INTO t VALUES(3,30,3,9);
+    UPDATE t SET c=c+1 WHERE id=2;
+  } $STORED
+} {{1 11 2 23 3 33} 0 ok}
+
+do_test theirs-indexes-stored-column {
+  list [try_merge {UPDATE t SET a=a+100; INSERT INTO t VALUES(3,30,3)} \
+                  "$STORED ; CREATE INDEX ts ON t(s)"] \
+       [db eval {SELECT id FROM t WHERE s=33}] \
+       [db eval {SELECT id FROM t INDEXED BY ts WHERE s>100 ORDER BY id}]
+} {{{1 111 2 122 3 33} 0 ok} 3 {1 2}}
+
+do_test swapped {
+  list [try_merge $STORED {ALTER TABLE t ADD COLUMN d INT DEFAULT 5}] \
+       [db eval {SELECT id, a, c, s, d FROM t ORDER BY id}]
+} {{{1 11 2 22} 0 ok} {1 10 1 11 5 2 20 2 22 5}}
+
+do_test cherry-pick {
+  try_merge {UPDATE t SET a=a+100} $STORED {SELECT dolt_cherry_pick('br')}
+} {{1 111 2 122} 0 ok}
+
+do_test ours-rebuilds-with-check {
+  list [try_merge {
+    CREATE TABLE t8(id INTEGER PRIMARY KEY, a INT CHECK(a>0), c INT);
+    INSERT INTO t8 SELECT id,a,c FROM t;
+    DROP TABLE t;
+    ALTER TABLE t8 RENAME TO t;
+    UPDATE t SET a=a+100 WHERE id=2;
+  } $STORED] [catch {db eval {INSERT INTO t(id,a,c) VALUES(9,-1,0)}}]
+} {{{1 11 2 122} 0 ok} 1}
+
+do_test ours-add-not-null-default {
+  list [try_merge {ALTER TABLE t ADD COLUMN d TEXT NOT NULL DEFAULT 'x'} $STORED] \
+       [db eval {SELECT DISTINCT d FROM t}]
+} {{{1 11 2 22} 0 ok} x}
+
+do_test row-conflict-still-reported {
+  string range [try_merge {ALTER TABLE t ADD COLUMN d INT; UPDATE t SET a=11 WHERE id=1} \
+                          "$STORED ; UPDATE t SET a=12 WHERE id=1"] 0 34
+} {cannot merge: conflicts detected, a}
+
+finish_test
