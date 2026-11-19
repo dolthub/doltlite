@@ -1436,6 +1436,12 @@ static void doltliteAddFunc(
     goto add_cleanup;
   }
 
+  for(i=0; !stageAll && i<nTables; i++){
+    if( doltliteRefuseShadowTableArg(context, db, args.azPositional[i]) ){
+      goto add_cleanup;
+    }
+  }
+
   parsed = 1;
   opRc = doltliteStageArgsAndPersist(
       db, context, cs, nTables, args.apPositional, stageAll, force);

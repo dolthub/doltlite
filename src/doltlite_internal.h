@@ -1701,6 +1701,9 @@ int doltliteCheckoutTables(
 int doltliteSuspendForeignKeys(sqlite3 *db, int *pWasOn);
 int doltliteResumeForeignKeys(sqlite3 *db, int wasOn, int rc);
 int doltliteCheckoutSqlIsVtab(const char *zSql);
+int doltliteRefuseShadowTableArg(sqlite3_context*, sqlite3*, const char*);
+int doltliteRefuseShadowTableArgs(sqlite3_context*, sqlite3*, sqlite3_value**,
+                                  int, int);
 int doltliteCheckoutRebuildTable(sqlite3 *db, const char *zName,
                                  int hasCurrent, const char *zSourceSql);
 int doltliteCheckoutDot(

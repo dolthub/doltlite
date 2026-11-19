@@ -403,6 +403,52 @@ int doltliteCheckoutSqlIsVtab(const char *zSql){
   return zSql && sqlite3_strnicmp(zSql, "CREATE VIRTUAL", 14)==0;
 }
 
+/* A virtual table is consistent only with all its shadow tables from one
+** snapshot, so a command may not move one of them on its own. */
+int doltliteRefuseShadowTableArg(
+  sqlite3_context *context,
+  sqlite3 *db,
+  const char *zName
+){
+  const char *zTail;
+  char *zErr;
+  if( !zName ) return 0;
+  if( !DbHasProperty(db, 0, DB_SchemaLoaded) ){
+    char *zInitErr = 0;
+    sqlite3BtreeEnterAll(db);
+    (void)sqlite3Init(db, &zInitErr);
+    sqlite3BtreeLeaveAll(db);
+    sqlite3DbFree(db, zInitErr);
+  }
+  if( !sqlite3ShadowTableName(db, zName, "main") ) return 0;
+  zTail = strrchr(zName, '_');
+  zErr = sqlite3_mprintf(
+      "'%s' is a shadow table of virtual table '%.*s': name '%.*s' instead",
+      zName, (int)(zTail-zName), zName, (int)(zTail-zName), zName);
+  if( zErr ){
+    sqlite3_result_error(context, zErr, -1);
+    sqlite3_free(zErr);
+  }else{
+    sqlite3_result_error_nomem(context);
+  }
+  return 1;
+}
+
+int doltliteRefuseShadowTableArgs(
+  sqlite3_context *context,
+  sqlite3 *db,
+  sqlite3_value **argv,
+  int iFirstName,
+  int nNames
+){
+  int i;
+  for(i=0; i<nNames; i++){
+    const char *zName = (const char*)sqlite3_value_text(argv[iFirstName+i]);
+    if( doltliteRefuseShadowTableArg(context, db, zName) ) return 1;
+  }
+  return 0;
+}
+
 /* Replace table zName with zSourceSql (or drop it when zSourceSql is 0),
 ** keeping the working triggers and sqlite_sequence row a recreated table
 ** would otherwise lose. */

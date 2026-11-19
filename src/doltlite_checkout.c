@@ -1572,9 +1572,11 @@ static void doltCheckoutParsedFunc(
     ProllyHash sourceRef;
     if( iEndOptions!=0
      && doltliteResolveRef(db, zBranch, &sourceRef)==SQLITE_OK ){
+      if( doltliteRefuseShadowTableArgs(ctx, db, argv, 1, argc-1) ) return;
       rc = doltliteCheckoutTables(db, ctx, zBranch, argv, 1, argc-1,
                                   &zMissing, 0, 0);
     }else{
+      if( doltliteRefuseShadowTableArgs(ctx, db, argv, 0, argc) ) return;
       rc = doltliteCheckoutTables(db, ctx, 0, argv, 0, argc, &zMissing, 0, 0);
     }
     checkoutTablesResult(ctx, db, rc, zMissing, zBranch);
@@ -1692,6 +1694,7 @@ static void doltCheckoutParsedFunc(
       return;
     }
 
+    if( doltliteRefuseShadowTableArgs(ctx, db, argv, 0, argc) ) return;
     rc = doltliteCheckoutTables(db, ctx, 0, argv, 0, argc, &zMissing, 0, 0);
     checkoutTablesResult(ctx, db, rc, zMissing, zBranch);
     return;

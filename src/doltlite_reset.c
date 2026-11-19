@@ -130,6 +130,70 @@ static int resetPathUnchanged(
   return nH==nS;
 }
 
+static int resetAppendPath(const char ***paz, int *pn, const char *z){
+  const char **azNew = sqlite3_realloc64(*paz, sizeof(char*)*(*pn+1));
+  if( !azNew ) return SQLITE_NOMEM;
+  azNew[(*pn)++] = z;
+  *paz = azNew;
+  return SQLITE_OK;
+}
+
+/* A virtual table is staged as its shadow tables, so its name unstages all
+** of them and one shadow table named on its own is refused. An error
+** returned here is already set on context. */
+static int resetExpandVtabPaths(
+  sqlite3_context *context,
+  sqlite3 *db,
+  const char ***pazPaths,
+  int *pnPaths,
+  char ***pazShadow,
+  int *pnShadow
+){
+  const char **azOut = 0;
+  int nOut = 0;
+  int rc = SQLITE_OK;
+  int i;
+  for(i=0; i<*pnPaths; i++){
+    const char *zPath = (*pazPaths)[i];
+    Table *pTab;
+    int nBefore = nOut;
+    if( doltliteRefuseShadowTableArg(context, db, zPath) ){
+      sqlite3_free(azOut);
+      return SQLITE_ERROR;
+    }
+    pTab = sqlite3FindTable(db, zPath, "main");
+    if( pTab && IsVirtual(pTab) ){
+      HashElem *k;
+      for(k=sqliteHashFirst(&db->aDb[0].pSchema->tblHash);
+          k && rc==SQLITE_OK; k=sqliteHashNext(k)){
+        Table *pShadow = (Table*)sqliteHashData(k);
+        char **azDup;
+        char *zDup;
+        if( !sqlite3IsShadowTableOf(db, pTab, pShadow->zName) ) continue;
+        azDup = sqlite3_realloc64(*pazShadow, sizeof(char*)*(*pnShadow+1));
+        if( !azDup ){ rc = SQLITE_NOMEM; break; }
+        *pazShadow = azDup;
+        zDup = sqlite3_mprintf("%s", pShadow->zName);
+        if( !zDup ){ rc = SQLITE_NOMEM; break; }
+        azDup[(*pnShadow)++] = zDup;
+        rc = resetAppendPath(&azOut, &nOut, zDup);
+      }
+    }
+    if( rc==SQLITE_OK && nOut==nBefore ){
+      rc = resetAppendPath(&azOut, &nOut, zPath);
+    }
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(azOut);
+      sqlite3_result_error_nomem(context);
+      return rc;
+    }
+  }
+  sqlite3_free(*pazPaths);
+  *pazPaths = azOut;
+  *pnPaths = nOut;
+  return SQLITE_OK;
+}
+
 static int resetStageNamedPaths(
   sqlite3 *db,
   ChunkStore *cs,
@@ -859,6 +923,8 @@ static void doltliteResetFunc(
   if( nPaths>0 ){
     int changed = 0;
     char *zStageErr = 0;
+    char **azShadow = 0;
+    int nShadow = 0;
     if( isHard || isSoft || zRef ){
       sqlite3_result_error(context,
         "table paths cannot be combined with --hard / --soft or a target ref", -1);
@@ -876,10 +942,19 @@ static void doltliteResetFunc(
         goto reset_cleanup;
       }
     }
+    rc = resetExpandVtabPaths(context, db, &azPaths, &nPaths, &azShadow,
+                              &nShadow);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(azPaths);
+      azPaths = 0;
+      doltliteFreeNameList(azShadow, nShadow);
+      goto reset_cleanup;
+    }
     reloadWorking = db->autoCommit;
     rc = resetStageNamedPaths(db, cs, azPaths, nPaths, &changed, &zStageErr);
     sqlite3_free(azPaths);
     azPaths = 0;
+    doltliteFreeNameList(azShadow, nShadow);
     if( rc==SQLITE_NOTFOUND ){
       sqlite3_result_error(context, "table not found", -1);
       goto reset_cleanup;
