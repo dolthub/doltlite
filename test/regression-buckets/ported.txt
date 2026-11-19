@@ -71,6 +71,7 @@ doltlite_historical_pk_collation
 doltlite_historical_rowid_desc
 doltlite_historical_pk_encoding
 doltlite_vtab_column_collision
+doltlite_vtab_lone_shadow_arg
 doltlite_merge_constraint_prune
 doltlite_fk_parent_affinity
 doltlite_fk_lookup

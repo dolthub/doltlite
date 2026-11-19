@@ -1,0 +1,112 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-vtab-lone-shadow-arg
+
+ifcapable !fts5||!rtree {
+  finish_test
+  return
+}
+
+# dolt_add, dolt_reset and dolt_checkout move a virtual table's shadow tables
+# together. Naming one shadow table on its own is refused: it would leave the
+# virtual table with half an index.
+proc fresh {} {
+  reset_db
+  db eval {
+    CREATE VIRTUAL TABLE f USING fts5(body);
+    CREATE VIRTUAL TABLE r USING rtree(id,x0,x1);
+    CREATE TABLE p_data(id INTEGER PRIMARY KEY, v);
+    INSERT INTO f(rowid,body) VALUES(1,'alpha'),(2,'beta');
+    INSERT INTO r VALUES(1,0,1);
+    INSERT INTO p_data VALUES(1,1);
+    SELECT dolt_commit('-Am','base');
+    INSERT INTO f(rowid,body) VALUES(3,'alpha three');
+    INSERT INTO r VALUES(2,5,6);
+    INSERT INTO p_data VALUES(2,2);
+  }
+}
+
+proc check {} {
+  list [db eval {SELECT rowid FROM f WHERE f MATCH 'alpha' ORDER BY rowid}] \
+       [db eval {INSERT INTO f(f) VALUES('integrity-check')}] \
+       [db eval {SELECT id FROM r ORDER BY id}] \
+       [db eval {SELECT rtreecheck('r')}]
+}
+
+foreach {name sql shadow owner} {
+  add-fts5        {SELECT dolt_add('f_data')}            f_data  f
+  add-with-owner  {SELECT dolt_add('f','f_idx')}         f_idx   f
+  add-rtree       {SELECT dolt_add('r_rowid')}           r_rowid r
+  checkout-rtree  {SELECT dolt_checkout('r_node')}       r_node  r
+  checkout-fts5   {SELECT dolt_checkout('f_content')}    f_content f
+  checkout-ref    {SELECT dolt_checkout('HEAD','r_node')} r_node r
+} {
+  do_test $name {
+    fresh
+    list [catch {db eval $sql} msg] $msg \
+         [db eval {SELECT count(*) FROM dolt_status WHERE staged}] [check]
+  } [list 1 "'$shadow' is a shadow table of virtual table '$owner': name '$owner' instead" \
+          0 {{1 3} {} {1 2} ok}]
+}
+
+do_test reset-fts5 {
+  fresh
+  db eval {SELECT dolt_add('f')}
+  list [catch {db eval {SELECT dolt_reset('f_data')}} msg] $msg \
+       [db eval {SELECT count(*) FROM dolt_status WHERE staged}]
+} {1 {'f_data' is a shadow table of virtual table 'f': name 'f' instead} 4}
+
+do_test whole-vtab-add-commit-reset {
+  fresh
+  db eval {
+    SELECT dolt_add('f');
+    SELECT dolt_commit('-m','f');
+    SELECT dolt_reset('--hard');
+  }
+  check
+} {{1 3} {} 1 ok}
+
+do_test whole-vtab-checkout {
+  fresh
+  db eval {SELECT dolt_checkout('r')}
+  check
+} {{1 3} {} 1 ok}
+
+do_test whole-vtab-reset {
+  fresh
+  db eval {
+    SELECT dolt_add('f');
+    SELECT dolt_reset('f');
+  }
+  db eval {SELECT count(*) FROM dolt_status WHERE staged}
+} {0}
+
+do_test new-vtab-add-reset {
+  fresh
+  db eval {
+    CREATE VIRTUAL TABLE g USING fts5(body);
+    INSERT INTO g(rowid,body) VALUES(1,'alpha');
+    SELECT dolt_add('g');
+  }
+  set n [db eval {SELECT count(*) FROM dolt_status WHERE staged}]
+  db eval {
+    SELECT dolt_reset('g');
+    SELECT dolt_add('p_data');
+    SELECT dolt_commit('-m','p only');
+  }
+  list $n [db eval {SELECT count(*) FROM dolt_status WHERE staged}] \
+       [db eval {SELECT rowid FROM g WHERE g MATCH 'alpha'}] \
+       [db eval {INSERT INTO g(g) VALUES('integrity-check')}]
+} {5 0 1 {}}
+
+do_test ordinary-table-with-shadow-like-name {
+  fresh
+  db eval {
+    SELECT dolt_add('p_data');
+    SELECT dolt_reset('p_data');
+    SELECT dolt_checkout('p_data');
+    SELECT id FROM p_data;
+  }
+} {0 0 0 1}
+
+finish_test
