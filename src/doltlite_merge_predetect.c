@@ -1528,7 +1528,7 @@ int mergePreNormalizeRenamedDependents(
       struct TableEntry *pOther = doltliteFindTableByName(
           i ? aOurs : aTheirs, i ? nOurs : nTheirs, pAncT->zName);
       int bEvidence;
-      if( !(i ? nRenT : nRenO) || !pAnc || !pOther ) continue;
+      if( !(i ? nRenT : nRenO) || !pAnc || !pOther || !pSideEnt ) continue;
       if( prollyHashCompare(&pAnc->root, &pOther->root)==0 ){
         /* Names that trade places read the same whether the columns were
         ** renamed or the table was rebuilt in another column order. Only
@@ -1540,6 +1540,10 @@ int mergePreNormalizeRenamedDependents(
         if( rc!=SQLITE_OK || !bEvidence ) goto table_done;
         continue;
       }
+      rc = mergeRenamedValuesLost(db, &pAnc->root, &pSideEnt->root,
+          pAnc->flags, pSideEnt->flags, pAncT->zSql, pSide->zSql,
+          pAncT->zName, 0, 0, &bEvidence);
+      if( rc!=SQLITE_OK || bEvidence ) goto table_done;
       rc = mergeRenameHasEvidence(db, pAnc, pSideEnt, pOther, pAncT->zSql,
                                   pSide->zSql, pAncT->zName, &bEvidence);
       if( rc!=SQLITE_OK ) goto table_done;

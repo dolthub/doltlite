@@ -188,43 +188,93 @@ foreach key {INTEGER INT} {
   }
 }
 
+# A renamed column still holds the ancestor's values in the renaming
+# branch's own rows. When that branch kept at least one, the other branch's
+# new row carries its value into the renamed column. When it kept none, the
+# schema reads the same as DROP COLUMN plus ADD COLUMN, and the value is
+# not carried.
 foreach {layout key} {rowid {INTEGER PRIMARY KEY} clustered {INT PRIMARY KEY} keyless INTEGER} {
   foreach direction {forward reverse} {
     foreach operation {merge cherry_pick} {
+      foreach {edit where carried} {some {WHERE a=1} 1 all {} {}} {
+        reset_db
+        execsql "CREATE TABLE t(a $key,b TEXT,c INT)"
+        execsql {
+          INSERT INTO t VALUES(1,'needle',2),(2,'kept',9);
+          CREATE INDEX idx_b ON t(b);
+          SELECT dolt_commit('-Am','base');
+          SELECT dolt_checkout('-b','feature');
+          ALTER TABLE t RENAME COLUMN c TO renamed_c;
+        }
+        execsql "UPDATE t SET renamed_c=a+2 $where"
+        execsql {
+          SELECT dolt_commit('-Am','rename and update');
+          SELECT dolt_checkout('main');
+          INSERT INTO t VALUES(5,'other',1);
+          SELECT dolt_commit('-Am','insert');
+        }
+        set branch main
+        set target feature
+        if {$direction eq "reverse"} {set branch feature; set target main}
+        execsql "SELECT dolt_checkout('$branch')"
+        set rows [list 1 needle 3 2 kept [expr {$edit eq "all" ? 4 : 9}] \
+                       5 other $carried]
+        set name rename-edited-column-$layout-$direction-$operation-$edit
+        do_test $name-apply {
+          lindex [catchsql "SELECT dolt_${operation}('$target')"] 0
+        } 0
+        do_execsql_test $name-rows {
+          SELECT a,b,renamed_c FROM t NOT INDEXED ORDER BY a;
+        } $rows
+        do_execsql_test $name-index {
+          SELECT a,renamed_c FROM t INDEXED BY idx_b WHERE b='needle';
+          PRAGMA integrity_check;
+        } {1 3 ok}
+        db close
+        sqlite3 db test.db/$branch
+        do_execsql_test $name-reopen {
+          SELECT a,b,renamed_c FROM t ORDER BY a;
+        } $rows
+      }
+    }
+  }
+}
+
+# DROP COLUMN then ADD COLUMN of the same type leaves a new column where
+# the old one stood. The other branch's values of the dropped column do not
+# become values of the new one.
+foreach {layout key} {rowid {INTEGER PRIMARY KEY} clustered {INT PRIMARY KEY}} {
+  foreach direction {forward reverse} {
+    foreach operation {merge cherry_pick} {
       reset_db
-      execsql "CREATE TABLE t(a $key,b TEXT,c INT)"
+      execsql "CREATE TABLE t(id $key, name TEXT, legacy_code INT)"
       execsql {
-        INSERT INTO t VALUES(1,'needle',2);
-        CREATE INDEX idx_b ON t(b);
+        INSERT INTO t VALUES(1,'a',10),(2,'b',20);
         SELECT dolt_commit('-Am','base');
         SELECT dolt_checkout('-b','feature');
-        ALTER TABLE t RENAME COLUMN c TO renamed_c;
-        UPDATE t SET renamed_c=3;
-        SELECT dolt_commit('-Am','rename and update');
+        ALTER TABLE t DROP COLUMN legacy_code;
+        ALTER TABLE t ADD COLUMN discount INT;
+        UPDATE t SET discount=5 WHERE id=1;
+        SELECT dolt_commit('-Am','drop legacy_code, add discount');
         SELECT dolt_checkout('main');
-        INSERT INTO t VALUES(5,'other',1);
+        INSERT INTO t VALUES(3,'c',30);
         SELECT dolt_commit('-Am','insert');
       }
       set branch main
       set target feature
       if {$direction eq "reverse"} {set branch feature; set target main}
       execsql "SELECT dolt_checkout('$branch')"
-      set name rename-edited-column-$layout-$direction-$operation
+      set name dropped-column-replaced-$layout-$direction-$operation
       do_test $name-apply {
         lindex [catchsql "SELECT dolt_${operation}('$target')"] 0
       } 0
       do_execsql_test $name-rows {
-        SELECT a,b,renamed_c FROM t NOT INDEXED ORDER BY a;
-      } {1 needle 3 5 other 1}
-      do_execsql_test $name-index {
-        SELECT a,renamed_c FROM t INDEXED BY idx_b WHERE b='needle';
+        SELECT id,name,discount FROM t ORDER BY id;
         PRAGMA integrity_check;
-      } {1 3 ok}
-      db close
-      sqlite3 db test.db/$branch
-      do_execsql_test $name-reopen {
-        SELECT a,b,renamed_c FROM t ORDER BY a;
-      } {1 needle 3 5 other 1}
+      } {1 a 5 2 b {} 3 c {} ok}
+      do_execsql_test $name-schema {
+        SELECT name FROM pragma_table_info('t');
+      } {id name discount}
     }
   }
 }
