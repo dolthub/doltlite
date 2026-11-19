@@ -101,6 +101,11 @@ do_execsql_test schemas-history.blame {
    ORDER BY 1, 2;
 } {trigger t1 {Merge branch 'f' into main} doltlite 1 1 view v1 c2 doltlite 1 1}
 
+do_execsql_test schemas-history.blame-again {
+  SELECT type, name FROM dolt_blame_dolt_schemas ORDER BY 1, 2;
+  SELECT count(*) FROM dolt_blame_dolt_schemas;
+} {trigger t1 view v1 2}
+
 do_test schemas-history.empty {
   catch {db close}
   forcedelete test.db
