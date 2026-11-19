@@ -1,0 +1,86 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-merge-rename-vs-dropped-dependent
+
+# One branch renames a column that a trigger or view reads, which rewrites
+# that object's text; the other branch drops the object. The rewrite is not a
+# change of its own, so the drop wins and the merge succeeds.
+set TRIGGER {CREATE TRIGGER x AFTER INSERT ON t BEGIN
+               UPDATE p SET v=v+1 WHERE id=new.c; END}
+set VIEW    {CREATE VIEW x AS SELECT id, c FROM t}
+set RENAME  {ALTER TABLE t RENAME COLUMN c TO c2}
+
+proc try_merge {obj ours theirs} {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, c INT);
+    CREATE TABLE p(id INTEGER PRIMARY KEY, v INT);
+    INSERT INTO t VALUES (1,10,1);
+    INSERT INTO p VALUES (1,0);
+  }
+  db eval $obj
+  db eval {
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('br');
+  }
+  db eval $ours
+  db eval {
+    SELECT dolt_commit('-Am','ours');
+    SELECT dolt_checkout('br');
+  }
+  db eval $theirs
+  db eval {
+    SELECT dolt_commit('-Am','theirs');
+    SELECT dolt_checkout('main');
+  }
+  set rc [catch {db eval {SELECT dolt_merge('br')}} msg]
+  if {$rc} { return [string range $msg 0 12] }
+  list [db eval {SELECT name FROM sqlite_schema WHERE name='x'}] \
+       [db eval {SELECT name FROM pragma_table_info('t') ORDER BY cid}] \
+       [db eval {SELECT * FROM t ORDER BY id}] \
+       [db eval {PRAGMA integrity_check}]
+}
+
+foreach {name obj drop} [list \
+  trigger $TRIGGER {DROP TRIGGER x} \
+  view    $VIEW    {DROP VIEW x} \
+] {
+  do_test $name-rename-ours {
+    try_merge $obj $RENAME $drop
+  } {{} {id a c2} {1 10 1} ok}
+
+  do_test $name-rename-theirs {
+    try_merge $obj $drop $RENAME
+  } {{} {id a c2} {1 10 1} ok}
+
+  do_test $name-rename-and-rows-ours {
+    try_merge $obj "$RENAME ; UPDATE t SET a=11" "$drop ; INSERT INTO p VALUES(2,2)"
+  } {{} {id a c2} {1 11 1} ok}
+
+  do_test $name-kept-on-both {
+    try_merge $obj $RENAME {INSERT INTO p VALUES(2,2)}
+  } {x {id a c2} {1 10 1} ok}
+}
+
+do_test trigger-kept-still-fires {
+  try_merge $TRIGGER $RENAME {INSERT INTO p VALUES(2,2)}
+  db eval {
+    INSERT INTO t VALUES(2,20,1);
+    SELECT v FROM p WHERE id=1;
+  }
+} {1}
+
+# A real edit of the object on the renaming side is still a change the drop
+# cannot silently discard: the merge is refused.
+do_test trigger-edited-and-dropped {
+  try_merge $TRIGGER "$RENAME ; DROP TRIGGER x ;
+      CREATE TRIGGER x AFTER INSERT ON t BEGIN
+        UPDATE p SET v=v+2 WHERE id=new.c2; END" {DROP TRIGGER x}
+} {cannot merge:}
+
+do_test view-edited-and-dropped {
+  try_merge $VIEW "$RENAME ; DROP VIEW x ;
+      CREATE VIEW x AS SELECT id, c2, a FROM t" {DROP VIEW x}
+} {cannot merge:}
+
+finish_test
