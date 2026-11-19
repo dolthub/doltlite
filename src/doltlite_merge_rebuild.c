@@ -3,6 +3,125 @@
 #include "doltlite_merge_int.h"
 #include "vdbeInt.h"
 
+/* A side column standing where an ancestor column of the same definition
+** stood reads as a rename, but a drop followed by an add leaves the same
+** schema. The side's own rows tell them apart: a renamed column still holds
+** the ancestor's values. *pbLost is set when some such column had values in
+** the ancestor's rows and this side kept none of them, so it was dropped.
+** Rows with nothing to show, or no shared rows, leave it a rename.
+** aGuess[i] names the ancestor column for side column i, or is NULL to
+** take every same-slot candidate; aLost[i], when given, flags each one. */
+int mergeRenamedValuesLost(
+  sqlite3 *db,
+  const ProllyHash *pAncRoot,
+  const ProllyHash *pSideRoot,
+  u8 ancFlags, u8 sideFlags,
+  const char *zAncSql, const char *zSideSql, const char *zTable,
+  const int *aGuess, u8 *aLost, int *pbLost
+){
+  ParsedColumn *aAnc = 0, *aSide = 0;
+  DoltliteColInfo ancCi, sideCi;
+  DoltliteRecordInfo ancInfo, sideInfo;
+  ProllyCursor ancCur, sideCur;
+  int *aFrom = 0;
+  u8 *aSeen = 0;
+  int nAnc = 0, nSide = 0, nOpen = 0, i, res, rc;
+
+  *pbLost = 0;
+  memset(&ancCi, 0, sizeof(ancCi));
+  memset(&sideCi, 0, sizeof(sideCi));
+  doltliteRecordInfoInit(&ancInfo);
+  doltliteRecordInfoInit(&sideInfo);
+  if( !pAncRoot || !pSideRoot || prollyHashIsEmpty(pAncRoot)
+   || prollyHashIsEmpty(pSideRoot)
+   || ((ancFlags ^ sideFlags) & PROLLY_NODE_INTKEY)!=0 ){
+    return SQLITE_OK;
+  }
+  rc = parseColumns(zAncSql, &aAnc, &nAnc);
+  if( rc==SQLITE_OK ) rc = parseColumns(zSideSql, &aSide, &nSide);
+  if( rc!=SQLITE_OK || nSide==0 ) goto done;
+  aFrom = sqlite3_malloc64((u64)nSide*sizeof(int));
+  aSeen = sqlite3_malloc64((u64)nSide);
+  if( !aFrom || !aSeen ){ rc = SQLITE_NOMEM; goto done; }
+  memset(aSeen, 0, (size_t)nSide);
+  for(i=0; i<nSide; i++){
+    if( aGuess ){
+      aFrom[i] = aGuess[i];
+    }else{
+      aFrom[i] = i<nAnc
+          && parsedColumnIndexByName(aAnc, nAnc, aSide[i].zName)<0
+          && parsedColumnIndexByName(aSide, nSide, aAnc[i].zName)<0
+          && parsedColumnDefinitionsMatch(&aSide[i], &aAnc[i]) ? i : -1;
+    }
+    if( aFrom[i]>=nAnc ) aFrom[i] = -1;
+    if( aFrom[i]>=0 ) nOpen++;
+  }
+  if( nOpen==0 ) goto done;
+  rc = mergeLoadReaderColumns(zAncSql, zTable, &ancCi);
+  if( rc==SQLITE_OK ) rc = mergeLoadReaderColumns(zSideSql, zTable, &sideCi);
+  if( rc!=SQLITE_OK || ancCi.nCol!=nAnc || sideCi.nCol!=nSide ) goto done;
+  {
+    ChunkStore *cs = doltliteGetChunkStore(db);
+    ProllyCache *cache = doltliteGetCache(db);
+    prollyCursorInit(&ancCur, cs, cache, pAncRoot, ancFlags);
+    prollyCursorInit(&sideCur, cs, cache, pSideRoot, sideFlags);
+    rc = prollyCursorFirst(&ancCur, &res);
+    while( rc==SQLITE_OK && !res && nOpen>0 && prollyCursorIsValid(&ancCur) ){
+      const u8 *pAncVal, *pSideVal, *pKey;
+      int nAncVal, nSideVal, nKey, sideRes;
+      if( ancFlags & PROLLY_NODE_INTKEY ){
+        rc = prollyCursorSeekInt(&sideCur, prollyCursorIntKey(&ancCur), &sideRes);
+      }else{
+        prollyCursorKey(&ancCur, &pKey, &nKey);
+        rc = prollyCursorSeekBlob(&sideCur, pKey, nKey, &sideRes);
+      }
+      if( rc!=SQLITE_OK ) break;
+      if( sideRes==0 && prollyCursorIsValid(&sideCur) ){
+        prollyCursorValue(&ancCur, &pAncVal, &nAncVal);
+        prollyCursorValue(&sideCur, &pSideVal, &nSideVal);
+        doltliteRecordInfoClear(&ancInfo);
+        doltliteRecordInfoClear(&sideInfo);
+        if( nAncVal>0 ) rc = doltliteParseRecordStrict(pAncVal, nAncVal, &ancInfo);
+        if( rc==SQLITE_OK && nSideVal>0 ){
+          rc = doltliteParseRecordStrict(pSideVal, nSideVal, &sideInfo);
+        }
+        if( rc!=SQLITE_OK ) break;
+        for(i=0; i<nSide; i++){
+          int a, b;
+          if( aFrom[i]<0 || aSeen[i]==1 ) continue;
+          a = mergeReaderRecordSlot(&ancCi, aFrom[i]);
+          b = mergeReaderRecordSlot(&sideCi, i);
+          if( a<0 || b<0 || a>=ancInfo.nField || ancInfo.aType[a]==0 ) continue;
+          if( mergeStoredFieldsEqual(pAncVal, nAncVal, &ancInfo, a,
+                                     pSideVal, nSideVal, &sideInfo, b) ){
+            aSeen[i] = 1;
+            nOpen--;
+          }else{
+            aSeen[i] = 2;
+          }
+        }
+      }
+      rc = prollyCursorNext(&ancCur);
+    }
+    prollyCursorClose(&ancCur);
+    prollyCursorClose(&sideCur);
+  }
+  for(i=0; rc==SQLITE_OK && i<nSide; i++){
+    if( aLost ) aLost[i] = aSeen[i]==2;
+    if( aSeen[i]==2 ) *pbLost = 1;
+  }
+done:
+  doltliteRecordInfoClear(&ancInfo);
+  doltliteRecordInfoClear(&sideInfo);
+  doltliteFreeColInfo(&ancCi);
+  doltliteFreeColInfo(&sideCi);
+  freeColumns(aAnc, nAnc);
+  freeColumns(aSide, nSide);
+  sqlite3_free(aFrom);
+  sqlite3_free(aSeen);
+  return rc;
+}
+
 /* Assembly of the merged catalog's schema rows: the master root is
 ** rewritten from the merge's own schema arrays so the serialized blob
 ** never depends on this connection's live schema. */
@@ -1158,14 +1277,25 @@ int normalizeSideToMergedLayout(
 
   if( bSlotRenames && pAncRoot ){
     int bOurSlots = 0, bTheirSlots = 0;
+    int bLost = 0;
     if( strcmp(zAncSql, zOursSql)!=0 ){
       rc = mergeSchemaReusesColumnSlots(db, pAncRoot, pOursRoot,
           ancFlags, flags, zAncSql, zOursSql, zTable, 1, &bOurSlots);
+      if( rc==SQLITE_OK && bOurSlots ){
+        rc = mergeRenamedValuesLost(db, pAncRoot, pOursRoot, ancFlags, flags,
+            zAncSql, zOursSql, zTable, 0, 0, &bLost);
+        if( bLost ) bOurSlots = 0;
+      }
       if( rc!=SQLITE_OK ) goto done;
     }
     if( strcmp(zAncSql, zTheirsSql)!=0 ){
       rc = mergeSchemaReusesColumnSlots(db, pAncRoot, pTheirsRoot,
           ancFlags, srcFlags, zAncSql, zTheirsSql, zTable, 1, &bTheirSlots);
+      if( rc==SQLITE_OK && bTheirSlots ){
+        rc = mergeRenamedValuesLost(db, pAncRoot, pTheirsRoot, ancFlags,
+            srcFlags, zAncSql, zTheirsSql, zTable, 0, 0, &bLost);
+        if( bLost ) bTheirSlots = 0;
+      }
       if( rc!=SQLITE_OK ) goto done;
     }
     bSlotRenames = bOurSlots || bTheirSlots;

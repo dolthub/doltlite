@@ -117,11 +117,11 @@ int mergeMapUnmatchedColumns(
   ProllyCursor ancCur, sideCur;
   u8 *aCandidate = 0;
   MergeReaddedColumn *aReadded = 0;
-  int i, k, j, res, rc, bPending = 0, curInit = 0;
+  int i, k, j, res, rc, bPending = 0, curInit = 0, nLone = 0;
+  int *aLone = 0;
+  u8 *aLost = 0;
   const char *zAmbiguous = 0;
 
-  for(i=0; i<nSide; i++) if( aSideAnc[i]<0 ) bPending = 1;
-  if( !bPending ) return SQLITE_OK;
   memset(&ancCi, 0, sizeof(ancCi));
   memset(&sideCi, 0, sizeof(sideCi));
   doltliteRecordInfoInit(&ancInfo);
@@ -131,7 +131,10 @@ int mergeMapUnmatchedColumns(
   if( rc!=SQLITE_OK || nParsed!=nSide || nAnc==0 ) goto done;
   aCandidate = sqlite3_malloc64((u64)nSide * nAnc);
   aReadded = sqlite3_malloc64((u64)nSide * sizeof(*aReadded));
-  if( !aCandidate || !aReadded ){ rc = SQLITE_NOMEM; goto done; }
+  aLone = sqlite3_malloc64((u64)nSide * (sizeof(int)+1));
+  if( !aCandidate || !aReadded || !aLone ){ rc = SQLITE_NOMEM; goto done; }
+  aLost = (u8*)&aLone[nSide];
+  for(i=0; i<nSide; i++) aLone[i] = -1;
   memset(aCandidate, 0, (size_t)nSide * nAnc);
   memset(aReadded, 0, (size_t)nSide * sizeof(*aReadded));
   for(i=0; i<nSide; i++) aReadded[i].iNameSlot = -1;
@@ -174,6 +177,22 @@ int mergeMapUnmatchedColumns(
       aCandidate[i*nAnc+hit] = 0;
     }else if( nHit>1 ){
       bPending = 1;
+    }
+  }
+  for(i=0; i<nSide; i++){
+    if( aSideAnc[i]>=0 && aSideAnc[i]<nAnc && aReadded[i].iNameSlot<0
+     && sqlite3_stricmp(aSide[i].zName, aAnc[aSideAnc[i]].zName)!=0 ){
+      aLone[i] = aSideAnc[i];
+      nLone++;
+    }
+  }
+  if( nLone ){
+    int bLost = 0;
+    rc = mergeRenamedValuesLost(db, pAncRoot, pSideRoot, ancFlags, sideFlags,
+        zAncSql, zSideSql, zTable, aLone, aLost, &bLost);
+    if( rc!=SQLITE_OK ) goto done;
+    for(i=0; bLost && i<nSide; i++){
+      if( aLone[i]>=0 && aLost[i] ) aSideAnc[i] = -1;
     }
   }
   if( !bPending ) goto done;
@@ -290,6 +309,7 @@ done:
   freeColumns(aSide, nParsed);
   sqlite3_free(aCandidate);
   sqlite3_free(aReadded);
+  sqlite3_free(aLone);
   return rc;
 }
 

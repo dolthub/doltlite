@@ -175,6 +175,15 @@ int mergeStoredFieldsEqual(
 int mergeLoadReaderColumns(const char *zSql, const char *zTable, DoltliteColInfo *ci);
 int mergeReaderRecordSlot(const DoltliteColInfo *ci, int i);
 
+int mergeRenamedValuesLost(
+  sqlite3 *db,
+  const ProllyHash *pAncRoot,
+  const ProllyHash *pSideRoot,
+  u8 ancFlags, u8 sideFlags,
+  const char *zAncSql, const char *zSideSql, const char *zTable,
+  const int *aGuess, u8 *aLost, int *pbLost
+);
+
 int mergeMapUnmatchedColumns(
   sqlite3 *db,
   const ProllyHash *pAncRoot,
