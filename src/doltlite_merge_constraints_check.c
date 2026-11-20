@@ -1149,6 +1149,22 @@ static int dlComposeRetained(
     }
     if( rc!=SQLITE_OK ) goto done;
   }
+  /* A constraint the other side dropped and the winner left as the
+  ** ancestor had it is dropped, as any one-sided delete is. */
+  for(i=0; i<nFkWin && !bConflict; i++){
+    DlFk *pAnc = 0;
+    int j;
+    for(j=0; j<nFkAnc && !pAnc; j++){
+      if( dlFkCorresponds(&aFkAnc[j], &aFkWin[i]) ) pAnc = &aFkAnc[j];
+    }
+    if( !pAnc || !dlFkSame(pAnc, &aFkWin[i]) ) continue;
+    for(j=0; j<nFkOth; j++){
+      if( dlFkCorresponds(pAnc, &aFkOth[j]) ) break;
+    }
+    if( j<nFkOth ) continue;
+    rc = dlPushRaw(&azCut, &nCut, &nCutAlloc, aFkWin[i].zRaw);
+    if( rc!=SQLITE_OK ) goto done;
+  }
 
   if( !bConflict && !bCoreDiff && !bHalf && !bNeutral ){
     const char *azSql[3] = {zAnc, zOurs, zTheirs};
