@@ -2175,6 +2175,10 @@ struct SchemaMergeAction {
   ** bodies the renaming branch never held keep the old table name. */
   char **azKeepText;
   int nKeepText;
+  /* CREATE INDEX statements run after every column action: indexes one
+  ** branch added over a column the adopted table text does not have yet. */
+  char **azCreateIndexes;
+  int nCreateIndexes;
 };
 
 void freeSchemaMergeActions(SchemaMergeAction *a, int n);

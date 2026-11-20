@@ -109,6 +109,9 @@ int rebuildDisjointSchemaRows(
   SchemaMergeAction *aActions, int nActions,
   char ***pazReindex, int *pnReindex
 );
+int mergeIndexOverDivergentAdd(
+  SchemaEntry *aAnc, int nAnc, SchemaEntry *aNew, int nNew,
+  SchemaEntry *aOther, int nOther, int iFrom, char **pzCol, int *pbMixed);
 int mergePreNormalizeRenamedDependents(
   sqlite3 *db,
   struct TableEntry *aAnc, int nAnc,

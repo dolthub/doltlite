@@ -1050,6 +1050,64 @@ static int recordMergeConflicts(
   return doltliteSetSessionConflictsCatalog(db, &conflictsHash);
 }
 
+/* An index one branch created over a column only it added cannot be
+** adopted with the table: the table's text gains that column from a
+** replayed ADD COLUMN, after the merged schema has loaded. Take the index
+** out of that branch's arrays so the merge never sees it, and queue its
+** CREATE INDEX to run once the columns exist. An index that also names a
+** column the other branch renamed or dropped, or sits on a table whose
+** rename is replayed, stays put and the pass-1 check refuses it. */
+static int mergePreLiftIndexOverAddedColumn(
+  struct TableEntry *aOurs, int *pnOurs,
+  struct TableEntry *aTheirs, int *pnTheirs,
+  SchemaEntry *aAncSchema, int nAncSchema,
+  SchemaEntry *aOursSchema, int *pnOursSchema,
+  SchemaEntry *aTheirsSchema, int *pnTheirsSchema,
+  SchemaMergeAction **ppActions, int *pnActions
+){
+  int side;
+  for(side=0; side<2; side++){
+    SchemaEntry *aNew = side ? aTheirsSchema : aOursSchema;
+    int *pnNew = side ? pnTheirsSchema : pnOursSchema;
+    struct TableEntry *aEnt = side ? aTheirs : aOurs;
+    int *pnEnt = side ? pnTheirs : pnOurs;
+    int i = 0, bMixed = 0;
+    while( (i = mergeIndexOverDivergentAdd(aAncSchema, nAncSchema,
+                aNew, *pnNew, side ? aOursSchema : aTheirsSchema,
+                side ? *pnOursSchema : *pnTheirsSchema, i, 0, &bMixed))>=0 ){
+      SchemaMergeAction *pAct;
+      int j, rc;
+      for(j=0; j<*pnActions; j++){
+        if( (*ppActions)[j].zRenameTable && sqlite3_stricmp(
+              (*ppActions)[j].zTableName, aNew[i].zTblName)==0 ) break;
+      }
+      if( j<*pnActions || bMixed ){ i++; continue; }
+      rc = recordSchemaColumnChanges(ppActions, pnActions, aNew[i].zTblName,
+                                     0, 0, 0, 0, 0, 0);
+      if( rc!=SQLITE_OK ) return rc;
+      pAct = &(*ppActions)[*pnActions-1];
+      pAct->azCreateIndexes = sqlite3_malloc(sizeof(char*));
+      if( !pAct->azCreateIndexes ) return SQLITE_NOMEM;
+      pAct->azCreateIndexes[0] = aNew[i].zSql;
+      pAct->nCreateIndexes = 1;
+      aNew[i].zSql = 0;
+      for(j=0; j<*pnEnt; j++){
+        if( aEnt[j].iTable!=aNew[i].iRootpage ) continue;
+        sqlite3_free(aEnt[j].zName);
+        memmove(&aEnt[j], &aEnt[j+1], (*pnEnt-j-1)*sizeof(aEnt[0]));
+        (*pnEnt)--;
+        break;
+      }
+      sqlite3_free(aNew[i].zName);
+      sqlite3_free(aNew[i].zTblName);
+      sqlite3_free(aNew[i].zType);
+      memmove(&aNew[i], &aNew[i+1], (*pnNew-i-1)*sizeof(aNew[0]));
+      (*pnNew)--;
+    }
+  }
+  return SQLITE_OK;
+}
+
 int doltliteMergeCatalogs(
   sqlite3 *db,
   const ProllyHash *ancestor,
@@ -1117,6 +1175,11 @@ int doltliteMergeCatalogs(
                                             aTheirsSchema, nTheirsSchema,
                                             ppActions, pnActions,
                                             bBranchMerge, pzErrMsg);
+    if( rc==SQLITE_OK ){
+      rc = mergePreLiftIndexOverAddedColumn(aOurs, &nOurs, aTheirs, &nTheirs,
+          aAncSchema, nAncSchema, aOursSchema, &nOursSchema,
+          aTheirsSchema, &nTheirsSchema, ppActions, pnActions);
+    }
     if( rc!=SQLITE_OK ) goto merge_cleanup;
   }
 

@@ -1318,7 +1318,8 @@ int dlDeferRaw(SchemaMergeAction *a, int n, const char *zTable,
   char *zCopy;
   if( !a || !zTable || !zRaw || !zRaw[0] ) return SQLITE_OK;
   for(i=0; i<n; i++){
-    if( !a[i].zTableName || sqlite3_stricmp(a[i].zTableName, zTable)!=0 ){
+    if( !a[i].zTableName || sqlite3_stricmp(a[i].zTableName, zTable)!=0
+     || a[i].nCreateIndexes ){
       continue;
     }
     if( !a[i].zRenameTable ){ hit = i; break; }
