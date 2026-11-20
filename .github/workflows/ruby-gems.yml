@@ -1,0 +1,103 @@
+name: RubyGems release tests
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+    outputs:
+      ruby-revision:
+        value: ${{ jobs.pack.outputs.ruby-revision }}
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    name: Pack and test the Ruby gems (x86_64-linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      ruby-revision: ${{ steps.stage.outputs.revision }}
+      version: ${{ steps.stage.outputs.version }}
+      matrix: ${{ steps.stage.outputs.matrix }}
+    env:
+      TAG: ${{ inputs.tag }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/checkout@v4
+      with:
+        repository: dolthub/doltlite-ruby
+        ref: main
+        path: ruby-package
+        persist-credentials: false
+    - uses: ruby/setup-ruby@v1
+      with:
+        ruby-version: '3.2'
+    - uses: actions/download-artifact@v4
+      with:
+        pattern: binaries-*
+        path: release-assets
+        merge-multiple: true
+
+    - name: Stage the candidate gems
+      id: stage
+      run: |
+        version="${TAG#v}"
+        bash packaging/ruby/stage-gems.sh "$version" ruby-package release-assets dist/ruby
+        printf 'version=%s\nrevision=%s\n' "$version" "$(git -C ruby-package rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        ruby -rjson - "$version" >> "$GITHUB_OUTPUT" <<'RUBY'
+        version = ARGV.fetch(0)
+        runners = {
+          "x86_64-linux" => "ubuntu-24.04",
+          "aarch64-linux" => "ubuntu-24.04-arm",
+          "arm64-darwin" => "macos-latest",
+          "x86_64-darwin" => "macos-15-intel",
+        }
+        gems = Dir.glob("dist/ruby/*.gem").map { |file| File.basename(file) }
+        filenames = runners.keys.to_h { |platform| [platform, "doltlite-#{version}-#{platform}.gem"] }
+        missing = filenames.values_at("x86_64-linux", "aarch64-linux", "arm64-darwin") - gems
+        unexpected = gems - filenames.values
+        abort "Missing gems: #{missing.join(', ')}" unless missing.empty?
+        abort "No test runner for: #{unexpected.join(', ')}" unless unexpected.empty?
+        matrix = runners.filter_map do |platform, runner|
+          next if platform == "x86_64-linux" || !gems.include?(filenames.fetch(platform))
+          { platform: platform, runner: runner }
+        end
+        puts "matrix=#{JSON.generate(include: matrix)}"
+        RUBY
+
+    - name: Install and test the Linux x64 gem
+      env:
+        VERSION: ${{ steps.stage.outputs.version }}
+      run: bash packaging/ruby/test-gem.sh "dist/ruby/doltlite-$VERSION-x86_64-linux.gem" "$VERSION" x86_64-linux
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: ruby-gems-candidate
+        path: dist/ruby
+        if-no-files-found: error
+
+  smoke:
+    name: Installed Ruby gem (${{ matrix.platform }})
+    needs: pack
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.pack.outputs.matrix) }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ruby/setup-ruby@v1
+      with:
+        ruby-version: '3.2'
+    - uses: actions/download-artifact@v4
+      with:
+        name: ruby-gems-candidate
+        path: dist/ruby
+    - name: Install and test the candidate gem
+      env:
+        VERSION: ${{ needs.pack.outputs.version }}
+        PLATFORM: ${{ matrix.platform }}
+      run: bash packaging/ruby/test-gem.sh "dist/ruby/doltlite-$VERSION-$PLATFORM.gem" "$VERSION" "$PLATFORM"

@@ -1236,13 +1236,20 @@ jobs:
   # bumps + tags the repo. Like the other bindings it is post-release and
   # non-blocking. Needs RUBYGEMS_API_KEY (a RubyGems API key with push rights to
   # the doltlite gem) and RELEASE_BOT_TOKEN.
+  ruby-gems-candidate:
+    needs: build
+    uses: ./.github/workflows/ruby-gems.yml
+    with:
+      tag: ${{ github.ref_name }}
+
   release-ruby:
     if: github.event_name != 'workflow_dispatch'
-    needs: release
+    needs: [release, ruby-gems-candidate]
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
       VERSION: ${{ github.ref_name }}
+      RUBY_REVISION: ${{ needs.ruby-gems-candidate.outputs.ruby-revision }}
       GEM_HOST_API_KEY: ${{ secrets.RUBYGEMS_API_KEY }}
     steps:
     - name: Check tokens
@@ -1262,12 +1269,17 @@ jobs:
       with:
         ruby-version: "3.2"
 
+    - uses: actions/download-artifact@v4
+      with:
+        name: ruby-gems-candidate
+        path: dist/ruby
+
     - name: Configure git identity
       run: |
         git config --global user.name "DoltHub Release Bot"
         git config --global user.email "releases@dolthub.com"
 
-    - name: Build and push gems, tag doltlite-ruby
+    - name: Publish the tested gems and tag doltlite-ruby
       run: |
         set -euo pipefail
         version="${VERSION#v}"
@@ -1282,15 +1294,13 @@ jobs:
         git checkout main
         git pull --ff-only origin main
 
-        sed -i "s/VERSION = \"[^\"]*\"/VERSION = \"${version}\"/" lib/doltlite/version.rb
+        if [ "$(git rev-parse HEAD)" != "${RUBY_REVISION:?missing tested Ruby package revision}" ]; then
+          echo "The Ruby package changed during testing. Rerun the release to test the new revision."
+          exit 1
+        fi
+        cp "$GITHUB_WORKSPACE/dist/ruby/version.rb" lib/doltlite/version.rb
 
-        # Per-platform libdoltlite zips from this release feed the gem build.
-        mkdir -p ../libs
-        gh release download "${VERSION}" --repo dolthub/doltlite \
-          --pattern 'doltlite-lib-*.zip' --dir ../libs
-        bash script/build-gems.sh "${version}" ../libs
-
-        for g in pkg/*.gem; do
+        for g in "$GITHUB_WORKSPACE"/dist/ruby/*.gem; do
           echo "pushing $g"
           gem push "$g"
         done

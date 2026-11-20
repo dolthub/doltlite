@@ -19,6 +19,7 @@ const OFF_PR_WORKFLOWS = new Set([
   'nightly-stress.yml',
   'nuget-package.yml',
   'release.yml',
+  'ruby-gems.yml',
   'seed-ci-caches.yml',
   'sqlite-upstream-drift.yml',
 ]);
