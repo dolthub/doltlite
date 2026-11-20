@@ -1,0 +1,88 @@
+name: NuGet package
+
+on:
+  pull_request:
+    paths:
+      - 'packaging/nuget/**'
+      - '.github/workflows/nuget-package.yml'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      release-tag:
+        type: string
+        required: true
+    outputs:
+      version:
+        value: ${{ jobs.pack.outputs.version }}
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    name: Pack the NuGet candidate
+    runs-on: ubuntu-24.04
+    env:
+      TAG: ${{ inputs.release-tag || 'v0.51.14' }}
+    outputs:
+      version: ${{ steps.pack.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: actions/download-artifact@v4
+        if: inputs.release-tag
+        with:
+          pattern: binaries-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Download native libraries for the standalone test
+        if: ${{ !inputs.release-tag }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$TAG" --repo dolthub/doltlite --pattern "doltlite-lib-*-${TAG#v}.zip" --dir release-assets
+
+      - name: Pack all four native libraries into one archive
+        id: pack
+        run: |
+          version="${TAG#v}"
+          bash packaging/nuget/assemble.sh "$version" dist release-assets --release-assets
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nuget-candidate
+          path: dist/DoltHub.Doltlite.${{ steps.pack.outputs.version }}.nupkg
+          if-no-files-found: error
+
+  smoke:
+    name: Installed NuGet package (${{ matrix.rid }})
+    needs: pack
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { rid: linux-x64, os: ubuntu-24.04 }
+          - { rid: linux-arm64, os: ubuntu-24.04-arm }
+          - { rid: osx-arm64, os: macos-latest }
+          - { rid: win-x64, os: windows-latest }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/download-artifact@v4
+        with:
+          name: nuget-candidate
+          path: dist
+      - name: Install and exercise the release archive
+        shell: bash
+        env:
+          VERSION: ${{ needs.pack.outputs.version }}
+        run: bash packaging/nuget/test-archive.sh "dist/DoltHub.Doltlite.$VERSION.nupkg" "$VERSION" "v$VERSION"
