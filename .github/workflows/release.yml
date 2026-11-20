@@ -1175,35 +1175,10 @@ jobs:
         fi
 
   # ── Build the Swift XCFramework ──────────────────────────
-  # Compiles the doltlite amalgamation for the Apple platform slices (iOS,
-  # iOS Simulator, macOS, Mac Catalyst) and packs them into doltlite.xcframework.
-  # The zip is uploaded as an artifact so the `release` job attaches it to the
-  # GitHub release; the SwiftPM checksum is exposed as a job output for
-  # release-swift. Needs full Xcode, so it runs on macOS.
   swift-xcframework:
-    if: github.event_name != 'workflow_dispatch'
-    runs-on: macos-latest
-    outputs:
-      checksum: ${{ steps.build.outputs.checksum }}
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Build generated SQLite files
-      run: |
-        ./configure
-        make sqlite3.c sqlite3.h sqlite3ext.h
-
-    - name: Build XCFramework
-      id: build
-      run: |
-        VERSION=${GITHUB_REF_NAME#v}
-        bash packaging/swift/build-xcframework.sh "$VERSION" build-swift
-
-    - name: Upload XCFramework artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: swift-xcframework
-        path: build-swift/doltlite-*.xcframework.zip
+    uses: ./.github/workflows/swift-xcframework.yml
+    with:
+      tag: ${{ github.ref_type == 'tag' && github.ref_name || 'v0.0.0' }}
 
   # ── Tag the Swift package ────────────────────────────────
   # After the release exists, attach the XCFramework zip as a release asset,
@@ -1219,6 +1194,7 @@ jobs:
       GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
       VERSION: ${{ github.ref_name }}
       CHECKSUM: ${{ needs.swift-xcframework.outputs.checksum }}
+      SWIFT_REVISION: ${{ needs.swift-xcframework.outputs.swift-revision }}
     steps:
     - name: Check release bot token
       run: |
@@ -1242,9 +1218,11 @@ jobs:
 
     - name: Attach XCFramework to the release
       run: |
+        set -euo pipefail
         version="${VERSION#v}"
-        gh release upload "${VERSION}" "swift-dist/doltlite-${version}.xcframework.zip" \
-          --repo dolthub/doltlite --clobber
+        archive="swift-dist/doltlite-${version}.xcframework.zip"
+        printf '%s  %s\n' "${CHECKSUM:?missing tested XCFramework checksum}" "$archive" | sha256sum --check
+        gh release upload "${VERSION}" "$archive" --repo dolthub/doltlite --clobber
 
     - name: Tag doltlite-swift
       run: |
@@ -1255,15 +1233,14 @@ jobs:
           echo "doltlite-swift ${VERSION} already exists; skipping"
           exit 0
         fi
-        if [ -z "${CHECKSUM}" ]; then
-          echo "missing XCFramework checksum from swift-xcframework job"
-          exit 1
-        fi
-
         gh repo clone dolthub/doltlite-swift doltlite-swift
         cd doltlite-swift
         git checkout main
         git pull --ff-only origin main
+        if [ "$(git rev-parse HEAD)" != "${SWIFT_REVISION:?missing tested Swift package revision}" ]; then
+          echo "The Swift package changed after the XCFramework tests. Rerun the release to test the new revision."
+          exit 1
+        fi
 
         python3 - "$version" "$CHECKSUM" <<'PY'
         import re, sys

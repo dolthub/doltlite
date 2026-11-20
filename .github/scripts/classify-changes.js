@@ -5,8 +5,7 @@ const ALL = new Set(JOBS);
 
 const LIGHT = new Set(['README.md', 'performance-report.md']);
 
-// Workflows PR CI never calls; the self-test proves none is reachable from
-// pr-ci.yml, so a change to one cannot alter what a PR run checks.
+// Workflows outside the pr-ci.yml call graph. Some have their own PR triggers.
 const OFF_PR_WORKFLOWS = new Set([
   'cancel-conflicted-ci.yml',
   'dolt-oracle-upgrade.yml',
@@ -21,6 +20,7 @@ const OFF_PR_WORKFLOWS = new Set([
   'release.yml',
   'seed-ci-caches.yml',
   'sqlite-upstream-drift.yml',
+  'swift-xcframework.yml',
 ]);
 
 const BENCHMARK_HARNESS = [
