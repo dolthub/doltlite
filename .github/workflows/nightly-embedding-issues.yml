@@ -1,0 +1,57 @@
+name: Nightly embedding issues
+
+on:
+  schedule:
+    - cron: '23 10 * * *'
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Preview changes without filing or commenting on issues
+        type: boolean
+        default: true
+      since:
+        description: Optional ISO 8601 start time for a backfill
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+concurrency:
+  group: nightly-embedding-issues
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v4
+    - name: Sync issue activity into DoltLite
+      env:
+        GH_TOKEN: ${{ github.token }}
+        EMBEDDING_ISSUES_APPLY: ${{ github.event_name == 'schedule' || !inputs.dry-run }}
+        EMBEDDING_ISSUES_SINCE: ${{ inputs.since }}
+      run: node .github/scripts/sync-embedding-issues.js
+
+  watchdog:
+    needs: [sync]
+    if: github.event_name == 'schedule' && (failure() || cancelled())
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+    - uses: actions/checkout@v4
+    - name: Describe the sync failure
+      run: |
+        printf '%s\n' \
+          'The scheduled embedding issue sync failed. See the sync job result and logs.' \
+          'The next successful run resumes from the last successful scheduled run.' \
+          > "$RUNNER_TEMP/embedding-issues-failure.md"
+    - name: Report the sync failure
+      uses: ./.github/actions/report-failure-issue
+      with:
+        label: nightly-embedding-issues-failure
+        title: Nightly embedding issue sync failed
+        body-file: ${{ runner.temp }}/embedding-issues-failure.md
+        token: ${{ github.token }}
