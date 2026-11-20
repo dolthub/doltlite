@@ -1,0 +1,61 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# A merged row is stored as an insert of the same values stores it, so the
+# table hashes the same and rewriting a row to its own values changes nothing.
+
+set text {CREATE TABLE t(id VARCHAR(20) PRIMARY KEY, a INT, b INT)}
+set rowid {CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT, c INT);
+           CREATE INDEX ta ON t(a)}
+set drop {ALTER TABLE t DROP COLUMN a}
+
+foreach {name schema base ours theirs native touch} {
+  cell-key-only $text
+    {INSERT INTO t VALUES('k1',1,1),('k2',NULL,NULL)}
+    {UPDATE t SET a=NULL WHERE id='k1'} {UPDATE t SET b=NULL WHERE id='k1'}
+    {INSERT INTO t VALUES('k1',NULL,NULL),('k2',NULL,NULL)}
+    {UPDATE t SET a=9; UPDATE t SET a=NULL}
+  cell-trailing-null $rowid
+    {INSERT INTO t VALUES(1,1,1,1),(2,NULL,NULL,NULL)}
+    {UPDATE t SET b=NULL WHERE id=1} {UPDATE t SET c=NULL WHERE id=1}
+    {INSERT INTO t VALUES(1,1,NULL,NULL),(2,NULL,NULL,NULL)}
+    {UPDATE t SET b=9; UPDATE t SET b=NULL}
+  theirs-drops $text
+    {INSERT INTO t VALUES('k1',1,NULL),('k2',NULL,NULL)}
+    {INSERT INTO t VALUES('k3',5,NULL)} $drop
+    {ALTER TABLE t DROP COLUMN a;
+     INSERT INTO t VALUES('k1',NULL),('k2',NULL),('k3',NULL)}
+    {UPDATE t SET b=9; UPDATE t SET b=NULL}
+  ours-drops $text
+    {INSERT INTO t VALUES('k1',1,NULL),('k2',NULL,NULL)}
+    $drop {INSERT INTO t VALUES('k3',5,NULL)}
+    {ALTER TABLE t DROP COLUMN a;
+     INSERT INTO t VALUES('k1',NULL),('k2',NULL),('k3',NULL)}
+    {UPDATE t SET b=9; UPDATE t SET b=NULL}
+} {
+  foreach v {schema ours theirs native} { set $v [subst -nocommands [set $v]] }
+  reset_db
+  execsql $schema
+  execsql $native
+  set want [list [db one {SELECT dolt_hashof_table('t')}] \
+                 [execsql {SELECT * FROM t ORDER BY id}]]
+
+  reset_db
+  execsql $schema
+  execsql $base
+  execsql {SELECT dolt_commit('-Am','base'); SELECT dolt_checkout('-b','br')}
+  execsql $theirs
+  execsql {SELECT dolt_commit('-Am','br'); SELECT dolt_checkout('main')}
+  execsql $ours
+  execsql {SELECT dolt_commit('-Am','main'); SELECT dolt_merge('br')}
+  do_test canonical-$name-hash {
+    list [db one {SELECT dolt_hashof_table('t')}] \
+         [execsql {SELECT * FROM t ORDER BY id}]
+  } $want
+  do_test canonical-$name-rewrite {
+    execsql $touch
+    execsql {SELECT count(*) FROM dolt_status; PRAGMA integrity_check}
+  } {0 ok}
+}
+
+finish_test

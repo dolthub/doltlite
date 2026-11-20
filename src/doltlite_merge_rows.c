@@ -668,8 +668,8 @@ static int vbKeepBase(
         p->pBaseVal, p->nBaseVal, p->pOurVal, p->nOurVal,
         p->pTheirVal, p->nTheirVal, pForced, &aKept, &nKept, &nMerged);
     if( !pMerged ) return SQLITE_NOMEM;
-    rc = mergeGeneratedRecord(ctx->db, ctx->pGeneratedTable,
-        &ctx->pGeneratedStmt, p->intKey, &pMerged, &nMerged);
+    rc = mergeFinishRecord(ctx->db, ctx->pTable, ctx->pGeneratedTable,
+        &ctx->pGeneratedStmt, ctx->isIntKey, p->intKey, &pMerged, &nMerged);
     if( rc==SQLITE_OK ){
       rc = prollyMutMapInsert(ctx->pEdits, p->pKey, p->nKey, p->intKey,
                               pMerged, nMerged);
@@ -858,8 +858,9 @@ static int rowMergeChange(void *pCtx, const ThreeWayChange *pChange){
           pOurs, nOurs, pTheirs, nTheirs, pForced, 0, 0, &nMerged);
 
       if( pMerged ){
-        rc = mergeGeneratedRecord(ctx->db, ctx->pGeneratedTable,
-             &ctx->pGeneratedStmt, pChange->intKey, &pMerged, &nMerged);
+        rc = mergeFinishRecord(ctx->db, ctx->pTable, ctx->pGeneratedTable,
+             &ctx->pGeneratedStmt, ctx->isIntKey, pChange->intKey,
+             &pMerged, &nMerged);
         if( rc!=SQLITE_OK ){
           sqlite3_free(pMerged);
           return rc;
