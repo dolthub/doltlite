@@ -705,7 +705,7 @@ static int vbKeepBase(
   return rc;
 }
 
-static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
+static int rowMergeChange(void *pCtx, const ThreeWayChange *pChange){
   RowMergeCtx *ctx = (RowMergeCtx*)pCtx;
   ThreeWayChange change;
   const VbRow *pForced = 0;
@@ -829,8 +829,6 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
       const u8 *pTheirs = pChange->pTheirVal;
       int nOurs = pChange->nOurVal;
       int nTheirs = pChange->nTheirVal;
-      u8 *pKeyRecord = 0;
-      int nKeyRecord = 0;
 
       /* Both sides inserted this key. A unique index sorts 1 and 1.0
       ** together. The integer fits in the key, so its value is empty;
@@ -854,18 +852,10 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
         }
       }
 
-      if( ctx->pTable && !ctx->isIntKey && (nOurs==0 || nTheirs==0) ){
-        rc = doltliteRecordFromClusteredKey(ctx->db, ctx->pTable->zName,
-            pChange->pKey, pChange->nKey, &pKeyRecord, &nKeyRecord);
-        if( rc!=SQLITE_OK ) return rc;
-        if( nOurs==0 ){ pOurs = pKeyRecord; nOurs = nKeyRecord; }
-        if( nTheirs==0 ){ pTheirs = pKeyRecord; nTheirs = nKeyRecord; }
-      }
       pMerged = tryCellMerge(
           ctx->pGeneratedTable, ctx->pPolicy,
           pChange->pBaseVal, pChange->nBaseVal,
           pOurs, nOurs, pTheirs, nTheirs, pForced, 0, 0, &nMerged);
-      sqlite3_free(pKeyRecord);
 
       if( pMerged ){
         rc = mergeGeneratedRecord(ctx->db, ctx->pGeneratedTable,
@@ -991,6 +981,14 @@ record_conflict:
     }
   }
   return rc;
+}
+
+static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
+  RowMergeCtx *ctx = (RowMergeCtx*)pCtx;
+  return mergeWithKeyRecords(ctx->db,
+      ctx->pTable && !ctx->isIntKey ? ctx->pTable->zName : 0,
+      ctx->pPolicy && ctx->pPolicy->nDropFields>0,
+      pChange, rowMergeChange, pCtx);
 }
 
 static int layoutCellsMatch(
@@ -1604,11 +1602,12 @@ int mergeRowEditsColumn(
     static const RecField kNullField = { 0, 0, 0 };
     int nOld = 0, nNew = 0;
     if( pChange->type!=PROLLY_DIFF_MODIFY ) continue;
-    if( !pChange->pOldVal || !pChange->pNewVal ) continue;
-    if( parseRecordFields(pChange->pOldVal, pChange->nOldVal, &aOld, &nOld)<0 ){
+    if( pChange->nOldVal>0
+     && parseRecordFields(pChange->pOldVal, pChange->nOldVal, &aOld, &nOld)<0 ){
       continue;
     }
-    if( parseRecordFields(pChange->pNewVal, pChange->nNewVal, &aNew, &nNew)<0 ){
+    if( pChange->nNewVal>0
+     && parseRecordFields(pChange->pNewVal, pChange->nNewVal, &aNew, &nNew)<0 ){
       sqlite3_free(aOld);
       continue;
     }

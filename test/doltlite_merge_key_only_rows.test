@@ -1,0 +1,73 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+proc key_only_setup {pk base theirs ours} {
+  reset_db
+  execsql "CREATE TABLE t(id $pk PRIMARY KEY, a INT, b INT)"
+  execsql $base
+  execsql {SELECT dolt_commit('-Am','base'); SELECT dolt_checkout('-b','br')}
+  execsql $theirs
+  execsql {SELECT dolt_commit('-Am','br'); SELECT dolt_checkout('main')}
+  execsql $ours
+  execsql {SELECT dolt_commit('-Am','main')}
+}
+
+foreach {tag pk} {text VARCHAR(20) int INT} {
+  key_only_setup $pk {
+    INSERT INTO t VALUES(1,NULL,NULL);
+  } {UPDATE t SET a=5 WHERE id=1} {UPDATE t SET b=7 WHERE id=1}
+  do_execsql_test key-only-$tag-cell-merge {
+    SELECT dolt_merge('br') IS NOT NULL;
+    SELECT * FROM t;
+    PRAGMA integrity_check;
+  } {1 1 5 7 ok}
+
+  foreach {name base theirs ours} {
+    was-null {INSERT INTO t VALUES(1,NULL,NULL),(3,3,33)}
+             {ALTER TABLE t DROP COLUMN b} {UPDATE t SET b=7 WHERE id=1}
+    becomes-null {INSERT INTO t VALUES(1,NULL,7),(3,3,33)}
+             {ALTER TABLE t DROP COLUMN b} {UPDATE t SET b=NULL WHERE id=1}
+  } {
+    foreach op {dolt_merge dolt_cherry_pick} {
+      key_only_setup $pk $base $theirs $ours
+      # Applying a drop over a value this branch set to NULL discards nothing.
+      set refused [expr {$op eq "dolt_merge" || $name eq "was-null"}]
+      do_test key-only-$tag-drop-$name-$op {
+        set result [catchsql "SELECT ${op}('br')"]
+        list [lindex $result 0] \
+          [regexp {dropped.*changed|would be dropped} [lindex $result 1]] \
+          [execsql {SELECT count(*) FROM pragma_table_info('t')}]
+      } [list $refused $refused [expr {2+$refused}]]
+    }
+  }
+
+  key_only_setup $pk {
+    INSERT INTO t VALUES(1,1,1),(2,2,2);
+  } {UPDATE t SET a=NULL, b=NULL WHERE id=1} {UPDATE t SET a=7 WHERE id=1}
+  do_test key-only-$tag-conflict-row {
+    execsql BEGIN
+    catchsql {SELECT dolt_merge('br')}
+    execsql {
+      SELECT base_id, base_a, base_b, our_id, our_a, our_b,
+             their_id, their_a, their_b FROM dolt_conflicts_t;
+    }
+  } {1 1 1 1 7 1 1 {} {}}
+  do_execsql_test key-only-$tag-resolve-theirs {
+    SELECT dolt_conflicts_resolve('--theirs','t');
+    SELECT * FROM t ORDER BY id;
+    COMMIT;
+    SELECT count(*) FROM dolt_conflicts;
+    PRAGMA integrity_check;
+  } {0 1 {} {} 2 2 2 0 ok}
+
+  key_only_setup $pk {
+    INSERT INTO t VALUES(1,1,1),(5,NULL,2);
+  } {ALTER TABLE t DROP COLUMN b} {DELETE FROM t WHERE id=5}
+  do_execsql_test key-only-$tag-drop-vs-delete {
+    SELECT dolt_merge('br') IS NOT NULL;
+    SELECT * FROM t;
+    PRAGMA integrity_check;
+  } {1 1 1 ok}
+}
+
+finish_test

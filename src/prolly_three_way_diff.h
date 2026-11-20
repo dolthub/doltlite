@@ -22,8 +22,15 @@
 
 typedef struct ThreeWayChange ThreeWayChange;
 
+#define THREE_WAY_HAS_BASE   0x01
+#define THREE_WAY_HAS_OURS   0x02
+#define THREE_WAY_HAS_THEIRS 0x04
+
 struct ThreeWayChange {
   u8 type;
+  /* Which sides hold the row. A row stored with no value has a zero
+  ** length, so the lengths alone cannot say. */
+  u8 mPresent;
   const u8 *pKey;
   int nKey;
   i64 intKey;

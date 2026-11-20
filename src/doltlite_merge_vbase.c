@@ -300,3 +300,47 @@ int mergeVbBind(
 }
 
 #endif
+
+/* A clustered row whose columns outside the key are all NULL is stored with
+** no value, which the row merge would read as a missing row. Give each such
+** side the record of its key for the changes the merge compares by cell. */
+int mergeWithKeyRecords(
+  sqlite3 *db, const char *zTable, int bDropPolicy,
+  const ThreeWayChange *p, ThreeWayDiffCallback xChange, void *pCtx
+){
+  ThreeWayChange keyed;
+  u8 *pRec = 0;
+  int nRec = 0;
+  int rc;
+  int bEmpty = ((p->mPresent & THREE_WAY_HAS_BASE) && p->nBaseVal<=0)
+            || ((p->mPresent & THREE_WAY_HAS_OURS) && p->nOurVal<=0)
+            || ((p->mPresent & THREE_WAY_HAS_THEIRS) && p->nTheirVal<=0);
+  int bCompared = p->type==THREE_WAY_CONFLICT_MM
+               || p->type==THREE_WAY_CONFLICT_DM
+               || (bDropPolicy && (p->type==THREE_WAY_LEFT_MODIFY
+                                || p->type==THREE_WAY_RIGHT_MODIFY
+                                || p->type==THREE_WAY_CONVERGENT));
+  if( !zTable || !bEmpty || !bCompared ) return xChange(pCtx, p);
+  rc = doltliteRecordFromClusteredKey(db, zTable, p->pKey, p->nKey,
+                                      &pRec, &nRec);
+  if( rc!=SQLITE_OK || nRec<=0 ){
+    sqlite3_free(pRec);
+    return rc!=SQLITE_OK ? rc : xChange(pCtx, p);
+  }
+  keyed = *p;
+  if( (p->mPresent & THREE_WAY_HAS_BASE) && p->nBaseVal<=0 ){
+    keyed.pBaseVal = pRec;
+    keyed.nBaseVal = nRec;
+  }
+  if( (p->mPresent & THREE_WAY_HAS_OURS) && p->nOurVal<=0 ){
+    keyed.pOurVal = pRec;
+    keyed.nOurVal = nRec;
+  }
+  if( (p->mPresent & THREE_WAY_HAS_THEIRS) && p->nTheirVal<=0 ){
+    keyed.pTheirVal = pRec;
+    keyed.nTheirVal = nRec;
+  }
+  rc = xChange(pCtx, &keyed);
+  sqlite3_free(pRec);
+  return rc;
+}

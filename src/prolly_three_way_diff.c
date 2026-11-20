@@ -33,6 +33,8 @@ static int emitLeftOnly(
   ThreeWayChange change;
   memset(&change, 0, sizeof(change));
   fillKeyFromChange(&change, pLeft);
+  change.mPresent = (pLeft->type!=PROLLY_DIFF_ADD ? THREE_WAY_HAS_BASE : 0)
+                  | (pLeft->type!=PROLLY_DIFF_DELETE ? THREE_WAY_HAS_OURS : 0);
 
   switch( pLeft->type ){
     case PROLLY_DIFF_ADD:
@@ -64,6 +66,8 @@ static int emitRightOnly(
   ThreeWayChange change;
   memset(&change, 0, sizeof(change));
   fillKeyFromChange(&change, pRight);
+  change.mPresent = (pRight->type!=PROLLY_DIFF_ADD ? THREE_WAY_HAS_BASE : 0)
+                  | (pRight->type!=PROLLY_DIFF_DELETE ? THREE_WAY_HAS_THEIRS : 0);
 
   switch( pRight->type ){
     case PROLLY_DIFF_ADD:
@@ -96,6 +100,9 @@ static int emitBothSides(
   ThreeWayChange change;
   memset(&change, 0, sizeof(change));
   fillKeyFromChange(&change, pLeft);
+  change.mPresent = (pLeft->type!=PROLLY_DIFF_ADD ? THREE_WAY_HAS_BASE : 0)
+                  | (pLeft->type!=PROLLY_DIFF_DELETE ? THREE_WAY_HAS_OURS : 0)
+                  | (pRight->type!=PROLLY_DIFF_DELETE ? THREE_WAY_HAS_THEIRS : 0);
 
   if( pLeft->type==PROLLY_DIFF_ADD && pRight->type==PROLLY_DIFF_ADD ){
     if( valuesEqual(pLeft->pNewVal, pLeft->nNewVal,
