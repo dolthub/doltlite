@@ -11,6 +11,10 @@
 
 void doltliteAuthShieldEnter(sqlite3 *db, DoltliteAuthShield *p){
   p->db = db;
+  /* A connection may lower the limit for the SQL it is handed; the
+  ** engine's own statements nest deeper than such a limit allows. */
+  p->nExprDepth = db->aLimit[SQLITE_LIMIT_EXPR_DEPTH];
+  db->aLimit[SQLITE_LIMIT_EXPR_DEPTH] = SQLITE_MAX_EXPR_DEPTH;
 #ifndef SQLITE_OMIT_AUTHORIZATION
   p->xAuth = db->xAuth;
   db->xAuth = 0;
@@ -18,6 +22,7 @@ void doltliteAuthShieldEnter(sqlite3 *db, DoltliteAuthShield *p){
 }
 
 void doltliteAuthShieldLeave(DoltliteAuthShield *p){
+  p->db->aLimit[SQLITE_LIMIT_EXPR_DEPTH] = p->nExprDepth;
 #ifndef SQLITE_OMIT_AUTHORIZATION
   p->db->xAuth = p->xAuth;
 #endif

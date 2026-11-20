@@ -37,6 +37,7 @@ typedef struct DoltliteCommitQueue DoltliteCommitQueue;
 typedef struct DoltliteAuthShield DoltliteAuthShield;
 struct DoltliteAuthShield {
   sqlite3 *db;
+  int nExprDepth;
 #ifndef SQLITE_OMIT_AUTHORIZATION
   sqlite3_xauth xAuth;
 #endif
