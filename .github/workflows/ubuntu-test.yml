@@ -12,6 +12,9 @@ on:
       benchmarks:
         type: boolean
         default: true
+      nuget:
+        type: boolean
+        default: true
 
 jobs:
   build-test:
@@ -20,6 +23,7 @@ jobs:
     with:
       suites: ${{ inputs.suites }}
       platforms: ${{ inputs.platforms }}
+      nuget: ${{ inputs.nuget }}
 
   test-suite:
     if: inputs.suites

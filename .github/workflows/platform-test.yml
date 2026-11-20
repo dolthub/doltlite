@@ -7,6 +7,9 @@ on:
         description: Platform to build or test
         type: string
         required: true
+      nuget:
+        type: boolean
+        default: true
 
 jobs:
   build-and-test:
@@ -209,6 +212,7 @@ jobs:
       timeout-minutes: 25
 
     - name: Smoke test the DoltHub.Doltlite NuGet package
+      if: inputs.nuget
       shell: bash
       run: |
         chmod +x packaging/nuget/assemble.sh packaging/nuget/test-package.sh

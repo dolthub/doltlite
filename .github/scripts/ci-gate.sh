@@ -26,7 +26,7 @@ built=true
 require build_ubuntu "$built" "$BUILD_UBUNTU"
 require test_ubuntu "$(any_of "$SUITES" "$PLATFORMS" "$BENCHMARKS")" "$TEST_UBUNTU"
 require compile_checks "$COMPILE" "$COMPILE_CHECKS"
-require wasm "$WASM_WANTED" "$WASM"
+require test_embeddings "$(any_of "$WASM_WANTED" "$SWIFT_WANTED")" "$TEST_EMBEDDINGS"
 require build_macos "$PLATFORMS" "$BUILD_MACOS"
 require test_macos "$PLATFORMS" "$TEST_MACOS"
 require build_windows "$PLATFORMS" "$BUILD_WINDOWS"

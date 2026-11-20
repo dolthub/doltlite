@@ -42,6 +42,10 @@ expect(['.github/workflows/benchmark.yml'], ['benchmarks']);
 expect(['test/sysbench_timer.c'], ['suites', 'platforms', 'benchmarks', 'compile']);
 
 expect(['packaging/rust/Cargo.toml'], ['platforms', 'wasm']);
+assert.strictEqual(expect(['packaging/swift/test-xcframework.sh'], ['platforms', 'wasm']).swift, true);
+assert.strictEqual(expect(['packaging/nuget/test-archive.sh'], ['platforms', 'wasm']).swift, false);
+assert.strictEqual(expect(['.github/workflows/swift-xcframework.yml'], ['suites']).swift, true);
+expect(['.github/workflows/nuget-package.yml'], ['suites', 'platforms']);
 expect(['.dolt-oracle-version'], ['suites']);
 
 let docs = expect(['doc/doltlite/merge.md', 'AGENTS.md'], []);
@@ -129,7 +133,7 @@ for (const reader of readers) {
 // Every test file a single-job workflow runs, and every test file those
 // shell and Python scripts run, source or import, must classify into that
 // job. Tcl is not followed: compile-checks only runs testrunner --buildonly.
-const SINGLE_JOB = {'benchmark.yml': 'benchmarks', 'wasm.yml': 'wasm', 'compile-checks.yml': 'compile'};
+const SINGLE_JOB = {'benchmark.yml': 'benchmarks', 'test-embeddings.yml': 'wasm', 'compile-checks.yml': 'compile'};
 for (const [workflow, job] of Object.entries(SINGLE_JOB)) {
   let text = read(`.github/workflows/${workflow}`);
   for (const [, action] of text.matchAll(/uses:\s*\.\/(\.github\/actions\/[\w-]+)/g)) {
@@ -157,15 +161,15 @@ for (const [workflow, job] of Object.entries(SINGLE_JOB)) {
 }
 
 const {spawnSync} = require('child_process');
-const JOB_RESULTS = ['BUILD_UBUNTU', 'TEST_UBUNTU', 'COMPILE_CHECKS', 'WASM', 'BUILD_MACOS',
+const JOB_RESULTS = ['BUILD_UBUNTU', 'TEST_UBUNTU', 'COMPILE_CHECKS', 'TEST_EMBEDDINGS', 'BUILD_MACOS',
   'TEST_MACOS', 'BUILD_WINDOWS', 'TEST_WINDOWS', 'WINDOWS_SUITES'];
 function gate(paths, results) {
   const c = classify(paths);
   const env = {PATH: process.env.PATH, CLASSIFY: 'success', LIGHT: String(c.light),
     SUITES: String(c.suites), PLATFORMS: String(c.platforms), BENCHMARKS: String(c.benchmarks),
-    COMPILE: String(c.compile), WASM_WANTED: String(c.wasm), DOC_LINKS: 'skipped'};
+    COMPILE: String(c.compile), WASM_WANTED: String(c.wasm), SWIFT_WANTED: String(c.swift), DOC_LINKS: 'skipped'};
   const wanted = {BUILD_UBUNTU: !c.light, TEST_UBUNTU: c.suites || c.platforms || c.benchmarks,
-    COMPILE_CHECKS: c.compile, WASM: c.wasm};
+    COMPILE_CHECKS: c.compile, TEST_EMBEDDINGS: c.wasm || c.swift};
   for (const job of JOB_RESULTS) {
     env[job] = (wanted[job] ?? c.platforms) ? 'success' : 'skipped';
   }
@@ -180,7 +184,9 @@ assert.strictEqual(gate(['README.md'], {BUILD_UBUNTU: 'skipped', DOC_LINKS: 'suc
 assert.strictEqual(gate(['src/btree.c'], {WINDOWS_SUITES: 'skipped'}), 1);
 assert.strictEqual(gate(['test/doltlite_merge.sh'], {TEST_UBUNTU: 'failure'}), 1);
 assert.strictEqual(gate(['doc/doltlite/merge.md'], {DOC_LINKS: 'failure'}), 1);
-assert.strictEqual(gate(['doc/doltlite/merge.md'], {WASM: 'cancelled'}), 1);
+assert.strictEqual(gate(['doc/doltlite/merge.md'], {TEST_EMBEDDINGS: 'cancelled'}), 1);
+assert.strictEqual(gate(['.github/workflows/release.yml'], {TEST_EMBEDDINGS: 'skipped'}), 1);
+assert.strictEqual(gate(['ext/wasm/api/sqlite3-api.js'], {TEST_EMBEDDINGS: 'skipped'}), 1);
 assert.strictEqual(gate(['src/btree.c'], {CLASSIFY: 'failure'}), 1);
 
 console.log(`Change classification and CI Gate: ${checks} checks passed`);

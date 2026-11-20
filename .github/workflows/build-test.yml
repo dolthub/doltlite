@@ -9,6 +9,9 @@ on:
       platforms:
         type: boolean
         default: true
+      nuget:
+        type: boolean
+        default: true
 
 jobs:
   development-builds:
@@ -72,3 +75,4 @@ jobs:
     uses: ./.github/workflows/platform-test.yml
     with:
       platform: ubuntu
+      nuget: ${{ inputs.nuget }}

@@ -1,11 +1,6 @@
 name: Swift XCFramework
 
 on:
-  pull_request:
-    paths:
-      - 'packaging/swift/**'
-      - '.github/workflows/swift-xcframework.yml'
-      - '.github/workflows/release.yml'
   workflow_dispatch:
   workflow_call:
     inputs:

@@ -5,10 +5,11 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <DoltlitePackageVersion Condition="'$(DoltlitePackageVersion)' == ''">0.0.0-ci</DoltlitePackageVersion>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="DoltHub.Doltlite" Version="0.0.0-ci" />
+    <PackageReference Include="DoltHub.Doltlite" Version="[$(DoltlitePackageVersion)]" />
     <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="8.0.8" />
   </ItemGroup>
 
