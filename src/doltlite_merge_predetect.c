@@ -1253,6 +1253,10 @@ static int mergePreNormalizeTableRename(
       ** still in hand. */
       rc = mergeRecordTableRename(ppActions, pnActions,
                                   pAncT->zName, pNewT->zName);
+      if( rc==SQLITE_OK ){
+        rc = doltliteMergeRenameKeepText(&(*ppActions)[*pnActions-1],
+                                         aSide, nSide, aOther, nOther);
+      }
       if( rc!=SQLITE_OK ) return rc;
 
       /* The side's catalog entry follows the row back to the old name. */

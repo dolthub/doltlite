@@ -1076,6 +1076,56 @@ static char *mergeQuotedIfNeeded(const char *zName){
                 : sqlite3_mprintf("\"%w\"", zName);
 }
 
+int doltliteMergeRenameKeepText(
+  SchemaMergeAction *pAct,
+  SchemaEntry *aSide, int nSide,
+  SchemaEntry *aOther, int nOther
+){
+  int i;
+  for(i=0; i<nOther; i++){
+    SchemaEntry *p = &aOther[i];
+    char **az;
+    if( !p->zType || !p->zName || !p->zSql ) continue;
+    if( strcmp(p->zType, "view")!=0
+     && (strcmp(p->zType, "trigger")!=0 || !p->zTblName
+         || sqlite3_stricmp(p->zTblName, pAct->zTableName)==0) ){
+      continue;
+    }
+    if( findSchemaEntry(aSide, nSide, p->zName) ) continue;
+    az = sqlite3_realloc(pAct->azKeepText,
+                         (pAct->nKeepText+2)*(int)sizeof(char*));
+    if( !az ) return SQLITE_NOMEM;
+    pAct->azKeepText = az;
+    az[pAct->nKeepText] = sqlite3_mprintf("%s", p->zName);
+    az[pAct->nKeepText+1] = sqlite3_mprintf("%s", p->zSql);
+    pAct->nKeepText += 2;
+    if( !az[pAct->nKeepText-2] || !az[pAct->nKeepText-1] ) return SQLITE_NOMEM;
+  }
+  return SQLITE_OK;
+}
+
+static int mergeRestoreKeptText(sqlite3 *db, SchemaMergeAction *pAct){
+  u64 savedFlags = db->flags;
+  sqlite3_stmt *pUp = 0;
+  int i, rc, nChange = 0;
+  if( pAct->nKeepText==0 ) return SQLITE_OK;
+  db->flags = (savedFlags & ~(u64)SQLITE_Defensive) | SQLITE_WriteSchema;
+  rc = sqlite3_prepare_v2(db,
+      "UPDATE sqlite_master SET sql=?1 WHERE name=?2"
+      " AND type IN ('view','trigger') AND sql IS NOT ?1", -1, &pUp, 0);
+  for(i=0; rc==SQLITE_OK && i<pAct->nKeepText; i+=2){
+    sqlite3_bind_text(pUp, 1, pAct->azKeepText[i+1], -1, SQLITE_STATIC);
+    sqlite3_bind_text(pUp, 2, pAct->azKeepText[i], -1, SQLITE_STATIC);
+    sqlite3_step(pUp);
+    rc = sqlite3_reset(pUp);
+    nChange += sqlite3_changes(db);
+  }
+  sqlite3_finalize(pUp);
+  db->flags = savedFlags;
+  if( rc==SQLITE_OK && nChange ) sqlite3ResetAllSchemasOfConnection(db);
+  return rc;
+}
+
 static int mergeApplySchemaActionsInTxn(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
@@ -1102,6 +1152,7 @@ static int mergeApplySchemaActionsInTxn(
     if( !zAlter ) return SQLITE_NOMEM;
     rc = sqlite3_exec(db, zAlter, 0, 0, &zErr);
     sqlite3_free(zAlter);
+    if( rc==SQLITE_OK ) rc = mergeRestoreKeptText(db, &aSchemaActions[si]);
   }
 
   for(si=0; si<nSchemaActions && rc==SQLITE_OK; si++){

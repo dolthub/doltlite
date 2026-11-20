@@ -395,6 +395,7 @@ int recordSchemaColumnChanges(
     (*pnSchemaActions+1)*(int)sizeof(SchemaMergeAction));
   if( !aNew ) return SQLITE_NOMEM;
   *ppSchemaActions = aNew;
+  memset(&aNew[*pnSchemaActions], 0, sizeof(SchemaMergeAction));
   aNew[*pnSchemaActions].zTableName = sqlite3_mprintf("%s", zName);
   if( !aNew[*pnSchemaActions].zTableName ) return SQLITE_NOMEM;
   aNew[*pnSchemaActions].azAddColumns = azAddCols;
@@ -403,9 +404,6 @@ int recordSchemaColumnChanges(
   aNew[*pnSchemaActions].nDropColumns = nDropCols;
   aNew[*pnSchemaActions].azRenameColumns = azRenameCols;
   aNew[*pnSchemaActions].nRenameColumns = nRenameCols;
-  aNew[*pnSchemaActions].azClauses = 0;
-  aNew[*pnSchemaActions].nClauses = 0;
-  aNew[*pnSchemaActions].zRenameTable = 0;
   (*pnSchemaActions)++;
   return SQLITE_OK;
 }

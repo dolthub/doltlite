@@ -871,6 +871,10 @@ void freeSchemaMergeActions(SchemaMergeAction *a, int n){
       sqlite3_free(a[i].azClauses[j]);
     }
     sqlite3_free(a[i].azClauses);
+    for(j=0; j<a[i].nKeepText; j++){
+      sqlite3_free(a[i].azKeepText[j]);
+    }
+    sqlite3_free(a[i].azKeepText);
     sqlite3_free(a[i].zRenameTable);
     sqlite3_free(a[i].zTableName);
   }
