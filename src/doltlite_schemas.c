@@ -940,7 +940,7 @@ int doltliteRevertViewsAndTriggers(
     char *zMsg = 0;
     if( !zType || !aSourceSchema[i].zSql ) continue;
     if( strcmp(zType, bTrigger ? "trigger" : "view")!=0 ) continue;
-    rc = sqlite3_exec(db, aSourceSchema[i].zSql, 0, 0, 0);
+    rc = doltliteExecStoredSql(db, aSourceSchema[i].zSql);
     if( rc==SQLITE_OK || rc==SQLITE_NOMEM ) continue;
     /* Copy first: ErrorWithMsg replaces the connection string this reads. */
     zDetail = sqlite3_mprintf("%s", sqlite3_errmsg(db));

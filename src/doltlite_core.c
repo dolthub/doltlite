@@ -1491,6 +1491,17 @@ void doltliteFinishAutocommitWrite(sqlite3 *db){
   }
 }
 
+/* Stored definitions keep their comments, which the schema loader accepts
+** whatever SQLITE_DBCONFIG_ENABLE_COMMENTS says. */
+int doltliteExecStoredSql(sqlite3 *db, const char *zSql){
+  u64 saved = db->flags & SQLITE_Comments;
+  int rc;
+  db->flags |= SQLITE_Comments;
+  rc = sqlite3_exec(db, zSql, 0, 0, 0);
+  db->flags = (db->flags & ~(u64)SQLITE_Comments) | saved;
+  return rc;
+}
+
 int doltliteVcSealTopLevelSavepointTxn(sqlite3 *db){
   if( doltliteSavepointIsTopLevelTxn(db) ){
     return sqlite3_exec(db, "COMMIT", 0, 0, 0);

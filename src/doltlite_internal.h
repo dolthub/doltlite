@@ -1663,6 +1663,7 @@ int doltlitePrimeSchemaCache(sqlite3 *db);
 int doltliteSavepointIsTopLevelTxn(sqlite3 *db);
 void doltliteFinishAutocommitWrite(sqlite3 *db);
 int doltliteVcSealTopLevelSavepointTxn(sqlite3 *db);
+int doltliteExecStoredSql(sqlite3 *db, const char *zSql);
 
 typedef DoltliteNameIndex AddNameIndex;
 int addNameIndexInit(
