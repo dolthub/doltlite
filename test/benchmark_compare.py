@@ -227,14 +227,12 @@ def parse_input(spec):
     return results
 
 
-def total_ratio(results):
+# Every workload counts equally. Dividing summed times instead would let
+# the one or two longest workloads decide the aggregate.
+def mean_ratio(results):
     if not results or any(not result.valid for result in results):
         return None
-    baseline = sum(result.baseline_us for result in results)
-    candidate = sum(result.candidate_us for result in results)
-    if baseline <= 0:
-        return None
-    return candidate / baseline
+    return statistics.mean(result.ratio for result in results)
 
 
 def total_delta(results):
@@ -296,10 +294,10 @@ def analyze(
         suites[result.suite].append(result)
 
     section_ratios = {
-        key: total_ratio(group) for key, group in sections.items()
+        key: mean_ratio(group) for key, group in sections.items()
     }
     suite_ratios = {
-        key: total_ratio(group) for key, group in suites.items()
+        key: mean_ratio(group) for key, group in suites.items()
     }
     section_failures = {
         key
@@ -319,7 +317,7 @@ def analyze(
             and total_delta(suites[key]) > min_delta_us
         )
     }
-    overall_ratio = total_ratio(results)
+    overall_ratio = mean_ratio(results)
     overall_failed = (
         overall_ratio is None
         or (
@@ -502,12 +500,13 @@ def render(
         "",
         f"- **Baseline:** `{baseline_ref}`",
         f"- **Candidate:** `{candidate_ref}`",
-        f"- **Overall ratio:** {format_ratio(analysis['overall_ratio'])}",
+        f"- **Overall mean ratio:** {format_ratio(analysis['overall_ratio'])}",
         f"- **Gate result:** **{gate_status}**",
         (
             f"- **Gates:** individual > {individual_ratio:.2f}x with more "
             f"than {format_time(min_delta_us)} regression; section, suite, "
-            f"or overall > {aggregate_ratio:.2f}x with the same minimum delta"
+            f"or overall mean of workload ratios > {aggregate_ratio:.2f}x "
+            f"with the same minimum total delta"
         ),
     ]
     for suite, (ratio, delta) in sorted((individual_overrides or {}).items()):
@@ -552,8 +551,8 @@ def render(
     lines.extend(
         [
             "",
-            "| Suite | Workloads | Baseline total | Candidate total | Ratio | Result |",
-            "|---|---:|---:|---:|---:|---|",
+            "| Suite | Workloads | Mean ratio | Result |",
+            "|---|---:|---:|---|",
         ]
     )
     for suite in sorted(suites):
@@ -568,20 +567,8 @@ def render(
             suite_status = "TRANSIENT"
         else:
             suite_status = "PASS"
-        baseline_total = (
-            sum(result.baseline_us for result in group)
-            if all(result.valid for result in group)
-            else None
-        )
-        candidate_total = (
-            sum(result.candidate_us for result in group)
-            if all(result.valid for result in group)
-            else None
-        )
         lines.append(
             f"| {suite} | {len(group)} | "
-            f"{format_time(baseline_total)} | "
-            f"{format_time(candidate_total)} | "
             f"{format_ratio(ratio)} | {suite_status} |"
         )
 

@@ -215,11 +215,28 @@ class BenchmarkCompareTest(unittest.TestCase):
     def test_formats_faster_candidate_delta(self):
         self.assertEqual(benchmark_compare.format_delta(-1500), "-1.50ms")
 
+    def test_aggregate_is_mean_of_workload_ratios(self):
+        # Summed, the long workload hides the short one: 1.001x. Averaged,
+        # each counts once: (2.0 + 1.0) / 2.
+        analysis = benchmark_compare.analyze(
+            [
+                result("short", 10_000, 20_000),
+                result("long", 10_000_000, 10_000_000),
+            ],
+            2.50,
+            1.15,
+            5000,
+        )
+        self.assertEqual(analysis["overall_ratio"], 1.5)
+        self.assertTrue(analysis["overall_failed"])
+
     def test_suite_specific_individual_gate(self):
         analysis = benchmark_compare.analyze(
             [
                 result("startup_bound", 60_000, 85_000),
                 result("steady", 1_000_000, 1_000_000),
+                result("steady2", 1_000_000, 1_000_000),
+                result("steady3", 1_000_000, 1_000_000),
             ],
             1.25,
             1.15,
@@ -560,6 +577,9 @@ class BenchmarkCompareTest(unittest.TestCase):
             result("point", 100_000, 140_000),
             result("other", 100_000, 140_000),
             result("steady", 1_000_000, 1_000_000),
+            result("steady2", 1_000_000, 1_000_000),
+            result("steady3", 1_000_000, 1_000_000),
+            result("steady4", 1_000_000, 1_000_000),
         ]
         raw = self.analyze(results)
         gates = {
@@ -584,7 +604,7 @@ class BenchmarkCompareTest(unittest.TestCase):
                 "int": attempt_history("int", [gates, gates, gates])
             },
         )
-        self.assertIn("**Overall ratio:** 1.067x", report)
+        self.assertIn("**Overall mean ratio:** 1.133x", report)
         self.assertIn("**Gate result:** **FAIL**", report)
         self.assertIn(
             "individual `int / reads / point`",
