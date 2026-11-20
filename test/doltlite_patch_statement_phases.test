@@ -110,4 +110,31 @@ do_test new-table-data-and-indexes {
   } HEAD~1 HEAD
 } {0 0 ok}
 
+do_test table-takes-name-of-dropped-tables-index {
+  roundtrip {
+    CREATE TABLE z(id INT PRIMARY KEY, a INT);
+    CREATE INDEX a_new ON z(a);
+    INSERT INTO z VALUES(1,1);
+  } {
+    DROP TABLE z;
+    CREATE TABLE a_new(id INT PRIMARY KEY, b INT);
+    INSERT INTO a_new VALUES(1,2);
+    CREATE INDEX a_new_b ON a_new(b);
+  } HEAD~1 HEAD
+} {0 0 ok}
+
+do_test table-takes-name-of-dropped-table {
+  roundtrip {
+    CREATE TABLE a(id INT PRIMARY KEY, x INT);
+    CREATE TABLE z(id INT PRIMARY KEY, a INT);
+    CREATE INDEX n ON z(a);
+    INSERT INTO z VALUES(1,1);
+  } {
+    DROP TABLE z;
+    ALTER TABLE a ADD COLUMN y INT;
+    CREATE TABLE n(id INT PRIMARY KEY, b INT);
+    INSERT INTO n VALUES(1,2);
+  } HEAD~1 HEAD
+} {0 0 ok}
+
 finish_test
