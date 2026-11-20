@@ -1,0 +1,132 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# One branch adds a column and an index on it while the other branch
+# changes the same table. The table's merged text gains the column from a
+# replayed ADD COLUMN, so the index is created after it instead of being
+# adopted with a table text that does not have the column yet.
+
+proc setup {other} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, c INT);
+    INSERT INTO t VALUES(1,10,100),(2,20,200);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('feat');
+    SELECT dolt_checkout('feat');
+    ALTER TABLE t ADD COLUMN d INT DEFAULT 7;
+    CREATE INDEX idd ON t(d);
+    INSERT INTO t(id,a,d) VALUES(3,30,33);
+    UPDATE t SET d=11 WHERE id=1;
+    SELECT dolt_commit('-Am','X');
+    SELECT dolt_checkout('main');
+  }
+  execsql $other
+  execsql {
+    INSERT INTO t(id,a) VALUES(4,40);
+    SELECT dolt_commit('-Am','Y');
+  }
+}
+
+foreach {tn other tblsql} {
+  add    {ALTER TABLE t ADD COLUMN e INT DEFAULT 9}
+         {CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, c INT, e INT DEFAULT 9, d INT DEFAULT 7)}
+  rename {ALTER TABLE t RENAME COLUMN c TO c2}
+         {CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, c2 INT, d INT DEFAULT 7)}
+  drop   {ALTER TABLE t DROP COLUMN c}
+         {CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, d INT DEFAULT 7)}
+} {
+  foreach {op sql} {
+    merge  {SELECT dolt_merge('feat') IS NOT NULL}
+    pick   {SELECT dolt_cherry_pick('feat') IS NOT NULL}
+  } {
+    setup $other
+    do_execsql_test $tn-$op.runs $sql {1}
+    do_execsql_test $tn-$op.schema {
+      SELECT sql FROM sqlite_master ORDER BY name;
+    } [list {CREATE INDEX idd ON t(d)} $tblsql]
+    do_execsql_test $tn-$op.index {
+      SELECT id, d FROM t INDEXED BY idd WHERE d>0 ORDER BY d, id;
+    } {2 7 4 7 1 11 3 33}
+    do_execsql_test $tn-$op.clean {
+      PRAGMA integrity_check;
+      SELECT count(*) FROM dolt_status;
+    } {ok 0}
+    db close
+    sqlite3 db test.db
+    do_execsql_test $tn-$op.reopen {
+      SELECT id FROM t INDEXED BY idd WHERE d=33;
+      PRAGMA integrity_check;
+    } {3 ok}
+  }
+}
+
+# Reverting a commit that dropped an indexed column brings back both.
+reset_db
+do_execsql_test revert-dropped-indexed-column {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, d INT);
+  CREATE INDEX idd ON t(d);
+  INSERT INTO t VALUES(1,10,1),(2,20,2);
+  SELECT dolt_commit('-Am','base') IS NOT NULL;
+  DROP INDEX idd;
+  ALTER TABLE t DROP COLUMN d;
+  SELECT dolt_commit('-Am','dropd') IS NOT NULL;
+  ALTER TABLE t ADD COLUMN e INT DEFAULT 9;
+  SELECT dolt_commit('-Am','adde') IS NOT NULL;
+  SELECT dolt_revert('HEAD~1') IS NOT NULL;
+  SELECT sql FROM sqlite_master ORDER BY name;
+  SELECT id FROM t INDEXED BY idd WHERE d=2;
+  PRAGMA integrity_check;
+} [list 1 1 1 1 {CREATE INDEX idd ON t(d)} \
+   {CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, e INT DEFAULT 9, d INT)} 2 ok]
+
+# A UNIQUE index the merged rows cannot satisfy fails the merge whole.
+reset_db
+do_test unique-violated.setup {
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+    INSERT INTO t VALUES(1,10),(2,20);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_checkout('-b','feat');
+    ALTER TABLE t ADD COLUMN d INT DEFAULT 5;
+    UPDATE t SET d=id;
+    CREATE UNIQUE INDEX idd ON t(d);
+    SELECT dolt_commit('-Am','X');
+    SELECT dolt_checkout('main');
+    ALTER TABLE t ADD COLUMN e INT DEFAULT 9;
+    INSERT INTO t(id,a) VALUES(3,30),(4,40);
+    SELECT dolt_commit('-Am','Y');
+  }
+  catchsql {SELECT dolt_merge('feat')}
+} {1 {cannot merge: schema change could not be applied: UNIQUE constraint failed: t.d}}
+do_execsql_test unique-violated.unmerged {
+  SELECT sql FROM sqlite_master;
+  SELECT count(*) FROM t;
+  SELECT count(*) FROM dolt_status;
+  PRAGMA integrity_check;
+} {{CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, e INT DEFAULT 9)} 4 0 ok}
+
+# An index that also names a column the other branch dropped is still
+# refused: there is no table text it could be created against.
+reset_db
+do_test names-dropped-column.refused {
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, c INT);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_checkout('-b','feat');
+    ALTER TABLE t ADD COLUMN d INT DEFAULT 7;
+    CREATE INDEX idd ON t(d,c);
+    SELECT dolt_commit('-Am','X');
+    SELECT dolt_checkout('main');
+    ALTER TABLE t DROP COLUMN c;
+    SELECT dolt_commit('-Am','Y');
+  }
+  set r [catchsql {SELECT dolt_merge('feat')}]
+  list [lindex $r 0] [string match "cannot merge: index 'idd' covers column 'd'*" [lindex $r 1]]
+} {1 1}
+do_execsql_test names-dropped-column.unmerged {
+  SELECT sql FROM sqlite_master;
+  PRAGMA integrity_check;
+} {{CREATE TABLE t(id INTEGER PRIMARY KEY, a INT)} ok}
+
+finish_test

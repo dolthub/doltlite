@@ -1212,6 +1212,14 @@ static int mergeApplySchemaActionsInTxn(
     }
   }
 
+  for(si=0; si<nSchemaActions && rc==SQLITE_OK; si++){
+    int sj;
+    for(sj=0; rc==SQLITE_OK && sj<aSchemaActions[si].nCreateIndexes; sj++){
+      rc = sqlite3_exec(db, aSchemaActions[si].azCreateIndexes[sj], 0, 0,
+                        &zErr);
+    }
+  }
+
   if( rc==SQLITE_OK ){
     rc = doltliteFlushCatalogToHash(db, pMergedCatHash);
   }

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Two-sided ADD COLUMN of different names plus an index on one new column
-# used to load as SQLITE_CORRUPT. Refuse with cannot merge instead.
+# used to load as SQLITE_CORRUPT. The index is created after both columns.
 . "$(dirname "$0")/lib/doltlite_test_common.sh"
 
 echo "=== Doltlite merge dual ADD COLUMN + index ==="
@@ -23,15 +23,18 @@ SELECT dolt_commit('-Am', 'main');
 "
 
 if dltest_require "dual_add_setup" "$DB" "$SETUP"; then
-  run_test_error_match "dual_add_index_refuses" \
-    "SELECT dolt_merge('feat');" \
-    "cannot merge: index 'ix' covers column 'xcol_a'" "$DB"
+  run_test_match "dual_add_index_merges" \
+    "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
   run_test "dual_add_index_integrity" \
     "PRAGMA integrity_check;" \
     "ok" "$DB"
-  run_test "dual_add_index_table_unmerged" \
-    "SELECT sql FROM sqlite_schema WHERE name='t';" \
-    "CREATE TABLE t(id INTEGER PRIMARY KEY, payload TEXT, xcol_b TEXT)" "$DB"
+  run_test "dual_add_index_table_merged" \
+    "SELECT sql FROM sqlite_schema WHERE name IN ('t','ix') ORDER BY name;" \
+    "CREATE INDEX ix ON t(xcol_a)
+CREATE TABLE t(id INTEGER PRIMARY KEY, payload TEXT, xcol_b TEXT, xcol_a TEXT DEFAULT 'da')" "$DB"
+  run_test "dual_add_index_lookup" \
+    "SELECT id FROM t INDEXED BY ix WHERE xcol_a='da';" \
+    "1" "$DB"
 fi
 
 # Two-sided ADD without an index still merges both columns.
