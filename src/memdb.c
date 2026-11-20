@@ -980,14 +980,15 @@ int sqlite3_deserialize(
     goto end_deserialize;
   }
 #ifdef DOLTLITE_PROLLY
-  /* The image decides the engine: an empty image or a DoltLite image into
-  ** a prolly schema stays on the DoltLite path. Everything else goes
-  ** through the stock reopen, which, like stock, accepts any bytes and
-  ** reports "file is not a database" on first use. */
+  /* The image decides the engine: a DoltLite image opens on the DoltLite
+  ** path whatever the schema held before, and an empty image keeps a
+  ** prolly schema there. Everything else goes through the stock reopen,
+  ** which, like stock, accepts any bytes and reports "file is not a
+  ** database" on first use. */
   if( iDb>=0 && db->aDb[iDb].pBt
-   && sqlite3BtreeIsDoltliteFormat(db->aDb[iDb].pBt)
    && !doltliteImageIsSqliteHeader(pData, szDb)
-   && (szDb==0 || doltliteImageIsDoltlite(pData, szDb)) ){
+   && (doltliteImageIsDoltlite(pData, szDb)
+       || (szDb==0 && sqlite3BtreeIsDoltliteFormat(db->aDb[iDb].pBt))) ){
     Btree *pNewBt = 0;
     Schema *pNewSchema;
     int bNoRoom = 0;
