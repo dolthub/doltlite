@@ -799,15 +799,24 @@ static int patchNativeAlter(
     if( !pTab ) return SQLITE_CORRUPT;
     i = sqlite3ColumnIndex(pTab,pTo->col.azName[pTo->col.nCol-1]);
     if( i<0 ) return SQLITE_CORRUPT;
-    if( !pTab->aCol[i].notNull ){
+    {
+      /* ADD COLUMN on a table that has rows needs a constant default, and
+      ** a non-NULL one under NOT NULL. Anything else is a rebuild. */
+      Expr *pDflt = sqlite3ColumnExpr(pTab, &pTab->aCol[i]);
       sqlite3_value *pValue = 0;
-      rc = sqlite3ValueFromExpr(pTo->db, sqlite3ColumnExpr(pTab, &pTab->aCol[i]),
-                                SQLITE_UTF8, pTab->aCol[i].affinity, &pValue);
-      if( rc==SQLITE_OK && pValue && sqlite3_value_type(pValue)!=SQLITE_NULL ){
+      int bNull, bConstant;
+      rc = sqlite3ValueFromExpr(pTo->db, pDflt, SQLITE_UTF8,
+                                pTab->aCol[i].affinity, &pValue);
+      bConstant = !pDflt || pValue;
+      bNull = !pValue || sqlite3_value_type(pValue)==SQLITE_NULL;
+      if( rc==SQLITE_OK && !pTab->aCol[i].notNull && !bNull ){
         iAddedDefault = pTo->col.nCol-1;
       }
       sqlite3ValueFree(pValue);
       if( rc!=SQLITE_OK ) return rc;
+      if( !bConstant || (pTab->aCol[i].notNull && bNull) ){
+        return SQLITE_OK;
+      }
     }
     rc = patchSchemaItem(pTable->pToSchema->zSql,i,&zItem,&nItem);
     if( rc!=SQLITE_OK ) return rc;
