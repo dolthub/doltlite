@@ -9357,10 +9357,20 @@ static void run_deleted_branch_recreate_not_corrupt(void){
   rc = execErr(dbA, "INSERT INTO w(id,v) VALUES(4,'more');", zErr, sizeof(zErr));
   expectBusyGone("dbr_other_insert_not_corrupt", rc, zErr, "feat");
   check("dbr_other_rollback", execSql(dbA, "ROLLBACK;")==SQLITE_OK);
-  /* The create commits the ref and reopens this transaction. A peer read
-  ** while that transaction holds the store answers from its old snapshot. */
+  /* The connection that deleted the branch keeps this file mapped, and on
+  ** Windows that view stays at the old refs after the new branch is
+  ** published. A later open reads the published ref. */
+  check("dbr_other_close_a", sqlite3_close(dbA)==SQLITE_OK);
+  check("dbr_other_close_b", sqlite3_close(dbB)==SQLITE_OK);
+  dbA = dbB = 0;
+  if( open_db(dbpath, &dbA)!=SQLITE_OK ){
+    check("dbr_other_reopen", 0);
+    closePark(dbA, 0, dbpath);
+    return;
+  }
+  check("dbr_other_reopen", 1);
   {
-    const char *zCount = queryScalarText(dbB,
+    const char *zCount = queryScalarText(dbA,
         "SELECT count(*) FROM dolt_branches WHERE name='other'");
     if( strcmp(zCount, "1")!=0 ){
       fprintf(stderr, "  dbr_other_exists count=%s\n", zCount);
