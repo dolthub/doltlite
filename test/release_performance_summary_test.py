@@ -39,7 +39,48 @@ REPORT = """# Performance
 """
 
 
+MULTIPLE_REPORT = """# Performance
+
+## SQL workload summary
+
+### In-memory
+
+| Operation | Mean multiple | Paired-ratio noise | Result |
+|---|---:|---:|---|
+| Reads | 1.14× | 1.4% | **PASS** |
+| Writes | 1.52× | 1.2% | **PASS** |
+
+### File-backed
+
+| Operation | Mean multiple | Paired-ratio noise | Result |
+|---|---:|---:|---|
+| Reads | 0.93× | 1.5% | **PASS** |
+| Autocommit writes | 2.31× | 6.3% | **PASS** |
+
+<details>
+"""
+
+
 class ReleasePerformanceSummaryTest(unittest.TestCase):
+    def test_keeps_operation_and_mean_multiple(self):
+        self.assertEqual(
+            summary.render_summary(MULTIPLE_REPORT),
+            """### In-memory
+
+| Operation | Mean multiple |
+| --- | ---: |
+| Reads | 1.14× |
+| Writes | 1.52× |
+
+### File-backed
+
+| Operation | Mean multiple |
+| --- | ---: |
+| Reads | 0.93× |
+| Autocommit writes | 2.31× |
+""",
+        )
+
     def test_keeps_summary_timings_and_ratio(self):
         self.assertEqual(
             summary.render_summary(REPORT),

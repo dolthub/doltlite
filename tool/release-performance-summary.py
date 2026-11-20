@@ -7,6 +7,13 @@ import sys
 
 HEADERS = (
     "Operation",
+    "Mean multiple",
+    "Paired-ratio noise",
+    "Result",
+)
+# The checked-in report keeps the earlier layout until a nightly rewrites it.
+TOTALS_HEADERS = (
+    "Operation",
     "SQLite median total",
     "DoltLite median total",
     "Ratio",
@@ -34,16 +41,17 @@ def render_table(lines, section):
         table_index += 1
     if table_index + 2 >= len(lines):
         raise ValueError(f"missing table under {section}")
-    if tuple(cells(lines[table_index])) != HEADERS:
+    headers = tuple(cells(lines[table_index]))
+    if headers not in (HEADERS, TOTALS_HEADERS):
         raise ValueError(f"unexpected columns under {section}")
 
     output = [section, ""]
     row_index = table_index
     while row_index < len(lines) and lines[row_index].lstrip().startswith("|"):
         row = cells(lines[row_index])
-        if len(row) != len(HEADERS):
+        if len(row) != len(headers):
             raise ValueError(f"unexpected row width under {section}")
-        output.append("| " + " | ".join(row[:4]) + " |")
+        output.append("| " + " | ".join(row[:len(headers) - 2]) + " |")
         row_index += 1
     if len(output) < 5:
         raise ValueError(f"missing results under {section}")

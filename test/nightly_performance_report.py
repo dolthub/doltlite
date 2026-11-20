@@ -287,6 +287,18 @@ def paired_ratio(suite, result):
     return ratios[len(ratios) // 2] if ratios else None
 
 
+# A section's ratio weights every workload equally. Dividing the summed
+# times instead lets the one or two longest workloads decide it.
+def mean_paired_ratio(results):
+    ratios = []
+    for suite, result in results:
+        ratio = paired_ratio(suite, result)
+        if ratio is None:
+            ratio = result.candidate_us / result.baseline_us
+        ratios.append(ratio)
+    return statistics.mean(ratios)
+
+
 def result_passes(suite, result):
     limit = individual_limit(result)
     if result.candidate_us / result.baseline_us <= limit:
@@ -348,17 +360,13 @@ def render_section_summary(suites, section, prefix, include_counts=True):
     results = section_results(suites, section)
     if not results:
         raise ValueError(f"missing results for section: {section}")
-    baseline = sum(result.baseline_us for _, result in results)
-    candidate = sum(result.candidate_us for _, result in results)
-    ratio = candidate / baseline
+    ratio = mean_paired_ratio(results)
     result = "PASS" if section_passes(suites, section) else "FAIL"
     cells = [prefix]
     if include_counts:
         cells.extend((str(len(results)), sample_count_text(suites, results)))
     cells.extend(
         (
-            format_time(baseline),
-            format_time(candidate),
             f"{ratio:.2f}×",
             f"{statistics.median(workload_noise(*item) for item in results):.1f}%",
             f"**{result}**",
@@ -374,10 +382,9 @@ def render_sql_summary(suites):
             [
                 f"### {storage}",
                 "",
-                "| Operation | SQLite median total | "
-                "DoltLite median total | Ratio | "
+                "| Operation | Mean multiple | "
                 "Paired-ratio noise | Result |",
-                "|---|---:|---:|---:|---:|---|",
+                "|---|---:|---:|---|",
             ]
         )
         for operation, section in operations:
@@ -399,9 +406,8 @@ def render_key_shape_breakdown(suites):
         "that performance holds across key shapes.",
         "",
         "| Storage | Operation | Key shape | Workloads | Samples/workload | "
-        "SQLite median total | DoltLite median total | Ratio | "
-        "Paired-ratio noise | Result |",
-        "|---|---|---|---:|---:|---:|---:|---:|---:|---|",
+        "Mean multiple | Paired-ratio noise | Result |",
+        "|---|---|---|---:|---:|---:|---:|---|",
     ]
     for storage, operation, section in KEY_SHAPE_GROUPS:
         for suite in suites:
@@ -493,7 +499,10 @@ def render_report(suites, commit, run_url, generated_at, runner, remote=None, re
         "## SQL workload summary",
         "",
         "The primary view aggregates all key shapes and compares DoltLite "
-        "with SQLite by storage mode and operation class.",
+        "with SQLite by storage mode and operation class. Mean multiple is "
+        "the average over workloads of each workload's paired "
+        "DoltLite/SQLite ratio, so every workload counts equally "
+        "whatever its run time.",
         "",
     ]
     sysbench_suites = tuple(by_name[name] for name in SYSBENCH_SUITES)

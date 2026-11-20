@@ -332,6 +332,32 @@ class NightlyPerformanceReportTest(unittest.TestCase):
                 self.assertTrue(all(nightly_report.result_passes(suite, r) for r in results))
                 self.assertFalse(nightly_report.section_passes((suite,), section))
 
+    def test_section_ratio_is_mean_of_paired_workload_ratios(self):
+        long_scan = nightly_report.Result("mem_reads", "scan", 1000000, 500000)
+        short_seek = nightly_report.Result("mem_reads", "seek", 100, 200)
+        suite = nightly_report.Suite(
+            name="int",
+            results=(long_scan, short_seek),
+            samples={
+                ("mem_reads", "scan"): [
+                    nightly_report.Sample(1, 1000000, 500000),
+                    nightly_report.Sample(2, 1000000, 500000),
+                    nightly_report.Sample(3, 1000000, 500000),
+                ],
+                ("mem_reads", "seek"): [
+                    nightly_report.Sample(1, 100, 190),
+                    nightly_report.Sample(2, 100, 200),
+                    nightly_report.Sample(3, 100, 210),
+                ],
+            },
+            status=0,
+            duration_seconds=1,
+        )
+        row = nightly_report.render_section_summary(
+            (suite,), "mem_reads", "Reads", include_counts=False
+        )
+        self.assertEqual(row, "| Reads | 1.25× | 2.5% | **PASS** |")
+
     def test_generates_complete_pass_report(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = pathlib.Path(temporary)
@@ -350,10 +376,10 @@ class NightlyPerformanceReportTest(unittest.TestCase):
         self.assertIn("Nightly result: **PASS**", report)
         self.assertIn("aggregates all key shapes", report)
         self.assertIn("### In-memory", report)
-        self.assertIn("| Reads | 400µs | 600µs | 1.50× |", report)
+        self.assertIn("| Reads | 1.50× |", report)
         self.assertIn("### File-backed", report)
         self.assertIn(
-            "| Autocommit writes | 400µs | 800µs | 2.00× |",
+            "| Autocommit writes | 2.00× |",
             report,
         )
         self.assertIn(
@@ -451,7 +477,7 @@ class NightlyPerformanceReportTest(unittest.TestCase):
             result = result_output.read_text(encoding="utf-8")
         self.assertEqual(rc, 0)
         self.assertIn("Nightly result: **FAIL**", report)
-        self.assertIn("| Autocommit writes | 400µs | 1.30ms |", report)
+        self.assertIn("| Autocommit writes | 3.25× |", report)
         self.assertEqual(result, "FAIL\n")
 
     def test_unpaired_median_breach_does_not_fail_the_report(self):
