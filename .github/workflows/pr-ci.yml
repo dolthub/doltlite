@@ -22,6 +22,7 @@ jobs:
       benchmarks: ${{ steps.files.outputs.benchmarks }}
       compile: ${{ steps.files.outputs.compile }}
       wasm: ${{ steps.files.outputs.wasm }}
+      swift: ${{ steps.files.outputs.swift }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -80,6 +81,7 @@ jobs:
       suites: ${{ needs.classify.outputs.suites == 'true' }}
       platforms: ${{ needs.classify.outputs.platforms == 'true' }}
       benchmarks: ${{ needs.classify.outputs.benchmarks == 'true' }}
+      nuget: ${{ needs.classify.outputs.wasm != 'true' }}
 
   compile_checks:
     name: compile-checks
@@ -87,11 +89,15 @@ jobs:
     if: needs.classify.outputs.compile == 'true'
     uses: ./.github/workflows/compile-checks.yml
 
-  wasm:
-    name: wasm
+  test_embeddings:
+    name: test-embeddings
     needs: classify
-    if: needs.classify.outputs.wasm == 'true'
-    uses: ./.github/workflows/wasm.yml
+    if: needs.classify.outputs.wasm == 'true' || needs.classify.outputs.swift == 'true'
+    uses: ./.github/workflows/test-embeddings.yml
+    with:
+      wasm: ${{ needs.classify.outputs.wasm == 'true' }}
+      swift: ${{ needs.classify.outputs.swift == 'true' }}
+      nuget: ${{ needs.classify.outputs.platforms == 'true' }}
 
   build_macos:
     name: build-macos
@@ -131,7 +137,7 @@ jobs:
   # must have succeeded. Skipping is only ever accepted by this rule.
   gate:
     name: CI Gate
-    needs: [classify, doc_links, build_ubuntu, test_ubuntu, compile_checks, wasm, build_macos, test_macos, build_windows, test_windows, windows_suites]
+    needs: [classify, doc_links, build_ubuntu, test_ubuntu, compile_checks, test_embeddings, build_macos, test_macos, build_windows, test_windows, windows_suites]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -146,11 +152,12 @@ jobs:
           BENCHMARKS: ${{ needs.classify.outputs.benchmarks }}
           COMPILE: ${{ needs.classify.outputs.compile }}
           WASM_WANTED: ${{ needs.classify.outputs.wasm }}
+          SWIFT_WANTED: ${{ needs.classify.outputs.swift }}
           DOC_LINKS: ${{ needs.doc_links.result }}
           BUILD_UBUNTU: ${{ needs.build_ubuntu.result }}
           TEST_UBUNTU: ${{ needs.test_ubuntu.result }}
           COMPILE_CHECKS: ${{ needs.compile_checks.result }}
-          WASM: ${{ needs.wasm.result }}
+          TEST_EMBEDDINGS: ${{ needs.test_embeddings.result }}
           BUILD_MACOS: ${{ needs.build_macos.result }}
           TEST_MACOS: ${{ needs.test_macos.result }}
           BUILD_WINDOWS: ${{ needs.build_windows.result }}

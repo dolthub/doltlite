@@ -1,13 +1,24 @@
-name: Wasm
+name: Test embeddings
 
 on:
   workflow_call:
+    inputs:
+      wasm:
+        type: boolean
+        required: true
+      swift:
+        type: boolean
+        required: true
+      nuget:
+        type: boolean
+        required: true
 
 jobs:
-  wasm-build:
-    name: build
+  linux:
+    name: Linux (Wasm and NuGet)
+    if: inputs.wasm
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       EMSDK_VERSION: 3.1.74
       EMCC_CFLAGS: -Wno-limited-postlink-optimizations
@@ -53,6 +64,8 @@ jobs:
         echo "$WABT_DIR/bin" >> "$GITHUB_PATH"
 
     - name: Build
+      env:
+        TEST_NUGET: ${{ inputs.nuget }}
       run: |
         source "$EMSDK/emsdk_env.sh"
         set -o pipefail
@@ -63,7 +76,11 @@ jobs:
           mkdir -p build
           cd build
           ../configure
-          make doltlite doltlite-remotesrv
+          targets=(doltlite doltlite-remotesrv)
+          if [[ "$TEST_NUGET" = true ]]; then
+            targets+=(doltlite-lib)
+          fi
+          make -j"$(nproc)" "${targets[@]}"
           cd ..
           make -C ext/wasm fiddle npm
           bash test/wasm_incremental_build_test.sh
@@ -77,39 +94,6 @@ jobs:
           echo "::error::compiler warnings in wasm build"
           exit 1
         fi
-
-    - name: Package
-      run: |
-        bash .github/scripts/package-ci-build.sh ci-wasm-build.tar.gz \
-          build/doltlite \
-          build/doltlite-remotesrv \
-          ext/wasm/jswasm \
-          ext/wasm/sqlite-wasm-*.zip
-
-    - name: Upload
-      uses: actions/upload-artifact@v4
-      with:
-        name: ci-wasm-build
-        path: ci-wasm-build.tar.gz
-        compression-level: 0
-        retention-days: 1
-
-  wasm-test:
-    name: test
-    needs: wasm-build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Download wasm build
-      uses: actions/download-artifact@v4
-      with:
-        name: ci-wasm-build
-
-    - name: Extract wasm build
-      run: tar -xzf ci-wasm-build.tar.gz
 
     - name: Smoke test DoltLite wasm runtime
       run: |
@@ -150,6 +134,16 @@ jobs:
     - name: Smoke test the @dolthub/doltlite-wasm npm package
       run: bash packaging/npm/test-package.sh --browser
 
+    - uses: actions/setup-dotnet@v4
+      if: inputs.nuget
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Smoke test the Linux NuGet package
+      if: inputs.nuget
+      run: bash packaging/nuget/test-package.sh build
+      timeout-minutes: 10
+
     - name: Upload wasm artifacts
       uses: actions/upload-artifact@v4
       with:
@@ -157,3 +151,8 @@ jobs:
         path: |
           ext/wasm/jswasm/*
           ext/wasm/sqlite-wasm-*.zip
+
+  swift:
+    name: Swift
+    if: inputs.swift
+    uses: ./.github/workflows/swift-xcframework.yml

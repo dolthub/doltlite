@@ -5,7 +5,7 @@ const ALL = new Set(JOBS);
 
 const LIGHT = new Set(['README.md', 'performance-report.md']);
 
-// Workflows outside the pr-ci.yml call graph. Some have their own PR triggers.
+// Workflows outside the pr-ci.yml call graph.
 const OFF_PR_WORKFLOWS = new Set([
   'cancel-conflicted-ci.yml',
   'dolt-oracle-upgrade.yml',
@@ -21,7 +21,6 @@ const OFF_PR_WORKFLOWS = new Set([
   'release.yml',
   'seed-ci-caches.yml',
   'sqlite-upstream-drift.yml',
-  'swift-xcframework.yml',
 ]);
 
 const BENCHMARK_HARNESS = [
@@ -55,6 +54,8 @@ const DOCS_READ_BY_SUITES = new Set(['doc/doltlite/pragmas.md']);
 
 function jobsFor(path) {
   if (path === '.github/workflows/benchmark.yml') return new Set(['benchmarks']);
+  if (path === '.github/workflows/nuget-package.yml') return new Set(['suites', 'platforms']);
+  if (path === '.github/workflows/swift-xcframework.yml') return new Set(['suites']);
   if (path.startsWith('.github/workflows/')) {
     const file = path.slice('.github/workflows/'.length);
     if (!OFF_PR_WORKFLOWS.has(file)) return ALL;
@@ -84,17 +85,25 @@ function jobsFor(path) {
 }
 
 function classify(paths, labels = []) {
+  const forceFull = paths.length === 0 || labels.includes('full-ci');
   const result = {
     docs_changed: paths.some(path => path.endsWith('.md')),
     light: paths.length > 0 && paths.every(path => LIGHT.has(path)),
+    swift: forceFull || paths.some(path => path.startsWith('packaging/swift/') ||
+      path === '.github/workflows/swift-xcframework.yml' ||
+      path === '.github/workflows/test-embeddings.yml' ||
+      path === '.github/workflows/release.yml'),
   };
   const jobs = new Set();
-  if (paths.length === 0 || labels.includes('full-ci')) {
+  if (forceFull) {
     JOBS.forEach(job => jobs.add(job));
   } else {
     for (const path of paths) jobsFor(path).forEach(job => jobs.add(job));
   }
-  if (result.light) jobs.clear();
+  if (result.light) {
+    jobs.clear();
+    result.swift = false;
+  }
   for (const job of JOBS) result[job] = jobs.has(job);
   result.full = JOBS.every(job => jobs.has(job));
   return result;

@@ -1,11 +1,6 @@
 name: NuGet package
 
 on:
-  pull_request:
-    paths:
-      - 'packaging/nuget/**'
-      - '.github/workflows/nuget-package.yml'
-      - '.github/workflows/release.yml'
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -92,10 +87,11 @@ jobs:
           if-no-files-found: error
 
   pack:
-    name: Pack the NuGet candidate
+    name: Pack and test the NuGet candidate (linux-x64)
     needs: build-native
     if: ${{ !cancelled() && (needs.build-native.result == 'success' || (inputs.release-tag && needs.build-native.result == 'skipped')) }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     outputs:
       version: ${{ steps.pack.outputs.version }}
     steps:
@@ -117,6 +113,11 @@ jobs:
           bash packaging/nuget/assemble.sh "$version" dist release-assets --release-assets
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
+      - name: Install and exercise the release archive
+        env:
+          VERSION: ${{ steps.pack.outputs.version }}
+        run: bash packaging/nuget/test-archive.sh "dist/DoltHub.Doltlite.$VERSION.nupkg" "$VERSION" "v$VERSION"
+
       - uses: actions/upload-artifact@v4
         with:
           name: nuget-candidate
@@ -132,7 +133,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { rid: linux-x64, os: ubuntu-24.04 }
           - { rid: linux-arm64, os: ubuntu-24.04-arm }
           - { rid: osx-arm64, os: macos-latest }
           - { rid: win-x64, os: windows-latest }
