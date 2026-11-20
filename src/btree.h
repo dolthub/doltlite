@@ -302,6 +302,9 @@ int sqlite3BtreeDelete(BtCursor*, u8 flags);
 #define BTREE_PREFORMAT    0x80  /* Inserted data is a preformated cell */
 #ifdef DOLTLITE_PROLLY
 #define BTREE_ISUPDATE     0x10
+/* The row is rewritten for a new layout: bytes stored under the old layout
+** are not kept in place of an equal record. */
+#define BTREE_REWRITE      0x20
 #endif
 
 /* An instance of the BtreePayload object describes the content of a single
