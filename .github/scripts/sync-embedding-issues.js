@@ -13,11 +13,22 @@ const sources = [
   'doltlite-ruby',
   'doltlite-swift',
 ];
+const outsideAssociations = new Set([
+  'COLLABORATOR',
+  'CONTRIBUTOR',
+  'FIRST_TIMER',
+  'FIRST_TIME_CONTRIBUTOR',
+  'NONE',
+]);
 const label = 'embedding-issue';
 const overlap = 10 * 60 * 1000;
 const firstRunWindow = 48 * 60 * 60 * 1000;
 const issueMarker = id => `<!-- doltlite-embedding-issue:${id} -->`;
-const activityMarker = (type, id) => `<!-- doltlite-embedding-${type}:${id} -->`;
+const commentMarker = id => `<!-- doltlite-embedding-comment:${id} -->`;
+
+function isOutsideContributor(item) {
+  return item.user?.type === 'User' && outsideAssociations.has(item.author_association);
+}
 
 async function gh(endpoint, {all = false, fields} = {}) {
   const args = ['api', endpoint];
@@ -67,27 +78,16 @@ async function collectActivity(api, since) {
     for (const issue of issues) {
       if (issue.pull_request || seen.has(issue.id)) continue;
       seen.add(issue.id);
-      const opened = Date.parse(issue.created_at) >= start;
+      const opened = Date.parse(issue.created_at) >= start && isOutsideContributor(issue);
       const details = [];
       if (issue.comments > 0) {
         const comments = await api(list(`${path}/${issue.number}/comments`, {since}), {all: true});
         for (const comment of comments) {
-          if (Date.parse(comment.created_at) < start) continue;
+          if (Date.parse(comment.created_at) < start || !isOutsideContributor(comment)) continue;
           details.push({
-            marker: activityMarker('comment', comment.id),
+            marker: commentMarker(comment.id),
             link: `[New comment](${comment.html_url})`,
             createdAt: comment.created_at,
-          });
-        }
-      }
-      if (!opened) {
-        const events = await api(list(`${path}/${issue.number}/events`), {all: true});
-        for (const event of events) {
-          if (event.event !== 'reopened' || Date.parse(event.created_at) < start) continue;
-          details.push({
-            marker: activityMarker('event', event.id),
-            link: `[Issue reopened](${issue.html_url}#event-${event.id})`,
-            createdAt: event.created_at,
           });
         }
       }
