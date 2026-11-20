@@ -11,6 +11,7 @@ const OFF_PR_WORKFLOWS = new Set([
   'dolt-oracle-upgrade.yml',
   'go-driver-dev.yml',
   'inventory-issue-liveness.yml',
+  'nightly-embedding-issues.yml',
   'nightly-fuzz.yml',
   'nightly-heartbeat.yml',
   'nightly-hotspots.yml',

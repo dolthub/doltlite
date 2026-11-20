@@ -1,0 +1,36 @@
+name: Nightly embedding issues
+
+on:
+  schedule:
+    - cron: '23 10 * * *'
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Preview changes without filing or commenting on issues
+        type: boolean
+        default: true
+      since:
+        description: Optional ISO 8601 start time for a backfill
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+concurrency:
+  group: nightly-embedding-issues
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v4
+    - name: Sync issue activity into DoltLite
+      env:
+        GH_TOKEN: ${{ github.token }}
+        EMBEDDING_ISSUES_APPLY: ${{ github.event_name == 'schedule' || !inputs.dry-run }}
+        EMBEDDING_ISSUES_SINCE: ${{ inputs.since }}
+      run: node .github/scripts/sync-embedding-issues.js

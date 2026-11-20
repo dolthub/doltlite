@@ -15,6 +15,7 @@ ci_selftests() {
   ci_compile python3 "$script_dir/benchmark-cache-key-test.py"
   ci_compile node "$script_dir/download-benchmark-results-test.js"
   ci_compile node "$script_dir/classify-changes-test.js"
+  ci_compile node --test "$script_dir/sync-embedding-issues.test.js"
   ci_compile python3 "$script_dir/../../test/performance_hotspot_fuzzer_test.py"
   ci_compile python3 "$script_dir/../../test/performance_hotspot_search_test.py"
   ci_compile python3 "$script_dir/../../test/performance_planner_probe_test.py"
