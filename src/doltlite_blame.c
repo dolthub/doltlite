@@ -558,7 +558,7 @@ static int blameCompareByDiff(
 
   rc = prollyDiffIterOpenCompare(&iter, cs, pCache, pRefRoot, pCurRoot,
           refFlags, curFlags,
-          pLayout->nSlot ? doltliteDiffSharedValuesEqual : 0, pLayout);
+          pLayout->nSlot ? doltliteDiffRecordsEqual : 0, pLayout);
   if( rc!=SQLITE_OK ){
     prollyDiffIterClose(&iter);
     return rc;

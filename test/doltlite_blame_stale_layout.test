@@ -104,7 +104,7 @@ foreach {layout pk} {rowid INTEGER clustered INT} {
     set unmodified 0
     if {$shape eq "mixed"} {
       lappend diffRows 2 7 7 modified
-      lappend blameRows 2 before 3 before
+      lappend blameRows 2 after 3 before
       incr modified
       incr unmodified
     }

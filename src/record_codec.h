@@ -143,7 +143,6 @@ struct DoltliteDiffLayout {
 int doltliteDiffLayoutInit(DoltliteDiffLayout*, const DoltliteColInfo*,
                            const DoltliteColInfo*);
 void doltliteDiffLayoutClear(DoltliteDiffLayout*);
-int doltliteDiffSharedValuesEqual(void*, const u8*, int, const u8*, int, int*);
 int doltliteDiffRecordsEqual(void*, const u8*, int, const u8*, int, int*);
 
 /* A SQLite value to be encoded into a record. eType is one of the

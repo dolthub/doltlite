@@ -147,6 +147,7 @@ doltlite_attached_vc
 doltlite_attach_create_in_txn
 doltlite_lazy_system_schema
 doltlite_blame_stale_layout
+doltlite_blame_drop_column
 doltlite_conflicted_merge_guard
 doltlite_open_head
 doltlite_autoindex_pk_collation
