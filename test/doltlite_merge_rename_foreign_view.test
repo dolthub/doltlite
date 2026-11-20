@@ -1,0 +1,65 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# A view or trigger body the renaming branch never held keeps the table
+# name it was written with, as Dolt leaves it and as cherry-pick does.
+# Dependents the renaming branch did hold follow the table.
+
+proc setup {} {
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, c INT);
+    CREATE TABLE u(id INTEGER PRIMARY KEY, c INT);
+    CREATE VIEW v0 AS SELECT c FROM t;
+    INSERT INTO t VALUES(1,100);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('feat');
+    SELECT dolt_checkout('feat');
+    ALTER TABLE t RENAME TO t9;
+    SELECT dolt_commit('-Am','rename table');
+    SELECT dolt_checkout('main');
+    CREATE VIEW vw AS SELECT id,c FROM t;
+    CREATE TRIGGER tb AFTER INSERT ON u BEGIN
+      INSERT INTO t VALUES(new.id+100,new.c);
+    END;
+    CREATE TRIGGER ton AFTER INSERT ON t BEGIN
+      UPDATE u SET c=(SELECT count(*) FROM t);
+    END;
+    SELECT dolt_commit('-Am','add dependents');
+  }
+}
+
+setup
+do_execsql_test merge-keeps-foreign-text {
+  SELECT dolt_merge('feat') IS NOT NULL;
+  SELECT name, sql FROM sqlite_master WHERE type IN ('view','trigger')
+   ORDER BY name;
+} [list 1 \
+  tb {CREATE TRIGGER tb AFTER INSERT ON u BEGIN
+      INSERT INTO t VALUES(new.id+100,new.c);
+    END} \
+  ton {CREATE TRIGGER ton AFTER INSERT ON "t9" BEGIN
+      UPDATE u SET c=(SELECT count(*) FROM "t9");
+    END} \
+  v0 {CREATE VIEW v0 AS SELECT c FROM "t9"} \
+  vw {CREATE VIEW vw AS SELECT id,c FROM t}]
+
+do_execsql_test merge-held-view-follows {
+  SELECT * FROM v0;
+} {100}
+
+do_catchsql_test merge-foreign-view-dangles {
+  SELECT * FROM vw;
+} {1 {no such table: main.t}}
+
+do_execsql_test merge-result-is-committed {
+  SELECT count(*) FROM dolt_status;
+  PRAGMA integrity_check;
+} {0 ok}
+
+db close
+sqlite3 db test.db
+do_execsql_test merge-text-survives-reopen {
+  SELECT sql FROM sqlite_master WHERE name='vw';
+} {{CREATE VIEW vw AS SELECT id,c FROM t}}
+
+finish_test

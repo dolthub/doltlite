@@ -2171,9 +2171,15 @@ struct SchemaMergeAction {
   int nClauses;
   /* Rename the whole table to this name, before any column action runs. */
   char *zRenameTable;
+  /* Flat name,sql pairs the rename must leave as written: views and trigger
+  ** bodies the renaming branch never held keep the old table name. */
+  char **azKeepText;
+  int nKeepText;
 };
 
 void freeSchemaMergeActions(SchemaMergeAction *a, int n);
+int doltliteMergeRenameKeepText(SchemaMergeAction *pAct,
+    SchemaEntry *aSide, int nSide, SchemaEntry *aOther, int nOther);
 int doltliteApplyMergeSchemaActions(sqlite3 *db,
     const ProllyHash *pAncCatHash, const ProllyHash *pTheirCatHash,
     SchemaMergeAction *aSchemaActions, int nSchemaActions,
