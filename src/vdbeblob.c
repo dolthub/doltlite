@@ -533,7 +533,13 @@ static int blobReadWrite(
       }
       if( sqlite3BtreeCursorIsValidNN(p->pCsr) ){
         sqlite3_int64 iKey;
+#ifdef DOLTLITE_PROLLY
+        /* A clustered-key cursor has no integer key, and the hook reports
+        ** such a table by its primary key. */
+        iKey = HasRowid(p->pTab) ? sqlite3BtreeIntegerKey(p->pCsr) : 0;
+#else
         iKey = sqlite3BtreeIntegerKey(p->pCsr);
+#endif
         assert( v->apCsr[0]!=0 );
         assert( v->apCsr[0]->eCurType==CURTYPE_BTREE );
         sqlite3VdbePreUpdateHook(
