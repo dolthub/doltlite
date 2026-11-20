@@ -1427,6 +1427,7 @@ int doltliteCompareAndAdvanceBranchCurrentCatalog(
   const ProllyHash *pWorkingCatHash
 );
 int doltlitePersistOrSaveWorkingSet(sqlite3 *db);
+int doltlitePersistOrSaveWorkingSetAs(sqlite3 *db, DoltliteVcTxnMode mode);
 int doltliteDetectConstraintViolationsInTxn(
   sqlite3 *db,
   const ProllyHash *pAncCat,

@@ -305,12 +305,12 @@ static int storeConflictBytes(
     rc = doltliteSetSessionConflictsCatalog(db, &newHash);
   }
   if( rc!=SQLITE_OK ) return rc;
-  if( mode!=DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
-    return doltliteSaveWorkingSet(db);
-  }
-  rc = doltlitePersistWorkingSet(db);
+  rc = doltlitePersistOrSaveWorkingSetAs(db, mode);
   if( rc!=SQLITE_OK ) return rc;
-  return doltliteVcSealActiveSavepoints(db);
+  if( mode==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
+    return doltliteVcSealActiveSavepoints(db);
+  }
+  return SQLITE_OK;
 }
 
 static int deleteConflictRowsFromCatalog(

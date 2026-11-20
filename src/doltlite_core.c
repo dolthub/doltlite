@@ -1301,16 +1301,20 @@ int doltliteCompareAndAdvanceBranchCurrentCatalog(
       db, pExpectedHead, 0, pNewHead, pCatalogHash, pWorkingCatHash, 0);
 }
 
-int doltlitePersistOrSaveWorkingSet(sqlite3 *db){
+int doltlitePersistOrSaveWorkingSetAs(sqlite3 *db, DoltliteVcTxnMode mode){
   nPersistCalls++;
   if( failPersistAtCall>0 && nPersistCalls==failPersistAtCall ){
     failPersistAtCall = 0;
     return SQLITE_IOERR;
   }
-  if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
+  if( mode==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
     return doltlitePersistWorkingSet(db);
   }
   return doltliteSaveWorkingSet(db);
+}
+
+int doltlitePersistOrSaveWorkingSet(sqlite3 *db){
+  return doltlitePersistOrSaveWorkingSetAs(db, doltliteVcTxnMode(db));
 }
 
 /* Close a private batch while the outer VC command keeps conflicts pending. */
