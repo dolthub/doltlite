@@ -292,6 +292,10 @@ static int storeConflictBytes(
 
   rc = doltliteEnsureWriteTxnAndSavepoints(db);
   if( rc!=SQLITE_OK ) return rc;
+  /* A top-level savepoint that holds conflicts cannot be ended from inside
+  ** this statement; it stays an open transaction, as under BEGIN. */
+  mode = doltliteSessionHasUnresolvedConflicts(db)
+       ? DOLTLITE_VC_TXN_PLAIN : doltliteVcTxnMode(db);
   if( nTables==0 ){
     rc = doltliteSetSessionConflictsCatalog(db, &(ProllyHash){{0}});
   }else{
@@ -301,9 +305,8 @@ static int storeConflictBytes(
     rc = doltliteSetSessionConflictsCatalog(db, &newHash);
   }
   if( rc!=SQLITE_OK ) return rc;
-  rc = doltlitePersistOrSaveWorkingSet(db);
+  rc = doltlitePersistOrSaveWorkingSetAs(db, mode);
   if( rc!=SQLITE_OK ) return rc;
-  mode = doltliteVcTxnMode(db);
   if( mode==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
     return doltliteVcSealActiveSavepoints(db);
   }

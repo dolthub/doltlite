@@ -51,6 +51,7 @@ doltlite_fts_reverse_pending_delete
 doltlite_data_version
 doltlite_page_size_default
 doltlite_savepoint_release
+doltlite_savepoint_held_conflicts
 doltlite_merge_key_only_rows
 doltlite_merge_canonical_rows
 doltlite_default_materialization

@@ -1363,7 +1363,8 @@ static void doltliteAddFunc(
 ){
   sqlite3 *db = sqlite3_context_db_handle(context);
   ChunkStore *cs = doltliteGetChunkStore(db);
-  int sealTopLevel = doltliteSavepointIsTopLevelTxn(db);
+  int sealTopLevel = doltliteSavepointIsTopLevelTxn(db)
+                  && !doltliteSessionHasUnresolvedConflicts(db);
   int stageAll = 0;
   int force = 0;
   DoltliteCmdArgs args;
