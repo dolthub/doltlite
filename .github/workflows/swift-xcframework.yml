@@ -1,0 +1,67 @@
+name: Swift XCFramework
+
+on:
+  pull_request:
+    paths:
+      - 'packaging/swift/**'
+      - '.github/workflows/swift-xcframework.yml'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        default: ''
+    outputs:
+      checksum:
+        value: ${{ jobs.test.outputs.checksum }}
+      swift-revision:
+        value: ${{ jobs.test.outputs.swift-revision }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build and test the Swift release archive
+    runs-on: macos-latest
+    timeout-minutes: 30
+    outputs:
+      checksum: ${{ steps.build.outputs.checksum }}
+      swift-revision: ${{ steps.swift-source.outputs.revision }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: dolthub/doltlite-swift
+          ref: main
+          path: swift-package
+          persist-credentials: false
+
+      - name: Record the tested Swift package revision
+        id: swift-source
+        run: echo "revision=$(git -C swift-package rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Build generated SQLite files
+        run: |
+          ./configure
+          make sqlite3.c sqlite3.h sqlite3ext.h
+
+      - name: Build XCFramework
+        id: build
+        env:
+          TAG: ${{ inputs.tag || 'v0.0.0' }}
+        run: bash packaging/swift/build-xcframework.sh "${TAG#v}" build-swift
+
+      - name: Test the archive with SwiftPM on macOS and the iOS simulator
+        env:
+          TAG: ${{ inputs.tag || 'v0.0.0' }}
+          XCFRAMEWORK_ZIP: ${{ steps.build.outputs.zip }}
+          XCFRAMEWORK_CHECKSUM: ${{ steps.build.outputs.checksum }}
+        run: bash packaging/swift/test-xcframework.sh "$XCFRAMEWORK_ZIP" "$XCFRAMEWORK_CHECKSUM" "$TAG" swift-package
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swift-xcframework
+          path: ${{ steps.build.outputs.zip }}
+          if-no-files-found: error
