@@ -4495,6 +4495,12 @@ static int whereLoopAddBtree(
       int hasNumericDesc = 0;
       int nOrderCol = IsPrimaryKeyIndex(pProbe)
         ? pProbe->nKeyCol : pProbe->nColumn;
+      /* A read that runs while this statement writes the same table can
+      ** meet a key the write added after the plan was chosen. The write's
+      ** own scan is the one-pass candidate and is not such a read. */
+      int bOwnWrite = pWInfo->pParse->pTriggerTab!=0
+       || (sqlite3ParseToplevel(pWInfo->pParse)->pDlWriteTab==pProbe->pTable
+           && (pWInfo->wctrlFlags & WHERE_ONEPASS_DESIRED)==0);
       if( iDb>=0 && iDb<db->nDb && db->aDb[iDb].pBt
        && !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt) ){
         int iCol;
@@ -4502,7 +4508,7 @@ static int whereLoopAddBtree(
           if( !pProbe->aSortOrder[iCol-1] && pProbe->aSortOrder[iCol] ){
             rc = sqlite3BtreeProllyIndexHasWideNumericDesc(
                 db->aDb[iDb].pBt, pProbe->tnum, &hasNumericDesc);
-            if( pWInfo->pParse->pTriggerTab ) hasNumericDesc = 1;
+            if( bOwnWrite ) hasNumericDesc = 1;
             break;
           }
         }
@@ -4514,8 +4520,7 @@ static int whereLoopAddBtree(
             db->aDb[iDb].pBt, pProbe->tnum, nOrderCol,
             pProbe->azColl, &hasNocaseNul);
         if( rc!=SQLITE_OK ) break;
-        /* Trigger and RETURNING reads may see NUL keys inserted by this VM. */
-        if( pWInfo->pParse->pTriggerTab ){
+        if( bOwnWrite ){
           int iCol;
           for(iCol=0; iCol<nOrderCol; iCol++){
             if( sqlite3StrICmp(pProbe->azColl[iCol], "NOCASE")==0 ){

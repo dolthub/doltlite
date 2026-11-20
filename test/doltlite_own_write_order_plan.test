@@ -1,0 +1,38 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# A subquery of an UPDATE reads the table while the UPDATE writes it, so it
+# can meet a key that takes an index out of order after the plan was chosen.
+# Expected values are stock SQLite's.
+
+do_execsql_test own-write-nocase-nul {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT COLLATE NOCASE, n);
+  CREATE INDEX ia ON t(a);
+  INSERT INTO t VALUES(1,'c',0),(2,'bb',0),(3,'b',0),(4,'x',0),(5,'y',0);
+  UPDATE t SET a = 'a'||char(0)||a,
+    n = (SELECT count(*) FROM
+          (SELECT DISTINCT a FROM t t2 WHERE t2.a < 'zz' || t.id));
+  SELECT id, hex(a), n FROM t ORDER BY id;
+} {1 610063 5 2 61006262 5 3 610062 5 4 610078 4 5 610079 3}
+
+do_execsql_test own-write-wide-integer-desc {
+  CREATE TABLE m(k INTEGER PRIMARY KEY, a INT, b INT, seen);
+  CREATE INDEX mab ON m(a, b DESC);
+  INSERT INTO m VALUES(1,5,1,0),(2,6,1,0),(3,7,1,0),(4,8,1,0),(5,9,1,0);
+  UPDATE m SET a = CASE k WHEN 1 THEN 9007199254740993
+                          WHEN 2 THEN 9007199254740992 ELSE a END,
+    seen = (SELECT count(*) FROM m z
+             WHERE z.a >= 9007199254740992 AND m.k>0);
+  SELECT k, a, seen FROM m ORDER BY k;
+} {1 9007199254740993 0 2 9007199254740992 1 3 7 2 4 8 2 5 9 2}
+
+# The UPDATE's own scan still uses the index.
+do_execsql_test own-write-scan-plan {
+  CREATE TABLE p(id INTEGER PRIMARY KEY, a TEXT COLLATE NOCASE, n);
+  CREATE INDEX pa ON p(a);
+  EXPLAIN QUERY PLAN UPDATE p SET n=1 WHERE a BETWEEN 'b' AND 'd';
+} {/SEARCH p USING INDEX pa/}
+
+do_execsql_test own-write-integrity { PRAGMA integrity_check } ok
+
+finish_test

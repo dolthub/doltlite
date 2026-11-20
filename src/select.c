@@ -5830,7 +5830,8 @@ static Index *isSimpleIndexRangeCount(
   }
   /* A NOCASE key holding a NUL is out of order, as the planner finds. */
   if( sqlite3StrICmp(pIdx->azColl[0], "NOCASE")==0 ){
-    int hasNocaseNul = pParse->pTriggerTab!=0;
+    int hasNocaseNul = pParse->pTriggerTab!=0
+                    || sqlite3ParseToplevel(pParse)->pDlWriteTab==pTab;
     if( !hasNocaseNul ){
       int iDb = sqlite3SchemaToIndex(pParse->db, pTab->pSchema);
       /* The btree memoises the answer per index, so ask about the same
