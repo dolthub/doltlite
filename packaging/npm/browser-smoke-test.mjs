@@ -20,11 +20,12 @@ async function runWorker(init, rowCount) {
   const sqlite3 = await init();
   const phase = new URL(self.location.href).searchParams.get('phase');
   const commitMessage = 'browser OPFS package smoke';
+  const branchMessage = 'browser OPFS branch smoke';
   const db = new sqlite3.oo1.OpfsDb('/package-smoke.db', phase === 'write' ? 'c' : 'r');
   let result;
   try {
     if (phase === 'write') {
-      db.exec('CREATE TABLE t(id INTEGER PRIMARY KEY, v INT); BEGIN');
+      db.exec('CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, payload BLOB); BEGIN');
       const statement = db.prepare('INSERT INTO t(v) VALUES(?)');
       try {
         for (let i = 0; i < rowCount; ++i) statement.bind([i]).stepReset();
@@ -33,6 +34,13 @@ async function runWorker(init, rowCount) {
       }
       db.exec('COMMIT');
       db.selectValue("SELECT dolt_commit('-A', '-m', ?)", [commitMessage]);
+      db.exec("SELECT dolt_branch('browser-topic'); SELECT dolt_checkout('browser-topic')");
+      db.exec({
+        sql: 'UPDATE t SET payload = ? WHERE id = 1',
+        bind: [new Uint8Array([0, 255, 1, 128])],
+      });
+      db.selectValue("SELECT dolt_commit('-A', '-m', ?)", [branchMessage]);
+      db.exec("SELECT dolt_checkout('main'); BEGIN; UPDATE t SET v = -1 WHERE id = 1; ROLLBACK");
     }
     result = {
       phase,
@@ -42,6 +50,9 @@ async function runWorker(init, rowCount) {
       badRows: db.selectValue(`SELECT count(*) FROM t WHERE id NOT BETWEEN 1 AND ${rowCount} OR v IS NOT id - 1`),
       commits: db.selectValue('SELECT count(*) FROM dolt_log'),
       commit: db.selectValue('SELECT commit_hash FROM dolt_log WHERE message = ?', [commitMessage]),
+      branchCommit: db.selectValue("SELECT commit_hash FROM dolt_log('browser-topic') WHERE message = ?", [branchMessage]),
+      mainPayload: db.selectValue('SELECT typeof(payload) FROM t WHERE id = 1'),
+      branchPayload: db.selectValue("SELECT hex(payload) FROM dolt_at_t WHERE commit_ref = 'browser-topic' AND id = 1"),
       integrity: db.selectValue('PRAGMA integrity_check'),
     };
   } finally {
@@ -110,22 +121,26 @@ try {
   async function check(phase) {
     assert.equal(await page.evaluate(() => crossOriginIsolated), true);
     await page.waitForFunction(() => window.smokeResult, null, { timeout: 60000 });
-    const { error, version, commit, ...stats } = await page.evaluate(() => window.smokeResult);
+    const { error, version, commit, branchCommit, ...stats } = await page.evaluate(() => window.smokeResult);
     assert.ok(!error, error);
-    assert.deepEqual(stats, { phase, engine: 'prolly', rows: rowCount, badRows: 0, commits: 2, integrity: 'ok' });
+    assert.deepEqual(stats, {
+      phase, engine: 'prolly', rows: rowCount, badRows: 0, commits: 2,
+      mainPayload: 'null', branchPayload: '00FF0180', integrity: 'ok',
+    });
     assert.ok(version, 'missing engine version');
     if (process.env.DOLTLITE_EXPECT_VERSION) assert.equal(version, process.env.DOLTLITE_EXPECT_VERSION);
     assert.ok(commit, 'missing Dolt commit');
-    return { version, commit };
+    assert.ok(branchCommit, 'missing branch commit');
+    assert.notEqual(branchCommit, commit);
+    return { version, commit, branchCommit };
   }
 
   const written = await check('write');
   await page.evaluate(() => sessionStorage.setItem('phase', 'reopen'));
   await page.reload();
   const reopened = await check('reopen');
-  assert.equal(reopened.commit, written.commit);
-  assert.equal(reopened.version, written.version);
-  console.log(`WASM npm browser smoke passed: ${reopened.version}, ${rowCount} OPFS rows and commit survived reload`);
+  assert.deepEqual(reopened, written);
+  console.log(`WASM npm browser smoke passed: ${reopened.version}, ${rowCount} OPFS rows and both commits survived reload`);
 } finally {
   if (browser) await browser.close();
   if (server.listening) await new Promise(resolve => server.close(resolve));

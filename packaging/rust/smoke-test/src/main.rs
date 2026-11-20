@@ -5,6 +5,48 @@
 
 use doltlite::{Connection, OpenFlags, Value};
 
+fn check_prepared_statements_and_locks(db: &Connection, db_path: &std::path::Path) {
+    db.execute_batch(
+        "CREATE TABLE statement_checks(id INTEGER PRIMARY KEY, n INTEGER);
+         INSERT INTO statement_checks VALUES (1, 10), (2, 20)",
+    )
+    .expect("create statement fixture");
+
+    {
+        let mut statement = db
+            .prepare("SELECT n FROM statement_checks WHERE id = ?")
+            .expect("prepare reusable statement");
+        assert_eq!(statement.bind(2, &Value::from(1)).unwrap_err().code, 25);
+        for (id, expected) in [(1, 10), (2, 20)] {
+            statement.bind(1, &Value::from(id)).expect("bind");
+            assert!(statement.step().expect("read bound row"));
+            assert_eq!(
+                statement.row().get(0).and_then(Value::as_i64),
+                Some(expected)
+            );
+            assert!(!statement.step().expect("finish statement"));
+            statement.reset().expect("reset statement");
+        }
+    }
+
+    let other = Connection::open(db_path).expect("open second connection");
+    other.busy_timeout(0).expect("set busy timeout");
+    db.execute_batch("BEGIN IMMEDIATE; UPDATE statement_checks SET n = -1")
+        .expect("start first writer");
+    let busy = other.execute_batch("BEGIN IMMEDIATE").unwrap_err();
+    assert_eq!(busy.code, 5, "second writer should see SQLITE_BUSY");
+    db.execute_batch("ROLLBACK").expect("release the first writer");
+    other
+        .execute_batch("BEGIN IMMEDIATE; UPDATE statement_checks SET n = 30 WHERE id = 2; COMMIT")
+        .expect("retry the second writer after rollback");
+    let row = db
+        .query_row("SELECT sum(n) FROM statement_checks", &[])
+        .expect("read both writers' results")
+        .expect("sum");
+    assert_eq!(row.get(0).and_then(Value::as_i64), Some(40));
+    println!("  PASS: statement reuse and writer contention recovery");
+}
+
 fn main() -> std::process::ExitCode {
     let mut failures = 0usize;
     let mut check = |name: &str, got: String, want: String| {
@@ -25,6 +67,7 @@ fn main() -> std::process::ExitCode {
     )));
 
     let db = Connection::open(&db_path).expect("open");
+    check_prepared_statements_and_locks(&db, &db_path);
     check(
         "engine version reports",
         (!doltlite::version().is_empty()).to_string(),
