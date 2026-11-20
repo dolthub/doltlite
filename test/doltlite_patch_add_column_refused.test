@@ -1,0 +1,44 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# SQLite refuses some ADD COLUMN forms on a table that has rows. A patch
+# across such a change must still replay on the from-snapshot.
+
+foreach {name coldef} {
+  not-null            {n1 TEXT NOT NULL}
+  expression-default  {n1 DEFAULT (1+1)}
+  current-timestamp   {n1 DEFAULT current_timestamp}
+  not-null-default    {n1 TEXT NOT NULL DEFAULT 'x'}
+  constant-default    {n1 INT DEFAULT 7}
+  plain               {n1}
+} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a);
+    INSERT INTO t VALUES(1,1);
+    SELECT dolt_commit('-Am','m0');
+    DELETE FROM t;
+  }
+  execsql "ALTER TABLE t ADD COLUMN $coldef"
+  execsql {
+    INSERT INTO t VALUES(1,1,5),(2,2,6);
+    SELECT dolt_commit('-Am','m1');
+  }
+  set patch [execsql {
+    SELECT statement FROM dolt_patch('HEAD~1','HEAD') ORDER BY statement_order
+  }]
+  execsql {SELECT dolt_checkout('-b','ap','HEAD~1')}
+  do_test patch-add-column-$name {
+    set rc 0
+    foreach stmt $patch {
+      if {[catch {db eval $stmt} msg]} { set rc $msg ; break }
+    }
+    list $rc [execsql {
+      SELECT count(*) FROM dolt_patch('WORKING','main');
+      SELECT * FROM t ORDER BY id;
+      PRAGMA integrity_check;
+    }]
+  } {0 {0 1 1 5 2 2 6 ok}}
+}
+
+finish_test

@@ -53,6 +53,7 @@ doltlite_page_size_default
 doltlite_savepoint_release
 doltlite_merge_key_only_rows
 doltlite_merge_canonical_rows
+doltlite_patch_add_column_refused
 doltlite_default_materialization
 doltlite_identifier_case
 doltlite_patch_rowid_alias
