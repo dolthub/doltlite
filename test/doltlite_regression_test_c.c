@@ -9352,13 +9352,21 @@ static void run_deleted_branch_recreate_not_corrupt(void){
   check("dbr_other_begin", execSql(dbA, "BEGIN;")==SQLITE_OK);
   check("dbr_other_create",
         execSql(dbA, "SELECT dolt_branch('other','main');")==SQLITE_OK);
-  check("dbr_other_exists", strcmp(queryScalarText(dbB,
-      "SELECT count(*) FROM dolt_branches WHERE name='other'"), "1")==0);
   check("dbr_other_feat_absent", strcmp(queryScalarText(dbB,
       "SELECT count(*) FROM dolt_branches WHERE name='feat'"), "0")==0);
   rc = execErr(dbA, "INSERT INTO w(id,v) VALUES(4,'more');", zErr, sizeof(zErr));
   expectBusyGone("dbr_other_insert_not_corrupt", rc, zErr, "feat");
   check("dbr_other_rollback", execSql(dbA, "ROLLBACK;")==SQLITE_OK);
+  /* The create commits the ref and reopens this transaction. A peer read
+  ** while that transaction holds the store answers from its old snapshot. */
+  {
+    const char *zCount = queryScalarText(dbB,
+        "SELECT count(*) FROM dolt_branches WHERE name='other'");
+    if( strcmp(zCount, "1")!=0 ){
+      fprintf(stderr, "  dbr_other_exists count=%s\n", zCount);
+    }
+    check("dbr_other_exists", strcmp(zCount, "1")==0);
+  }
   check("dbr_other_checkout",
         execSql(dbA, "SELECT dolt_checkout('main');")==SQLITE_OK);
   check("dbr_other_integrity",
