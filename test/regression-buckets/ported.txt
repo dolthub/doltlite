@@ -170,6 +170,7 @@ doltlite_vacuum_into_race
 doltlite_blame_seek
 doltlite_tripped_cursor_seek
 doltlite_blame_working
+doltlite_blame_no_ff_merge
 doltlite_order_memo_stale_plan
 doltlite_drop_column_row_bytes
 doltlite_blame_affinity

@@ -1,0 +1,41 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# A merge commit whose first parent had no work of its own takes its rows
+# from the second parent's commits, as Dolt blames them. Rows the merge
+# commit itself changed stay with it.
+
+do_execsql_test blame-no-ff-setup {
+  CREATE TABLE t(id INT PRIMARY KEY, v INT);
+  CREATE TABLE o(id INT PRIMARY KEY);
+  INSERT INTO t VALUES(1,10),(3,30),(4,40);
+  SELECT dolt_commit('-Am','INIT') IS NOT NULL;
+  SELECT dolt_checkout('-b','feat');
+  INSERT INTO t VALUES(2,20);
+  SELECT dolt_commit('-Am','FEAT1') IS NOT NULL;
+  UPDATE t SET v=11 WHERE id=1;
+  SELECT dolt_commit('-Am','FEAT2') IS NOT NULL;
+  SELECT dolt_checkout('main');
+} {1 0 1 1 0}
+
+do_test blame-no-ff-merge-edit {
+  execsql {SELECT dolt_merge('feat','--no-ff','--no-commit')}
+  execsql {
+    UPDATE t SET v=41 WHERE id=4;
+    SELECT dolt_commit('-Am','MERGE') IS NOT NULL;
+    SELECT id, message FROM dolt_blame_t ORDER BY id;
+  }
+} {1 1 FEAT2 2 FEAT1 3 INIT 4 MERGE}
+
+do_execsql_test blame-both-sides-moved {
+  SELECT dolt_checkout('-b','f2');
+  UPDATE t SET v=31 WHERE id=3;
+  SELECT dolt_commit('-Am','F2') IS NOT NULL;
+  SELECT dolt_checkout('main');
+  INSERT INTO o VALUES(1);
+  SELECT dolt_commit('-Am','MAINOTHER') IS NOT NULL;
+  SELECT dolt_merge('f2','-m','MERGE2') IS NOT NULL;
+  SELECT id, message FROM dolt_blame_t ORDER BY id;
+} {0 1 0 1 1 1 FEAT2 2 FEAT1 3 MERGE2 4 MERGE}
+
+finish_test
