@@ -970,6 +970,49 @@ static int trimTrailingAbsentNulls(
   return SQLITE_OK;
 }
 
+/* Rewrite a row value built outside the insert path into the form an insert
+** of the same row stores. *pnRec is 0 for a row that is stored with no
+** record; *ppRec stays owned by the caller either way. */
+int doltliteCanonicalRowValue(
+  Table *pTab, int bIntKey, u8 **ppRec, int *pnRec
+){
+  u8 *pCanon = 0;
+  int nCanon = 0;
+  Index *pPk;
+  DoltliteRecordInfo ri;
+  int i, rc;
+
+  if( !pTab || !*ppRec || *pnRec<=0 ) return SQLITE_OK;
+  if( !bIntKey && HasRowid(pTab) ) return SQLITE_OK;
+  rc = trimTrailingAbsentNulls(pTab, bIntKey, *ppRec, *pnRec, &pCanon, &nCanon);
+  if( rc!=SQLITE_OK ) return rc;
+  if( pCanon ){
+    sqlite3_free(*ppRec);
+    *ppRec = pCanon;
+    *pnRec = nCanon;
+  }
+  if( bIntKey ) return SQLITE_OK;
+  pPk = sqlite3PrimaryKeyIndex(pTab);
+  if( !pPk || pPk->nKeyCol>=pPk->nColumn ) return SQLITE_OK;
+  for(i=0; i<pPk->nColumn; i++){
+    const char *zColl = pPk->azColl[i];
+    if( zColl && (sqlite3StrICmp(zColl, "NOCASE")==0
+               || sqlite3StrICmp(zColl, "RTRIM")==0) ){
+      return SQLITE_OK;
+    }
+  }
+  if( sortKeyRecordNeedsPayload(*ppRec, *pnRec, pPk->nKeyCol) ){
+    return SQLITE_OK;
+  }
+  doltliteRecordInfoInit(&ri);
+  if( doltliteParseRecordStrict(*ppRec, *pnRec, &ri)==SQLITE_OK
+   && ri.nField<=pPk->nKeyCol ){
+    *pnRec = 0;
+  }
+  doltliteRecordInfoClear(&ri);
+  return SQLITE_OK;
+}
+
 /* The same trim for a record whose last value ends in a symbolic run of
 ** zeros. Its length does not match its header until the zeros are added,
 ** so only the header is read: a trailing NULL has no body bytes, and the

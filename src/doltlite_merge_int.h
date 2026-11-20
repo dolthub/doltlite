@@ -229,10 +229,11 @@ int mergeRebindIndexes(
   MergePass1Ctx *c, MergeIndexInfo *aIdxInfo, int nIdxInfo,
   sqlite3 *pSchemaDb, Table *pTab
 );
-int mergeGeneratedRecord(
-  sqlite3 *db, Table *pTab, sqlite3_stmt **ppStmt, i64 intKey,
-  u8 **ppRecord, int *pnRecord
+int mergeFinishRecord(
+  sqlite3 *db, Table *pTab, Table *pGenerated, sqlite3_stmt **ppStmt,
+  int bIntKey, i64 intKey, u8 **ppRecord, int *pnRecord
 );
+int mergeCanonicalRows(sqlite3 *db, Table *pTab, u8 flags, ProllyHash *pRoot);
 int mergeGeneratedSideRow(
   sqlite3 *db, Table *pTab, sqlite3_stmt **ppStmt, i64 intKey,
   const u8 **ppVal, int *pnVal, u8 **ppOwned

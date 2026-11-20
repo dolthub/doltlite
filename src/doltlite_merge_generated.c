@@ -432,28 +432,7 @@ static int mergeGeneratedPrepare(
 #endif
 }
 
-/* Relayout can fill a newly added generated column with its default instead
-** of its expression value. Recompute before updating rows or indexes. */
-int mergeGeneratedSideRow(
-  sqlite3 *db, Table *pTab, sqlite3_stmt **ppStmt, i64 intKey,
-  const u8 **ppVal, int *pnVal, u8 **ppOwned
-){
-  int rc;
-  *ppOwned = 0;
-  if( !pTab || !*ppVal || *pnVal<=0 ) return SQLITE_OK;
-  rc = doltliteDupBytes(*ppVal, *pnVal, ppOwned);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = mergeGeneratedRecord(db, pTab, ppStmt, intKey, ppOwned, pnVal);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(*ppOwned);
-    *ppOwned = 0;
-    return rc;
-  }
-  *ppVal = *ppOwned;
-  return SQLITE_OK;
-}
-
-int mergeGeneratedRecord(
+static int mergeGeneratedRecord(
   sqlite3 *db, Table *pTab, sqlite3_stmt **ppStmt, i64 intKey,
   u8 **ppRecord, int *pnRecord
 ){
@@ -481,6 +460,95 @@ int mergeGeneratedRecord(
   *ppRecord = pOut;
   *pnRecord = nOut;
   return SQLITE_OK;
+}
+
+/* Relayout can fill a newly added generated column with its default instead
+** of its expression value. Recompute before updating rows or indexes. */
+int mergeGeneratedSideRow(
+  sqlite3 *db, Table *pTab, sqlite3_stmt **ppStmt, i64 intKey,
+  const u8 **ppVal, int *pnVal, u8 **ppOwned
+){
+  int rc;
+  *ppOwned = 0;
+  if( !pTab || !*ppVal || *pnVal<=0 ) return SQLITE_OK;
+  rc = doltliteDupBytes(*ppVal, *pnVal, ppOwned);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = mergeGeneratedRecord(db, pTab, ppStmt, intKey, ppOwned, pnVal);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(*ppOwned);
+    *ppOwned = 0;
+    return rc;
+  }
+  *ppVal = *ppOwned;
+  return SQLITE_OK;
+}
+
+int mergeFinishRecord(
+  sqlite3 *db, Table *pTab, Table *pGenerated, sqlite3_stmt **ppStmt,
+  int bIntKey, i64 intKey, u8 **ppRecord, int *pnRecord
+){
+  int rc = mergeGeneratedRecord(db, pGenerated, ppStmt, intKey,
+                                ppRecord, pnRecord);
+  if( rc==SQLITE_OK ){
+    rc = doltliteCanonicalRowValue(pTab, bIntKey, ppRecord, pnRecord);
+  }
+  return rc;
+}
+
+/* Relayout builds rows field by field, so a row can come out wider than
+** an insert of the same values would store it. */
+int mergeCanonicalRows(sqlite3 *db, Table *pTab, u8 flags, ProllyHash *pRoot){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *cache = doltliteGetCache(db);
+  int bIntKey = (flags & PROLLY_NODE_INTKEY)!=0;
+  ProllyMutMap mm;
+  ProllyCursor cur;
+  int res = 0, rc;
+
+  if( !pTab || prollyHashIsEmpty(pRoot) ) return SQLITE_OK;
+  rc = prollyMutMapInit(&mm, (u8)bIntKey);
+  if( rc!=SQLITE_OK ) return rc;
+  prollyCursorInit(&cur, cs, cache, pRoot, flags);
+  rc = prollyCursorFirst(&cur, &res);
+  while( rc==SQLITE_OK && prollyCursorIsValid(&cur) ){
+    const u8 *pVal = 0, *pKey = 0;
+    int nVal = 0, nKey = 0, nRec;
+    i64 intKey = 0;
+    u8 *pRec = 0;
+
+    prollyCursorValue(&cur, &pVal, &nVal);
+    if( nVal>0 ){
+      nRec = nVal;
+      rc = doltliteDupBytes(pVal, nVal, &pRec);
+      if( rc==SQLITE_OK ){
+        rc = doltliteCanonicalRowValue(pTab, bIntKey, &pRec, &nRec);
+      }
+      if( rc==SQLITE_OK && nRec!=nVal ){
+        if( bIntKey ){
+          intKey = prollyCursorIntKey(&cur);
+        }else{
+          prollyCursorKey(&cur, &pKey, &nKey);
+        }
+        rc = prollyMutMapInsert(&mm, pKey, nKey, intKey, pRec, nRec);
+      }
+      sqlite3_free(pRec);
+    }
+    if( rc==SQLITE_OK ) rc = prollyCursorNext(&cur);
+  }
+  prollyCursorClose(&cur);
+  if( rc==SQLITE_OK && !prollyMutMapIsEmpty(&mm) ){
+    ProllyMutator mut;
+    memset(&mut, 0, sizeof(mut));
+    mut.pStore = cs;
+    mut.pCache = cache;
+    memcpy(&mut.oldRoot, pRoot, sizeof(ProllyHash));
+    mut.pEdits = &mm;
+    mut.flags = flags;
+    rc = prollyMutateFlush(&mut);
+    if( rc==SQLITE_OK ) memcpy(pRoot, &mut.newRoot, sizeof(ProllyHash));
+  }
+  prollyMutMapFree(&mm);
+  return rc;
 }
 
 #endif

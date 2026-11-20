@@ -208,6 +208,9 @@ static int mergePass1MergeTableData(
                         pAnc->flags, pTheirsEntry->flags,
                         &mergedTableRoot, &nConflicts, &aConflictRows,
                         aIdxInfo, nIdxInfo, pRowPolicy);
+    if( rc==SQLITE_OK && pRowPolicy ){
+      rc = mergeCanonicalRows(c->db, pTab, pOurs->flags, &mergedTableRoot);
+    }
     if( rc==SQLITE_OK ) rc = mergePass1RecordIndexPatches(c, aIdxInfo, nIdxInfo);
     mergePass1FreeIdxInfo(aIdxInfo, nIdxInfo);
     aIdxInfo = 0;
