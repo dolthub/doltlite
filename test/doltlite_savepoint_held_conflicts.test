@@ -1,0 +1,85 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# Conflicts held by a transaction that a top-level SAVEPOINT opened are
+# resolved and staged as they are under BEGIN.
+
+proc held_setup {open} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    CREATE TABLE u(id INTEGER PRIMARY KEY, w TEXT);
+    INSERT INTO t VALUES(1,'a');
+    SELECT dolt_commit('-Am','init');
+    SELECT dolt_checkout('-b','conf');
+    UPDATE t SET v='conf' WHERE id=1;
+    SELECT dolt_commit('-Am','conf1');
+    SELECT dolt_checkout('main');
+    UPDATE t SET v='mainA' WHERE id=1;
+    SELECT dolt_commit('-Am','main2');
+  }
+  execsql $open
+  execsql {INSERT INTO u VALUES(1,'x'); SAVEPOINT s2}
+  catchsql {SELECT dolt_merge('conf')}
+  execsql {RELEASE s2}
+}
+
+proc held_peer {} {
+  sqlite3 db2 test.db
+  set r [db2 eval {
+    SELECT (SELECT count(*) FROM u), (SELECT count(*) FROM dolt_log);
+  }]
+  db2 close
+  set r
+}
+
+foreach {tag open} {savepoint {SAVEPOINT s} begin BEGIN} {
+  held_setup $open
+  do_test held-conflicts-$tag-delete {
+    list [catchsql {DELETE FROM dolt_conflicts_t}] \
+      [execsql {SELECT count(*) FROM dolt_conflicts_t; SELECT * FROM t}] \
+      [held_peer]
+  } {{0 {}} {0 1 mainA} {0 3}}
+  do_test held-conflicts-$tag-delete-commit {
+    execsql {SELECT dolt_commit('-Am','merged') IS NOT NULL}
+    list [held_peer] [execsql {
+      SELECT count(*) FROM dolt_commit_ancestors
+       WHERE commit_hash=dolt_hashof('HEAD');
+      SELECT count(*) FROM dolt_status;
+      PRAGMA integrity_check;
+    }]
+  } {{1 5} {2 0 ok}}
+
+  held_setup $open
+  do_test held-conflicts-$tag-add {
+    list [catchsql {SELECT dolt_add('u')}] \
+      [execsql {SELECT table_name, staged, status FROM dolt_status
+                ORDER BY table_name}] \
+      [held_peer]
+  } {{0 0} {t 0 conflict u 1 modified} {0 3}}
+  do_test held-conflicts-$tag-add-commit {
+    execsql {
+      SELECT dolt_conflicts_resolve('--theirs','t');
+      SELECT dolt_commit('-am','merged') IS NOT NULL;
+    }
+    list [held_peer] [execsql {
+      SELECT * FROM t; SELECT * FROM u;
+      SELECT count(*) FROM dolt_status;
+      PRAGMA integrity_check;
+    }]
+  } {{1 5} {1 conf 1 x 0 ok}}
+
+  held_setup $open
+  do_test held-conflicts-$tag-rollback {
+    execsql {DELETE FROM dolt_conflicts_t}
+    execsql [expr {$tag eq "begin" ? "ROLLBACK" : "ROLLBACK TO s; RELEASE s"}]
+    list [sqlite3_get_autocommit db] [held_peer] [execsql {
+      SELECT * FROM t; SELECT count(*) FROM u;
+      SELECT count(*) FROM dolt_conflicts;
+      SELECT is_merging FROM dolt_merge_status;
+      PRAGMA integrity_check;
+    }]
+  } {1 {0 3} {1 mainA 0 0 0 ok}}
+}
+
+finish_test
