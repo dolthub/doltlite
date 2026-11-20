@@ -4194,6 +4194,9 @@ struct AuthContext {
 #define OPFLAG_APPEND        0x08    /* This is likely to be an append */
 #define OPFLAG_USESEEKRESULT 0x10    /* Try to avoid a seek in BtreeInsert() */
 #define OPFLAG_ISNOOP        0x40    /* OP_Delete does pre-update-hook only */
+#ifdef DOLTLITE_PROLLY
+#define OPFLAG_REWRITE       0x100   /* OP_Insert/IdxInsert: BTREE_REWRITE */
+#endif
 #define OPFLAG_LENGTHARG     0x40    /* OP_Column only used for length() */
 #define OPFLAG_TYPEOFARG     0x80    /* OP_Column only used for typeof() */
 #define OPFLAG_BYTELENARG    0xc0    /* OP_Column only for octet_length() */

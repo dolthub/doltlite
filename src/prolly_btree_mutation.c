@@ -1144,6 +1144,7 @@ static int btCursorInsertImpl(
     }
     if( (pCur->pBtree->db->mDbFlags & DBFLAG_InternalDml)==0
      && pPayload->nZero==0 && pCur->eState==CURSOR_VALID
+     && !(flags & BTREE_REWRITE)
      && !pCur->deferredMergedSeek ){
       const u8 *pOld;
       int nOld;
@@ -1174,7 +1175,7 @@ static int btCursorInsertImpl(
       }
     }
     if( (pCur->pBtree->db->mDbFlags & DBFLAG_InternalDml)==0
-     && pPayload->nZero==0
+     && pPayload->nZero==0 && !(flags & BTREE_REWRITE)
      && (pData==(const u8*)pPayload->pData
          || (ppCanon && *ppCanon && pData==*ppCanon)) ){
       int nKeep = 0;
@@ -1328,6 +1329,7 @@ static int btCursorInsertImpl(
       if( rc==SQLITE_OK
        && (pCur->pBtree->db->mDbFlags & DBFLAG_InternalDml)==0
        && storePayload && pCurrentKey
+       && !(flags & BTREE_REWRITE)
        && nCurrentKey==nSortKey
        && memcmp(pCurrentKey, pSortKey, nSortKey)==0 ){
         const u8 *pOld;
@@ -1387,6 +1389,7 @@ static int btCursorInsertImpl(
         }
       }
       if( rc==SQLITE_OK && storePayload
+       && !(flags & BTREE_REWRITE)
        && (pCur->pBtree->db->mDbFlags & DBFLAG_InternalDml)==0
        && (pStoredPayload==(const u8*)pPayload->pKey
            || (ppCanon && *ppCanon && pStoredPayload==*ppCanon)) ){
@@ -1694,7 +1697,9 @@ int sqlite3BtreeInsert(
   int seekResult
 ){
   if( !pCur ) return SQLITE_OK;
-  if( pCur->pCurOps!=&prollyCursorOps ) flags &= ~BTREE_ISUPDATE;
+  if( pCur->pCurOps!=&prollyCursorOps ){
+    flags &= ~(BTREE_ISUPDATE|BTREE_REWRITE);
+  }
   return pCur->pCurOps->xInsert(pCur, pPayload, flags, seekResult);
 }
 

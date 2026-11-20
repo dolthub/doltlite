@@ -1,0 +1,56 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# DROP COLUMN leaves each row as an insert of its remaining values stores it.
+
+foreach {name before rows drop after fresh} {
+  default
+    {CREATE TABLE t(id INTEGER PRIMARY KEY, a, b DEFAULT 5, c)}
+    {INSERT INTO t VALUES(1,'x',NULL,NULL),(2,NULL,NULL,NULL)} b
+    {CREATE TABLE t(id INTEGER PRIMARY KEY, a, c)}
+    {INSERT INTO t VALUES(1,'x',NULL),(2,NULL,NULL)}
+  default-int-pk
+    {CREATE TABLE t(id INT PRIMARY KEY, a, b DEFAULT 5, c)}
+    {INSERT INTO t VALUES(1,'x',NULL,NULL),(2,NULL,NULL,NULL)} b
+    {CREATE TABLE t(id INT PRIMARY KEY, a, c)}
+    {INSERT INTO t VALUES(1,'x',NULL),(2,NULL,NULL)}
+  default-without-rowid
+    {CREATE TABLE t(id INT PRIMARY KEY, a, b DEFAULT 5, c) WITHOUT ROWID}
+    {INSERT INTO t VALUES(1,'x',NULL,NULL),(2,NULL,NULL,NULL)} b
+    {CREATE TABLE t(id INT PRIMARY KEY, a, c) WITHOUT ROWID}
+    {INSERT INTO t VALUES(1,'x',NULL),(2,NULL,NULL)}
+  stored-generated
+    {CREATE TABLE t(id INTEGER PRIMARY KEY, a,
+                    g AS (coalesce(a,'n')) STORED, c)}
+    {INSERT INTO t(id,a,c) VALUES(1,'x',NULL),(2,NULL,NULL)} g
+    {CREATE TABLE t(id INTEGER PRIMARY KEY, a, c)}
+    {INSERT INTO t VALUES(1,'x',NULL),(2,NULL,NULL)}
+  leading-before-ipk
+    {CREATE TABLE t(a, id INTEGER PRIMARY KEY, b)}
+    {INSERT INTO t(id) VALUES(1); INSERT INTO t VALUES('x',2,'y')} a
+    {CREATE TABLE t(id INTEGER PRIMARY KEY, b)}
+    {INSERT INTO t(id) VALUES(1); INSERT INTO t VALUES(2,'y')}
+} {
+  reset_db
+  execsql $after
+  execsql $fresh
+  set want [list [db one {SELECT dolt_hashof_table('t')}] \
+                 [execsql {SELECT * FROM t ORDER BY id}]]
+
+  reset_db
+  execsql $before
+  execsql $rows
+  execsql "ALTER TABLE t DROP COLUMN $drop"
+  do_test drop-column-bytes-$name-hash {
+    list [db one {SELECT dolt_hashof_table('t')}] \
+         [execsql {SELECT * FROM t ORDER BY id}]
+  } $want
+  do_test drop-column-bytes-$name-reinsert {
+    execsql {SELECT dolt_commit('-Am','base')}
+    execsql {DELETE FROM t}
+    execsql $fresh
+    execsql {SELECT count(*) FROM dolt_status; PRAGMA integrity_check}
+  } {0 ok}
+}
+
+finish_test

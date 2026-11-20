@@ -2535,7 +2535,11 @@ void sqlite3AlterDropColumn(Parse *pParse, SrcList *pSrc, const Token *pName){
     }else{
       sqlite3VdbeAddOp3(v, OP_Insert, iCur, regRec, reg);
     }
+#ifdef DOLTLITE_PROLLY
+    sqlite3VdbeChangeP5(v, OPFLAG_SAVEPOSITION|OPFLAG_REWRITE);
+#else
     sqlite3VdbeChangeP5(v, OPFLAG_SAVEPOSITION);
+#endif
 
     sqlite3VdbeAddOp2(v, OP_Next, iCur, addr+1); VdbeCoverage(v);
     sqlite3VdbeJumpHere(v, addr);

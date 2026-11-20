@@ -6643,10 +6643,18 @@ case OP_Insert: {
   }
   x.pKey = 0;
   assert( BTREE_PREFORMAT==OPFLAG_PREFORMAT );
+#ifdef DOLTLITE_PROLLY
+  rc = sqlite3BtreeInsert(pC->uc.pCursor, &x,
+      (pOp->p5 & (OPFLAG_APPEND|OPFLAG_SAVEPOSITION|OPFLAG_PREFORMAT))
+      | ((pOp->p5 & OPFLAG_REWRITE) ? BTREE_REWRITE : 0),
+      seekResult
+  );
+#else
   rc = sqlite3BtreeInsert(pC->uc.pCursor, &x,
       (pOp->p5 & (OPFLAG_APPEND|OPFLAG_SAVEPOSITION|OPFLAG_PREFORMAT)),
       seekResult
   );
+#endif
   pC->deferredMoveto = 0;
   pC->cacheStatus = CACHE_STALE;
   colCacheCtr++;
@@ -7525,7 +7533,8 @@ case OP_IdxInsert: {        /* in2 */
 #ifdef DOLTLITE_PROLLY
   rc = sqlite3BtreeInsert(pC->uc.pCursor, &x,
        (pOp->p5 & (OPFLAG_APPEND|OPFLAG_SAVEPOSITION|OPFLAG_PREFORMAT))
-       | ((pOp->p5 & OPFLAG_ISUPDATE) ? BTREE_ISUPDATE : 0),
+       | ((pOp->p5 & OPFLAG_ISUPDATE) ? BTREE_ISUPDATE : 0)
+       | ((pOp->p5 & OPFLAG_REWRITE) ? BTREE_REWRITE : 0),
       ((pOp->p5 & OPFLAG_USESEEKRESULT) ? pC->seekResult : 0));
 #else
   rc = sqlite3BtreeInsert(pC->uc.pCursor, &x,
