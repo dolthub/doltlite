@@ -1147,6 +1147,15 @@ sqlite3_vfs *sqlite3DoltliteSharedMemVfs(void){
 int sqlite3IsDoltliteSharedMemVfs(const sqlite3_vfs *pVfs){
   return pVfs==&doltlite_shmem_vfs;
 }
+
+int sqlite3DoltliteSharedMemHandles(sqlite3_file *pFile){
+  MemStore *p = ((MemFile*)pFile)->pStore;
+  int n;
+  memdbEnter(p);
+  n = p->nRef;
+  memdbLeave(p);
+  return n;
+}
 #endif
 
 #ifdef DOLTLITE_PROLLY

@@ -1333,6 +1333,56 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     goto backup_step_done;
   }
 
+  if( destCs->isSharedMemory ){
+    /* A named memory file cannot be renamed over. Empty it through a
+    ** second handle, which keeps the name alive while the store reopens,
+    ** and copy into it. */
+    sqlite3_file *pHold = 0;
+    char *zName = 0;
+    int bShared;
+    ChunkStore old = *destCs;
+    openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+              | SQLITE_OPEN_MAIN_DB;
+    rc = chunkStoreDupFilenameDoubleNul(
+        chunkFileGetFilename(&destCs->file), &zName);
+    if( rc==SQLITE_OK ){
+      rc = sqlite3OsOpenMalloc(pDestVfs, zName, &pHold, openFlags, 0);
+    }
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zName);
+      goto backup_step_done;
+    }
+    chunkStoreUnlock(destCs);
+    destLocked = 0;
+    chunkStoreClose(destCs);
+    /* Another connection reads this file through its own store, which
+    ** would not notice the contents being replaced under it. */
+    bShared = sqlite3DoltliteSharedMemHandles(pHold)>1;
+    if( !bShared ) rc = sqlite3OsTruncate(pHold, 0);
+    if( rc==SQLITE_OK ) rc = chunkStoreOpen(destCs, pDestVfs, zName, openFlags);
+    sqlite3OsCloseFree(pHold);
+    sqlite3_free(zName);
+    destCs->xWriteGate = old.xWriteGate;
+    destCs->pWriteGateArg = old.pWriteGateArg;
+    destCs->xDefaultBusy = old.xDefaultBusy;
+    destCs->pDefaultBusyArg = old.pDefaultBusyArg;
+    if( rc==SQLITE_OK && bShared ){
+      sqlite3ErrorWithMsg(p->pDestDb, SQLITE_BUSY,
+                          "destination database is in use");
+      rc = SQLITE_BUSY;
+      doltliteInvalidateBtreeWorkingState(pDestBt);
+      goto backup_step_done;
+    }
+    if( rc==SQLITE_OK ) rc = chunkStoreCopyIntoEmpty(srcCs, destCs);
+    memoryAdopted = 1;
+    if( rc==SQLITE_OK ){
+      doltliteBtreeInstallBackupBranch(pDestBt, zPreparedBranch);
+      zPreparedBranch = 0;
+    }
+    doltliteInvalidateBtreeWorkingState(pDestBt);
+    goto backup_step_done;
+  }
+
   {
     /* A fixed name under the destination's graph lock: two backups into
     ** one destination never stage at once, and the next backup finds what

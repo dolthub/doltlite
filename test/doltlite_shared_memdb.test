@@ -164,4 +164,45 @@ foreach uri {
   db2 close
 }
 
+forcedelete bksrc.db
+sqlite3 src bksrc.db
+src eval {
+  CREATE TABLE s(a);
+  INSERT INTO s VALUES(1),(2),(3);
+  SELECT dolt_commit('-Am','c1');
+}
+src close
+set i 0
+foreach uri {
+  file:dlshm9a?mode=memory&cache=shared
+  file:/dlshm9b?vfs=memdb
+} {
+  incr i
+  do_test 9.$i.restore {
+    sqlite3 db $uri -uri 1
+    db restore main bksrc.db
+    db eval {
+      SELECT count(*) FROM s; SELECT count(*) FROM dolt_log;
+      PRAGMA integrity_check;
+    }
+  } {3 2 ok}
+  do_test 9.$i.peer-joins {
+    sqlite3 db2 $uri -uri 1
+    db eval {INSERT INTO s VALUES(4)}
+    db2 eval {INSERT INTO s VALUES(5)}
+    list [db eval {SELECT count(*) FROM s}] [db2 eval {SELECT count(*) FROM s}]
+  } {5 5}
+  # A second connection reads the file through its own store, so the
+  # contents cannot be replaced under it.
+  do_test 9.$i.shared-refused {
+    list [catch {db restore main bksrc.db}] \
+      [db eval {SELECT count(*) FROM s}] \
+      [db2 eval {INSERT INTO s VALUES(6); SELECT count(*) FROM s}] \
+      [db eval {INSERT INTO s VALUES(7); SELECT count(*) FROM s;
+                PRAGMA integrity_check}]
+  } {1 5 6 {7 ok}}
+  db close
+  db2 close
+}
+
 finish_test
