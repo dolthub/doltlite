@@ -162,6 +162,7 @@ doltlite_rebase_order
 doltlite_vacuum_into_race
 doltlite_blame_seek
 doltlite_blame_working
+doltlite_order_memo_stale_plan
 doltlite_blame_affinity
 doltlite_blame_columns
 doltlite_blame_rowid

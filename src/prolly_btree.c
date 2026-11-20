@@ -140,10 +140,12 @@ int doltliteBtreeNocaseNulInsert(BtCursor *pCur, const u8 *pRec, int nRec){
   struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
   int has = 0;
   int rc;
-  if( !pTE || pTE->nocaseNulState!=1 || !pCur->pKeyInfo ){
+  if( !pTE || !pCur->pKeyInfo
+   || (pTE->nocaseNulState!=1
+       && !(pTE->orderedPlanMask & ORDERED_PLAN_NOCASE)) ){
     return SQLITE_OK;
   }
-  if( pTE->nocaseNulMaskValid ){
+  if( pTE->nocaseNulState==1 && pTE->nocaseNulMaskValid ){
     rc = doltliteRecordMaskHasNocaseNul(pRec, nRec, pTE->nocaseNulMask, &has);
   }else{
     rc = recordHasNocaseNulSlow(pRec, nRec, pCur->pKeyInfo->nAllField,
@@ -152,9 +154,54 @@ int doltliteBtreeNocaseNulInsert(BtCursor *pCur, const u8 *pRec, int nRec){
   if( rc==SQLITE_OK && has ){
     pTE->nocaseNulState = 0;
     pTE->nocaseNulMaskValid = 0;
+    pTE->orderedPlanMask &= ~ORDERED_PLAN_NOCASE;
     sqlite3ExpirePreparedStatements(pCur->pBtree->db, 1);
   }
   return rc;
+}
+
+int doltliteBtreeNumericDescInsert(
+  BtCursor *pCur, const u8 *pSortKey, int nSortKey
+){
+  struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+  int has = 0;
+  int rc;
+  if( !pTE || (pTE->numericDescState!=1
+            && !(pTE->orderedPlanMask & ORDERED_PLAN_NUMERIC)) ){
+    return SQLITE_OK;
+  }
+  rc = sortKeyHasWideNumericDesc(pSortKey, nSortKey, &has);
+  if( rc==SQLITE_OK && has ){
+    pTE->numericDescState = 0;
+    pTE->orderedPlanMask &= ~ORDERED_PLAN_NUMERIC;
+    sqlite3ExpirePreparedStatements(pCur->pBtree->db, 1);
+  }
+  return rc;
+}
+
+static void orderedPlanNote(struct TableEntry *pTE, u8 kind, int has){
+  if( has ) return;
+  pTE->orderedPlanMask |= kind;
+  if( pTE->pPending && ((ProllyMutMap*)pTE->pPending)->nEntries>0 ){
+    pTE->orderedPlanMask |= ORDERED_PLAN_PENDING;
+  }
+}
+
+/* The pending edits a memo and a cached plan answered for are about to be
+** replaced by an older set. */
+void doltliteBtreeDropOrderMemos(Btree *pBtree){
+  int i, bPlanned = 0;
+  for(i=0; i<pBtree->cat.n; i++){
+    struct TableEntry *pTE = &pBtree->cat.a[i];
+    if( pTE->orderedPlanMask ) bPlanned = 1;
+    pTE->orderedPlanMask = 0;
+    pTE->nocaseNulState = 0;
+    pTE->nocaseNulMaskValid = 0;
+    pTE->numericDescState = 0;
+  }
+  /* A statement-level rollback runs under statements still in flight;
+  ** they finish on their plan and only re-prepare on their next run. */
+  if( bPlanned && pBtree->db ) sqlite3ExpirePreparedStatements(pBtree->db, 1);
 }
 
 int sqlite3BtreeProllyIndexHasWideNumericDesc(
@@ -177,6 +224,7 @@ int sqlite3BtreeProllyIndexHasWideNumericDesc(
   if( pTE->numericDescState
    && prollyHashCompare(&pTE->numericDescRoot, &pTE->root)==0 ){
     *pHas = pTE->numericDescState==2;
+    orderedPlanNote(pTE, ORDERED_PLAN_NUMERIC, *pHas);
     return SQLITE_OK;
   }
   pMap = (ProllyMutMap*)pTE->pPending;
@@ -203,6 +251,7 @@ int sqlite3BtreeProllyIndexHasWideNumericDesc(
   if( rc==SQLITE_OK ){
     pTE->numericDescRoot = pTE->root;
     pTE->numericDescState = *pHas ? 2 : 1;
+    orderedPlanNote(pTE, ORDERED_PLAN_NUMERIC, *pHas);
   }
   return rc;
 }
@@ -245,6 +294,7 @@ int sqlite3BtreeProllyIndexHasNocaseNul(
     if( pTE->nocaseNulMaskValid==(u8)ok
      && (!ok || pTE->nocaseNulMask==mask) ){
       *pHas = pTE->nocaseNulState==2;
+      orderedPlanNote(pTE, ORDERED_PLAN_NOCASE, *pHas);
       return SQLITE_OK;
     }
   }
@@ -282,6 +332,7 @@ int sqlite3BtreeProllyIndexHasNocaseNul(
     pTE->nocaseNulState = *pHas ? 2 : 1;
     pTE->nocaseNulMask = mask;
     pTE->nocaseNulMaskValid = (u8)ok;
+    orderedPlanNote(pTE, ORDERED_PLAN_NOCASE, *pHas);
   }
   return rc;
 }

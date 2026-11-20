@@ -13,6 +13,11 @@ struct DoltliteReplaySeries {
 };
 
 struct ProllyMutMap;
+
+#define ORDERED_PLAN_NOCASE  0x01
+#define ORDERED_PLAN_NUMERIC 0x02
+#define ORDERED_PLAN_PENDING 0x04
+
 typedef struct TableEntry TableEntry;
 typedef struct SchemaEntry SchemaEntry;
 
@@ -37,6 +42,10 @@ struct TableEntry {
   ProllyHash nocaseNulRoot;
   u8 numericDescState;
   ProllyHash numericDescRoot;
+  /* A plan was told this index is ordered: by its NOCASE keys, by its
+  ** numeric keys, and whether pending edits were part of that answer. The
+  ** memos above can be dropped while such a plan is still cached. */
+  u8 orderedPlanMask;
   char *zName;
   struct ProllyMutMap *pPending;
 };
