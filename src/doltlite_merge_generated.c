@@ -432,28 +432,7 @@ static int mergeGeneratedPrepare(
 #endif
 }
 
-/* Relayout can fill a newly added generated column with its default instead
-** of its expression value. Recompute before updating rows or indexes. */
-int mergeGeneratedSideRow(
-  sqlite3 *db, Table *pTab, sqlite3_stmt **ppStmt, i64 intKey,
-  const u8 **ppVal, int *pnVal, u8 **ppOwned
-){
-  int rc;
-  *ppOwned = 0;
-  if( !pTab || !*ppVal || *pnVal<=0 ) return SQLITE_OK;
-  rc = doltliteDupBytes(*ppVal, *pnVal, ppOwned);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = mergeGeneratedRecord(db, pTab, ppStmt, intKey, ppOwned, pnVal);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(*ppOwned);
-    *ppOwned = 0;
-    return rc;
-  }
-  *ppVal = *ppOwned;
-  return SQLITE_OK;
-}
-
-int mergeGeneratedRecord(
+static int mergeGeneratedRecord(
   sqlite3 *db, Table *pTab, sqlite3_stmt **ppStmt, i64 intKey,
   u8 **ppRecord, int *pnRecord
 ){
@@ -480,6 +459,27 @@ int mergeGeneratedRecord(
   sqlite3_free(*ppRecord);
   *ppRecord = pOut;
   *pnRecord = nOut;
+  return SQLITE_OK;
+}
+
+/* Relayout can fill a newly added generated column with its default instead
+** of its expression value. Recompute before updating rows or indexes. */
+int mergeGeneratedSideRow(
+  sqlite3 *db, Table *pTab, sqlite3_stmt **ppStmt, i64 intKey,
+  const u8 **ppVal, int *pnVal, u8 **ppOwned
+){
+  int rc;
+  *ppOwned = 0;
+  if( !pTab || !*ppVal || *pnVal<=0 ) return SQLITE_OK;
+  rc = doltliteDupBytes(*ppVal, *pnVal, ppOwned);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = mergeGeneratedRecord(db, pTab, ppStmt, intKey, ppOwned, pnVal);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(*ppOwned);
+    *ppOwned = 0;
+    return rc;
+  }
+  *ppVal = *ppOwned;
   return SQLITE_OK;
 }
 
