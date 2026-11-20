@@ -165,6 +165,7 @@ doltlite_tripped_cursor_seek
 doltlite_blame_working
 doltlite_order_memo_stale_plan
 doltlite_blame_affinity
+doltlite_merge_strict_option
 doltlite_blame_columns
 doltlite_blame_rowid
 doltlite_summary_rowid

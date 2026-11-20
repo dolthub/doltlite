@@ -1268,6 +1268,57 @@ int schemaRetainedClauseConflict(
   return bConflict ? SQLITE_ERROR : SQLITE_OK;
 }
 
+/* Offset just past the column list of a CREATE TABLE, and the options
+** written after it. Returns 0 when there is no column list. */
+static int dlTableOptions(
+  const char *zSql, int *pnBody, int *pbStrict, int *pbWithoutRowid
+){
+  const unsigned char *z = (const unsigned char*)zSql;
+  int i = 0, depth = 0, tt, n;
+  *pnBody = 0;
+  *pbStrict = 0;
+  *pbWithoutRowid = 0;
+  for(; z && z[i] && !*pnBody; i+=n){
+    n = sqlite3GetToken(&z[i], &tt);
+    if( tt==TK_LP ){
+      depth++;
+    }else if( tt==TK_RP && --depth==0 ){
+      *pnBody = i+n;
+    }
+  }
+  if( !*pnBody ) return 0;
+  for(; z[i]; i+=n){
+    n = sqlite3GetToken(&z[i], &tt);
+    if( n==6 && sqlite3_strnicmp((const char*)&z[i], "strict", 6)==0 ){
+      *pbStrict = 1;
+    }else if( n==7 && sqlite3_strnicmp((const char*)&z[i], "without", 7)==0 ){
+      *pbWithoutRowid = 1;
+    }
+  }
+  return 1;
+}
+
+/* The merged definition is composed from column lists and constraints,
+** so it carries the STRICT of whichever side supplied its text. Give it
+** the three-way result instead. */
+static int dlMergeStrictOption(
+  int bAnc, int bOurs, int bTheirs, char **pzSql
+){
+  int nBody, bHas, bWr;
+  int bWant = bTheirs==bAnc ? bOurs : bTheirs;
+  char *zNew;
+  if( !dlTableOptions(*pzSql, &nBody, &bHas, &bWr) || bHas==bWant ){
+    return SQLITE_OK;
+  }
+  zNew = sqlite3_mprintf("%.*s%s%s", nBody, *pzSql,
+      bWr ? " WITHOUT ROWID" : "",
+      bWant ? (bWr ? ", STRICT" : " STRICT") : "");
+  if( !zNew ) return SQLITE_NOMEM;
+  sqlite3_free(*pzSql);
+  *pzSql = zNew;
+  return SQLITE_OK;
+}
+
 int schemaAdoptMergedTableSql(
   SchemaEntry *aAnc, int nAnc,
   SchemaEntry *aOurs, int nOurs,
@@ -1280,6 +1331,7 @@ int schemaAdoptMergedTableSql(
   const char *zAncSql, *zOursSql, *zTheirsSql;
   char *zNew = 0, *zErr = 0;
   int bConflict = 0, bHandled = 0, rc = SQLITE_OK;
+  int nBody, bWr, bStrictAnc, bStrictOurs, bStrictTheirs;
 
   pOurs = zName ? findSchemaEntry(aOurs, nOurs, zName) : 0;
   if( !pOurs && zFallback ) pOurs = findSchemaEntry(aOurs, nOurs, zFallback);
@@ -1309,17 +1361,23 @@ int schemaAdoptMergedTableSql(
     return SQLITE_OK;
   }
   if( !zAncSql || !zOursSql || !zTheirsSql ) return SQLITE_OK;
+  dlTableOptions(zAncSql, &nBody, &bStrictAnc, &bWr);
+  dlTableOptions(zOursSql, &nBody, &bStrictOurs, &bWr);
+  dlTableOptions(zTheirsSql, &nBody, &bStrictTheirs, &bWr);
   rc = dlComposeRetained(zAncSql, zOursSql, zTheirsSql, schemaChoice,
                          zName ? zName : zFallback, aAct, nAct,
                          &zNew, &zErr, &bConflict, &bHandled);
   sqlite3_free(zErr);
-  if( rc!=SQLITE_OK || bConflict || !zNew ){
+  if( rc!=SQLITE_OK || bConflict ){
     sqlite3_free(zNew);
     return rc;
   }
-  sqlite3_free(pOurs->zSql);
-  pOurs->zSql = zNew;
-  return SQLITE_OK;
+  if( zNew ){
+    sqlite3_free(pOurs->zSql);
+    pOurs->zSql = zNew;
+  }
+  return dlMergeStrictOption(bStrictAnc, bStrictOurs, bStrictTheirs,
+                             &pOurs->zSql);
 }
 
 int schemaInstallDeferredClauses(
