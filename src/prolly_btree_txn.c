@@ -2500,6 +2500,7 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
         if( tripCode && (!writeOnly || (pC->curFlags & BTCF_WriteFlag)!=0) ){
           pC->eState = CURSOR_FAULT;
           pC->skipNext = tripCode;
+          pC->bCatalogGone = 1;
           pC->mmActive = 0;
           prollyCursorReleaseAll(&pC->pCur);
         }

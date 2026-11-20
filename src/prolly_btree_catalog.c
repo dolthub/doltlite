@@ -209,9 +209,11 @@ int doltliteVcScanSwapCheck(sqlite3 *db, const ProllyHash *catHash){
 ** keep reading the catalog that was just replaced. */
 static void invalidateCursorsFinished(sqlite3 *db, BtShared *pBt){
   Vdbe *pVdbe;
+  BtCursor *p;
   int i;
   assert( pBt!=0 );
   invalidateCursors(pBt, 0, SQLITE_ABORT);
+  for(p=pBt->pCursor; p; p=p->pNext) p->bCatalogGone = 1;
   pVdbe = db ? db->pVcCommand : 0;
   if( !pVdbe ) return;
   for(i=0; i<pVdbe->nCursor; i++){
@@ -223,6 +225,7 @@ static void invalidateCursorsFinished(sqlite3 *db, BtShared *pBt){
     if( !pCur || pCur->pBt!=pBt ) continue;
     pCur->eState = CURSOR_INVALID;
     pCur->skipNext = 0;
+    pCur->bCatalogGone = 0;
     pCur->mmActive = 0;
     pCur->mmPhysActive = 0;
     pCur->mmIdx = -1;

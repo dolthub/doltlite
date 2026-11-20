@@ -59,6 +59,9 @@ int prollyBtCursorTableMoveto(
 
   assert( pCur->curIntKey );
 
+  if( pCur->eState==CURSOR_FAULT && pCur->bCatalogGone ){
+    return doltliteBtreeCursorFaultCode(pCur);
+  }
   rc = flushScanDeletes(pCur);
   if( rc!=SQLITE_OK ) return rc;
   pCur->nSeek++;
@@ -1130,6 +1133,9 @@ static int prollyIndexMoveto(
 
   assert( !pCur->curIntKey );
 
+  if( pCur->eState==CURSOR_FAULT && pCur->bCatalogGone ){
+    return doltliteBtreeCursorFaultCode(pCur);
+  }
   rc = flushScanDeletes(pCur);
   if( rc!=SQLITE_OK ) return rc;
   if( pCur->pBtree ) pCur->pBtree->nSeek++;
