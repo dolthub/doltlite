@@ -1,0 +1,60 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# A commit that drops a column owns every row whose stored record it
+# changed, wherever the column sat, as Dolt blames it. A row that held
+# NULL in the dropped column and in every later one is stored the same
+# on both sides and keeps its earlier commit.
+
+foreach {col expect} {
+  a {1 m3 2 m1 3 m3 4 m3 5 m3}
+  b {1 m3 2 m1 3 m3 4 m3 5 m1}
+} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT);
+    INSERT INTO t VALUES(1,10,1),(2,NULL,NULL),(3,30,3),(4,NULL,4),(5,5,NULL);
+    SELECT dolt_commit('-Am','m1');
+    UPDATE t SET b=22, a=31 WHERE id=3;
+    SELECT dolt_commit('-Am','m2');
+  }
+  execsql "ALTER TABLE t DROP COLUMN $col"
+  execsql {SELECT dolt_commit('-Am','m3')}
+  do_execsql_test drop-$col.blame {
+    SELECT id, message FROM dolt_blame_t ORDER BY id;
+  } $expect
+  do_execsql_test drop-$col.diff {
+    SELECT count(*) FROM dolt_blame_t b
+     WHERE (b.message='m3') IS NOT (b.id IN (
+       SELECT to_id FROM dolt_diff_t WHERE to_commit=dolt_hashof('HEAD')));
+  } {0}
+}
+
+reset_db
+do_execsql_test drop-add-backfill {
+  CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT);
+  INSERT INTO t VALUES(1,5,1),(2,6,2),(3,7,3);
+  SELECT dolt_commit('-Am','m0') IS NOT NULL;
+  ALTER TABLE t DROP COLUMN a;
+  ALTER TABLE t ADD COLUMN n INT;
+  UPDATE t SET n=70 WHERE id=3;
+  SELECT dolt_commit('-Am','m1') IS NOT NULL;
+  SELECT id, message FROM dolt_blame_t ORDER BY id;
+} {1 1 1 m1 2 m1 3 m1}
+
+foreach {coll old new} {NOCASE B b RTRIM b {b  }} {
+  reset_db
+  execsql "CREATE TABLE t(id TEXT COLLATE $coll PRIMARY KEY, a, b, c)"
+  execsql "INSERT INTO t VALUES('$old',1,2,3)"
+  execsql {SELECT dolt_commit('-Am','m0')}
+  execsql "UPDATE t SET id='$new' WHERE id='$old'"
+  execsql {
+    ALTER TABLE t DROP COLUMN a;
+    SELECT dolt_commit('-Am','m1');
+  }
+  do_execsql_test respelled-key-$coll {
+    SELECT id, message FROM dolt_blame_t;
+  } [list $new m1]
+}
+
+finish_test

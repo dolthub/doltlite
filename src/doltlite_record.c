@@ -231,7 +231,7 @@ void doltliteDiffLayoutClear(DoltliteDiffLayout *pLayout){
   memset(pLayout, 0, sizeof(*pLayout));
 }
 
-int doltliteDiffSharedValuesEqual(
+static int doltliteDiffSharedValuesEqual(
   void *pCompare,
   const u8 *pFrom, int nFrom,
   const u8 *pTo, int nTo,
