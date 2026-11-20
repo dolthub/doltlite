@@ -16,6 +16,12 @@ const require = createRequire(pathToFileURL(process.cwd() + '/'));
 const nodeEntry = require.resolve('@dolthub/doltlite-wasm/sqlite3-node.mjs');
 const wasmPath = require.resolve('@dolthub/doltlite-wasm/sqlite3.wasm');
 const rootEntry = require.resolve('@dolthub/doltlite-wasm');
+const expectedVersion = process.env.DOLTLITE_EXPECT_VERSION;
+const packageVersion = require('@dolthub/doltlite-wasm/package.json').version;
+if (expectedVersion) {
+  const expectedPackageVersion = expectedVersion.replace(/^v/, '');
+  if (packageVersion !== expectedPackageVersion) fail(`package version ${packageVersion}, expected ${expectedPackageVersion}`);
+}
 
 const { default: sqlite3InitModule } = await import(pathToFileURL(nodeEntry).href);
 
@@ -33,6 +39,7 @@ try {
   const version = db.selectValue('select dolt_version()');
   const engine = db.selectValue('select doltlite_engine()');
   if (!version || typeof version !== 'string') fail('dolt_version() returned no version');
+  if (expectedVersion && version !== expectedVersion) fail(`engine version ${version}, expected ${expectedVersion}`);
   if (engine !== 'prolly') fail(`doltlite_engine() returned ${engine}`);
 
   db.exec('create table t(id integer primary key, v text)');
