@@ -10483,14 +10483,34 @@ abort_due_to_error:
   }
   /* Outside a function's own result and without a chunk source (which may
   ** report NOTFOUND by contract), NOTFOUND is the store's internal miss
-  ** sentinel: referenced data is gone. */
+  ** sentinel: referenced data is gone. A parked deleted branch is the
+  ** exception: gc swept its chunks, and marking the transaction corrupt
+  ** rejects every later statement. */
   if( rc==SQLITE_NOTFOUND
    && pOp->opcode!=OP_Function && pOp->opcode!=OP_PureFunc
    && pOp->opcode!=OP_AggStep && pOp->opcode!=OP_AggStep1
    && pOp->opcode!=OP_AggValue && pOp->opcode!=OP_AggInverse
    && pOp->opcode!=OP_AggFinal
    && !doltliteChunkSourceActive(db) ){
-    rc = SQLITE_CORRUPT_BKPT;
+    int branchGone = db->nDb>0
+        && (doltliteBtreeMissingWriteBranch(db->aDb[0].pBt)!=0
+            || doltliteSessionBranchGone(db));
+    if( branchGone ){
+      if( db->pParse==0 && p->zErrMsg==0 ){
+        const char *zBranch = doltliteBtreeMissingWriteBranch(db->aDb[0].pBt);
+        if( !zBranch ){
+          doltliteBtreeNoteMissingWriteBranch(db->aDb[0].pBt);
+          zBranch = doltliteBtreeMissingWriteBranch(db->aDb[0].pBt);
+        }
+        if( zBranch ){
+          sqlite3VdbeError(p, "cannot write: branch '%s' no longer exists",
+                           zBranch);
+        }
+      }
+      rc = SQLITE_BUSY;
+    }else{
+      rc = SQLITE_CORRUPT_BKPT;
+    }
   }
   if( db->pParse==0 ){
     char *zMiss = doltliteTakeMissingChunkError(
