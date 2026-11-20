@@ -1,0 +1,46 @@
+# A DoltLite image deserialized into an attached in-memory schema opens on
+# the DoltLite engine, whatever engine the schema held before.
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_deserialize_attached_memory
+
+db close
+forcedelete dsrc.db
+sqlite3 src dsrc.db
+src eval {
+  CREATE TABLE t(a INT PRIMARY KEY, b);
+  INSERT INTO t VALUES(1,'x'),(2,'y');
+  SELECT dolt_commit('-Am','c1');
+}
+set img [src serialize]
+src close
+
+set i 0
+foreach target {:memory: {}} {
+  incr i
+  sqlite3 db :memory:
+  db eval {CREATE TABLE local(x); INSERT INTO local VALUES(1)}
+  db eval "ATTACH '$target' AS aux"
+  do_test $i.1 {
+    db deserialize aux $img
+    db eval {SELECT * FROM aux.t ORDER BY a; SELECT * FROM local}
+  } {1 x 2 y 1}
+  do_test $i.2 {
+    db eval {
+      INSERT INTO local VALUES(2);
+      INSERT INTO aux.t VALUES(3,'z');
+      SELECT count(*) FROM aux.t; SELECT count(*) FROM local;
+      PRAGMA aux.integrity_check;
+    }
+  } {3 2 ok}
+  do_test $i.3 {
+    set again [db serialize aux]
+    db eval {DETACH aux; ATTACH ':memory:' AS aux2}
+    db deserialize aux2 $again
+    db eval {SELECT count(*) FROM aux2.t; DETACH aux2; SELECT count(*) FROM local}
+  } {3 2}
+  db close
+}
+
+finish_test
