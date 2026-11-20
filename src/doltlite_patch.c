@@ -1253,9 +1253,10 @@ static int patchTableUnchanged(
 #define PATCH_PHASE_CREATE       1
 #define PATCH_PHASE_ALTER        2
 #define PATCH_PHASE_DROP_TABLE   3
-#define PATCH_PHASE_DATA         4
-#define PATCH_PHASE_INDEX        5
-#define PATCH_NPHASE             6
+#define PATCH_PHASE_CREATE_FREED 4
+#define PATCH_PHASE_DATA         5
+#define PATCH_PHASE_INDEX        6
+#define PATCH_NPHASE             7
 
 static int patchGenerateTable(
   PatchCursor *pCur,
@@ -1296,7 +1297,7 @@ static int patchGenerateTable(
   if( !pTable->pFromSchema ){
     int bNameTaken = findSchemaEntry(aFromSchema,nFromSchema,
                                      pTable->zToName)!=0;
-    if( ePhase==(bNameTaken ? PATCH_PHASE_DROP_TABLE : PATCH_PHASE_CREATE) ){
+    if( ePhase==(bNameTaken ? PATCH_PHASE_CREATE_FREED : PATCH_PHASE_CREATE) ){
       rc = patchAppendRow(pCur,pTable->zToName,"schema",
                           pTable->pToSchema->zSql);
     }else if( ePhase==PATCH_PHASE_DATA ){
