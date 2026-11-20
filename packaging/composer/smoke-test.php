@@ -35,6 +35,13 @@ $dbPath = "$dir/smoke.db";
 @unlink($dbPath);
 
 $db = new Doltlite3($dbPath);
+if (($version = getenv('DOLTLITE_PACKAGE_VERSION')) !== false) {
+    check('installed Composer package version',
+        Composer\InstalledVersions::getPrettyVersion('dolthub/doltlite-php'), $version);
+}
+if (($engine = getenv('DOLTLITE_EXPECT_VERSION')) !== false) {
+    check('bundled engine matches release', $db->querySingle('SELECT dolt_version()'), $engine);
+}
 
 $v = Doltlite3::version();
 check('version reports a string', is_string($v['versionString']) && $v['versionString'] !== '', true);
@@ -99,7 +106,8 @@ try {
 }
 
 // Version control is plain SQL through the same connection.
-check('dolt_commit', $db->querySingle("SELECT dolt_commit('-A', '-m', 'first commit')") !== '', true);
+$commit = $db->querySingle("SELECT dolt_commit('-A', '-m', 'first commit')");
+check('dolt_commit', is_string($commit) && $commit !== '', true);
 check('dolt_branch', $db->querySingle("SELECT dolt_branch('feature')"), 0);
 check('dolt_checkout feature', $db->querySingle("SELECT dolt_checkout('feature')"), 0);
 $db->exec("UPDATE t SET s = 'branched' WHERE pk = 1");
@@ -113,8 +121,14 @@ check('dolt_log sees both commits',
 
 $db->close();
 check('close idempotent', $db->close(), true);
+$db = new Doltlite3($dbPath);
+check('reopened database has merged data', $db->querySingle('SELECT s FROM t WHERE pk = 1'), 'branched');
+check('reopened database has the first commit',
+    $db->querySingle("SELECT commit_hash FROM dolt_log WHERE message = 'first commit'"), $commit);
+$db->close();
 
 @unlink($dbPath);
+@unlink("$dir/.smoke.db-lock");
 @rmdir($dir);
 
 echo $failures === 0 ? "smoke-test: all checks passed\n" : "smoke-test: $failures failure(s)\n";

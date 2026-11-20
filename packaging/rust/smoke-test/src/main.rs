@@ -147,9 +147,10 @@ fn main() -> std::process::ExitCode {
         .query_row("SELECT dolt_commit('-A', '-m', 'first commit')", &[])
         .expect("commit")
         .expect("row");
+    let commit_hash = commit.get(0).unwrap().as_str().unwrap();
     check(
         "dolt_commit",
-        (!commit.get(0).unwrap().as_str().unwrap().is_empty()).to_string(),
+        (!commit_hash.is_empty()).to_string(),
         "true".into(),
     );
     let scalar = |sql: &str| -> String {
@@ -219,6 +220,18 @@ fn main() -> std::process::ExitCode {
             .unwrap()
             .to_string(),
         "3".into(),
+    );
+    let persisted = db
+        .query_row(
+            "SELECT commit_hash FROM dolt_log WHERE message = 'first commit'",
+            &[],
+        )
+        .expect("reopen history")
+        .expect("commit");
+    check(
+        "reopened database has the first commit",
+        persisted.get(0).unwrap().as_str().unwrap().into(),
+        commit_hash.into(),
     );
     for sql in [
         "INSERT INTO t(pk) VALUES(99)",
