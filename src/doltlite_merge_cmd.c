@@ -1855,6 +1855,10 @@ int doltliteMergeRef(
     return mergeRefAbortAfterWriteTxn(db, context,
       "uncommitted changes \xe2\x80\x94 commit or reset before merging", rc);
   }
+  if( doltliteSessionHasUnresolvedConflicts(db) ){
+    return mergeRefAbortAfterWriteTxn(db, context,
+      "cannot merge with unresolved conflicts", rc);
+  }
   if( dirty ){
     ProllyHash headCatHash, trackedHash;
     DoltliteCommit source;

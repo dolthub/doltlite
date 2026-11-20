@@ -336,6 +336,11 @@ static void doltliteRevertFunc(
     sqlite3_result_error(context, "a replay is already in progress", -1);
     goto done;
   }
+  if( doltliteSessionHasUnresolvedConflicts(db) ){
+    sqlite3_result_error(context,
+      "cannot revert with unresolved conflicts", -1);
+    goto done;
+  }
   aHashes = sqlite3_malloc64((sqlite3_uint64)args.nPositional*sizeof(*aHashes));
   if( !aHashes ){ sqlite3_result_error_nomem(context); goto done; }
   for(i=0; i<args.nPositional; i++){

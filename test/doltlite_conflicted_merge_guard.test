@@ -1,0 +1,53 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+foreach {name sql} {
+  cherry-pick {SELECT dolt_cherry_pick('conf2')}
+  merge {SELECT dolt_merge('conf2')}
+  revert {SELECT dolt_revert('HEAD')}
+} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO t VALUES(1,'a');
+    SELECT dolt_commit('-Am','init');
+    SELECT dolt_checkout('-b','conf');
+    UPDATE t SET v='conf' WHERE id=1;
+    SELECT dolt_commit('-Am','conf1');
+    SELECT dolt_checkout('main');
+    SELECT dolt_checkout('-b','conf2');
+    UPDATE t SET v='conf2' WHERE id=1;
+    INSERT INTO t VALUES(2,'conf2');
+    SELECT dolt_commit('-Am','conf2');
+    SELECT dolt_checkout('main');
+    UPDATE t SET v='main' WHERE id=1;
+    SELECT dolt_commit('-Am','main2');
+    BEGIN;
+  }
+  catchsql {SELECT dolt_merge('conf')}
+  set before [execsql {
+    SELECT base_v, our_v, their_v FROM dolt_conflicts_t;
+    SELECT is_merging, source FROM dolt_merge_status;
+    SELECT * FROM t;
+  }]
+  do_test conflicted-merge-guard-$name {
+    set result [catchsql $sql]
+    list [lindex $result 0] \
+      [regexp {with unresolved conflicts} [lindex $result 1]] \
+      [execsql {
+        SELECT base_v, our_v, their_v FROM dolt_conflicts_t;
+        SELECT is_merging, source FROM dolt_merge_status;
+        SELECT * FROM t;
+      }]
+  } [list 1 1 $before]
+  do_execsql_test conflicted-merge-guard-$name-resolve {
+    SELECT dolt_conflicts_resolve('--theirs','t');
+    SELECT dolt_commit('-am','resolved') IS NOT NULL;
+    SELECT * FROM t;
+    SELECT count(*) FROM dolt_commit_ancestors
+     WHERE commit_hash=dolt_hashof('HEAD')
+       AND parent_hash IN (dolt_hashof('conf'), dolt_hashof('main~1'));
+  } {0 1 1 conf 2}
+}
+
+finish_test
