@@ -19,12 +19,83 @@ on:
 permissions:
   contents: read
 
+env:
+  TAG: ${{ inputs.release-tag || 'v0.0.0-ci' }}
+
 jobs:
+  build-native:
+    name: Build native library (${{ matrix.rid }})
+    if: ${{ !inputs.release-tag }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { rid: linux-x64, os: ubuntu-24.04, lib: libdoltlite.so }
+          - { rid: linux-arm64, os: ubuntu-24.04-arm, lib: libdoltlite.so }
+          - { rid: osx-arm64, os: macos-latest, lib: libdoltlite.dylib }
+          - { rid: win-x64, os: windows-latest, lib: libdoltlite.dll }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stamp the engine version
+        shell: bash
+        run: printf '%s\n' "$TAG" > .dolt_release_version
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: bash .github/scripts/install-apt-deps.sh build-essential zlib1g-dev
+
+      - name: Install Windows build dependencies
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-zlib make tcl
+
+      - name: Build the Unix library
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p build && cd build
+          ../configure
+          make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)" DOLTLITE_SINGLE_FILE=1 doltlite-lib
+
+      - name: Build the Windows library
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          mkdir -p build && cd build
+          ../configure
+          make -j"$(nproc)" doltlite-lib
+
+      - name: Stage the native library archive
+        shell: bash
+        env:
+          RID: ${{ matrix.rid }}
+          LIBRARY: ${{ matrix.lib }}
+        run: |
+          bundle="doltlite-lib-$RID-${TAG#v}"
+          mkdir "$bundle"
+          cp "build/$LIBRARY" "$bundle/"
+          if command -v zip >/dev/null; then
+            zip -r "$bundle.zip" "$bundle"
+          else
+            7z a "$bundle.zip" "$bundle"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.rid }}
+          path: doltlite-lib-*.zip
+          if-no-files-found: error
+
   pack:
     name: Pack the NuGet candidate
+    needs: build-native
+    if: ${{ !cancelled() && (needs.build-native.result == 'success' || (inputs.release-tag && needs.build-native.result == 'skipped')) }}
     runs-on: ubuntu-24.04
-    env:
-      TAG: ${{ inputs.release-tag || 'v0.51.14' }}
     outputs:
       version: ${{ steps.pack.outputs.version }}
     steps:
@@ -34,17 +105,10 @@ jobs:
           dotnet-version: '8.0.x'
 
       - uses: actions/download-artifact@v4
-        if: inputs.release-tag
         with:
           pattern: binaries-*
           path: release-assets
           merge-multiple: true
-
-      - name: Download native libraries for the standalone test
-        if: ${{ !inputs.release-tag }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release download "$TAG" --repo dolthub/doltlite --pattern "doltlite-lib-*-${TAG#v}.zip" --dir release-assets
 
       - name: Pack all four native libraries into one archive
         id: pack
