@@ -611,6 +611,9 @@ void sqlite3Update(
 
   if( pParse->nested==0 ) sqlite3VdbeCountChanges(v);
   sqlite3BeginWriteOperation(pParse, pTrigger || hasFK, iDb);
+#ifdef DOLTLITE_PROLLY
+  if( pParse->pToplevel==0 ) pParse->pDlWriteTab = pTab;
+#endif
 
   /* Allocate required registers. */
   if( !IsVirtual(pTab) ){

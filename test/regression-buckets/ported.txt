@@ -171,6 +171,7 @@ doltlite_blame_seek
 doltlite_tripped_cursor_seek
 doltlite_blame_working
 doltlite_order_memo_stale_plan
+doltlite_own_write_order_plan
 doltlite_drop_column_row_bytes
 doltlite_blame_affinity
 doltlite_merge_strict_option

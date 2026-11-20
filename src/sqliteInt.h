@@ -4057,6 +4057,7 @@ struct Parse {
   Trigger *pTrigCoded;      /* Trigger whose sub-program is being coded */
 #ifdef DOLTLITE_PROLLY
   struct DoltliteNonlocalUse *pNonlocalUse; /* Tables reached by a rule */
+  Table *pDlWriteTab;  /* Table a top-level UPDATE writes */
 #endif
 
   /**************************************************************************
