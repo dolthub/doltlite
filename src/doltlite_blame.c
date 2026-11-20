@@ -853,6 +853,28 @@ static int blameWalk(
         return rc;
       }
 
+      /* The first parent had no work of its own, so the rows came from
+      ** the second parent's commits. Only what the merge commit itself
+      ** changed belongs to it; the walk goes on down the second parent. */
+      if( doltliteCommitParentCount(&commit)==2
+       && prollyHashCompare(&baseHash,
+                            doltliteCommitParentHash(&commit, 0))==0 ){
+        ProllyHash second = *doltliteCommitParentHash(&commit, 1);
+        ProllyHash secondCatHash;
+        rc = doltliteCommitCatalogHash(db, &second, &secondCatHash);
+        if( rc==SQLITE_OK ){
+          rc = blameCompareAgainstRef(db, pCur, zTableName,
+                                      haveCurTable ? &curTableRoot : 0,
+                                      curFlags,
+                                      &commit.catalogHash, &curSchemaHash,
+                                      &secondCatHash, &walk, &commit);
+        }
+        doltliteCommitClear(&commit);
+        if( rc!=SQLITE_OK ) return rc;
+        walk = second;
+        continue;
+      }
+
       if( haveCurTable && !prollyHashIsEmpty(&baseHash) ){
         ProllyHash baseCatHash;
         rc = doltliteCommitCatalogHash(db, &baseHash, &baseCatHash);
