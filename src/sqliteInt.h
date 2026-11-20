@@ -5618,6 +5618,7 @@ void doltliteEndStoreCommits(sqlite3*);
 const char *doltliteBtreeMissingReadRef(Btree*,int*);
 void doltliteBtreeNoteMissingWriteBranch(Btree*);
 void doltliteBtreeClearMissingWriteBranch(Btree*);
+int doltliteSessionBranchGone(sqlite3*);
 int doltliteBtreeRunDeferredWork(sqlite3*);
 void doltliteBtreeRegistrationDone(sqlite3*);
 Module *doltliteHistoricalModuleRegister(sqlite3*,const char*);

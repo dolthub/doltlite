@@ -148,8 +148,29 @@ struct BranchCreateCtx {
   int resolveRc;
 };
 
+/* No start point, and HEAD, name the session commit. Inside a transaction
+** that commit is the in-memory head, so it still resolves after a peer
+** deletes the branch and gc sweeps the working set. */
+static int branchStartUsesSessionHead(const char *zStart){
+  if( !zStart ) return 1;
+  if( sqlite3_strnicmp(zStart, "HEAD", 4)!=0 ) return 0;
+  return zStart[4]==0 || zStart[4]=='~' || zStart[4]=='^';
+}
+
 static int mutateBranchCreate(sqlite3 *db, ChunkStore *cs, void *pArg){
   BranchCreateCtx *p = (BranchCreateCtx*)pArg;
+  const char *zSession = doltliteGetSessionBranch(db);
+  /* Publishing the parked head recreates the deleted branch. The session
+  ** catalog still names chunks gc swept, and the next write reports the
+  ** database corrupt. */
+  p->resolveRc = SQLITE_OK;
+  if( doltliteSessionBranchGone(db)
+   && (branchStartUsesSessionHead(p->zStart)
+       || (zSession && p->ref.zName && strcmp(p->ref.zName, zSession)==0)) ){
+    doltliteBtreeNoteMissingWriteBranch(db->aDb[0].pBt);
+    p->resolveRc = SQLITE_BUSY;
+    return SQLITE_BUSY;
+  }
   p->resolveRc = doltliteResolveRefForMutation(db, p->zStart, &p->ref.head);
   if( p->resolveRc!=SQLITE_OK ) return p->resolveRc;
   return mutateBranchRef(db, cs, &p->ref);
@@ -556,6 +577,14 @@ static void doltBranchParsedFunc(
       }
       rc = doltliteMutateRefs(db, mutateBranchCreate, &m);
       if( rc!=SQLITE_OK ){
+        if( (rc&0xff)==SQLITE_BUSY && (m.resolveRc&0xff)==SQLITE_BUSY
+         && db->nDb>0
+         && (doltliteBtreeMissingWriteBranch(db->aDb[0].pBt)
+             || doltliteSessionBranchGone(db)) ){
+          branchSealSavepointsOnError(ctx, hadSavepoint);
+          doltliteCmdResultWriteTxnError(ctx, db, SQLITE_BUSY);
+          return;
+        }
         if( m.resolveRc!=SQLITE_OK ){
           branchNamedResultError(ctx, hadSavepoint, m.resolveRc,
             "start point not found", "start point not found");

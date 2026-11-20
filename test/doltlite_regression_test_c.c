@@ -9201,6 +9201,235 @@ static void run_deleted_branch_messages_and_reset_scan(void){
   removeDbFiles(dbpath);
 }
 
+static int expectBusyGone(const char *zLabel, int rc, const char *zErr,
+                          const char *zBranch){
+  char zNeed[80];
+  int ok;
+  snprintf(zNeed, sizeof(zNeed), "branch '%s' no longer exists", zBranch);
+  ok = (rc&0xff)==SQLITE_BUSY && (rc&0xff)!=SQLITE_CORRUPT
+    && zErr && strstr(zErr, zNeed)
+    && strstr(zErr, "malformed")==0
+    && strstr(zErr, "missing chunk")==0
+    && strstr(zErr, "corrupt")==0;
+  if( !ok ){
+    fprintf(stderr, "  %s rc=%d err=%s\n", zLabel, rc, zErr ? zErr : "(null)");
+  }
+  check(zLabel, ok);
+  return ok;
+}
+
+/* Peer deletes the session branch and sweeps. The parked connection's
+** head commit can still be in the store. */
+static int parkDeletedFeat(const char *zTag, int uniqueCommit,
+                           sqlite3 **ppA, sqlite3 **ppB, char *zPath,
+                           size_t nPath){
+  sqlite3 *dbA = 0;
+  sqlite3 *dbB = 0;
+  int gcRc;
+
+  *ppA = 0;
+  *ppB = 0;
+  make_dbpath(zPath, nPath, zTag);
+  removeDbFiles(zPath);
+  if( open_db(zPath, &dbA)!=SQLITE_OK ) return 0;
+  if( execSql(dbA,
+      "CREATE TABLE w(id INTEGER PRIMARY KEY, v TEXT);"
+      "INSERT INTO w VALUES(1,'main');"
+      "SELECT dolt_commit('-Am','main');"
+      "SELECT dolt_branch('feat');"
+      "SELECT dolt_checkout('feat');")!=SQLITE_OK ){
+    sqlite3_close(dbA);
+    return 0;
+  }
+  if( uniqueCommit && execSql(dbA,
+      "INSERT INTO w VALUES(2,'feat');"
+      "SELECT dolt_commit('-Am','feat only');")!=SQLITE_OK ){
+    sqlite3_close(dbA);
+    return 0;
+  }
+  if( execSql(dbA,
+      "INSERT INTO w VALUES(3,'dirty');"
+      "SELECT count(*) FROM w;")!=SQLITE_OK ){
+    sqlite3_close(dbA);
+    return 0;
+  }
+  if( open_db(zPath, &dbB)!=SQLITE_OK ){
+    sqlite3_close(dbA);
+    return 0;
+  }
+  if( execSql(dbB, "SELECT dolt_branch('-D','feat');")!=SQLITE_OK ){
+    sqlite3_close(dbA);
+    sqlite3_close(dbB);
+    return 0;
+  }
+  gcRc = execSqlSilent(dbB, "SELECT dolt_gc();");
+#ifdef _WIN32
+  if( gcRc!=SQLITE_OK && (gcRc&0xff)!=SQLITE_IOERR ){
+#else
+  if( gcRc!=SQLITE_OK ){
+#endif
+    fprintf(stderr, "  park gc rc=%d\n", gcRc);
+    sqlite3_close(dbA);
+    sqlite3_close(dbB);
+    return 0;
+  }
+  execSqlSilent(dbA, "PRAGMA shrink_memory;");
+  *ppA = dbA;
+  *ppB = dbB;
+  return 1;
+}
+
+static void closePark(sqlite3 *dbA, sqlite3 *dbB, const char *zPath){
+  if( dbA ) sqlite3_close(dbA);
+  if( dbB ) sqlite3_close(dbB);
+  if( zPath ) removeDbFiles(zPath);
+}
+
+/* Creating the parked branch from the session head must not publish it.
+** The insert that follows is a busy refusal, not a malformed database. */
+static void run_deleted_branch_recreate_not_corrupt(void){
+  sqlite3 *dbA = 0;
+  sqlite3 *dbB = 0;
+  char dbpath[256];
+  char zErr[512];
+  int rc;
+
+  printf("=== Deleted Branch Recreate Not Corrupt Test ===\n\n");
+
+  check("dbr_park",
+        parkDeletedFeat("test_deleted_branch_recreate", 0,
+                        &dbA, &dbB, dbpath, sizeof(dbpath)));
+  if( !dbA || !dbB ){
+    closePark(dbA, dbB, dbpath);
+    return;
+  }
+  check("dbr_begin", execSql(dbA, "BEGIN;")==SQLITE_OK);
+  rc = execErr(dbA, "SELECT dolt_branch('feat');", zErr, sizeof(zErr));
+  expectBusyGone("dbr_create_names_branch", rc, zErr, "feat");
+  check("dbr_create_not_corrupt", (sqlite3_extended_errcode(dbA)&0xff)!=SQLITE_CORRUPT);
+  check("dbr_not_resurrected", strcmp(queryScalarText(dbB,
+      "SELECT count(*) FROM dolt_branches WHERE name='feat'"), "0")==0);
+  rc = execErr(dbA, "SELECT dolt_branch('feat','HEAD');", zErr, sizeof(zErr));
+  expectBusyGone("dbr_head_names_branch", rc, zErr, "feat");
+  check("dbr_head_not_resurrected", strcmp(queryScalarText(dbB,
+      "SELECT count(*) FROM dolt_branches WHERE name='feat'"), "0")==0);
+  rc = execErr(dbA, "SELECT dolt_branch('feat','main');", zErr, sizeof(zErr));
+  expectBusyGone("dbr_same_name_names_branch", rc, zErr, "feat");
+  check("dbr_same_name_not_resurrected", strcmp(queryScalarText(dbB,
+      "SELECT count(*) FROM dolt_branches WHERE name='feat'"), "0")==0);
+  check("dbr_txn_open", sqlite3_get_autocommit(dbA)==0);
+  rc = execErr(dbA, "INSERT INTO w(id,v) VALUES(4,'more');", zErr, sizeof(zErr));
+  expectBusyGone("dbr_insert_not_corrupt", rc, zErr, "feat");
+  check("dbr_insert_errcode",
+        (sqlite3_extended_errcode(dbA)&0xff)!=SQLITE_CORRUPT);
+  check("dbr_insert_keeps_txn", sqlite3_get_autocommit(dbA)==0);
+  check("dbr_rollback", execSql(dbA, "ROLLBACK;")==SQLITE_OK);
+  check("dbr_checkout_main",
+        execSql(dbA, "SELECT dolt_checkout('main');")==SQLITE_OK);
+  check("dbr_recovered_write", execSql(dbA,
+      "INSERT INTO w(id,v) VALUES(5,'recovered');"
+      "SELECT dolt_commit('-am','recovered');")==SQLITE_OK);
+  check("dbr_integrity",
+        strcmp(queryScalarText(dbA, "PRAGMA integrity_check"), "ok")==0);
+  check("dbr_recovered_rows",
+        strcmp(queryScalarText(dbA, "SELECT count(*) FROM w"), "2")==0);
+  check("dbr_still_absent", strcmp(queryScalarText(dbB,
+      "SELECT count(*) FROM dolt_branches WHERE name='feat'"), "0")==0);
+  check("dbr_branch_from_main",
+        execSql(dbA, "SELECT dolt_branch('feat','main');")==SQLITE_OK);
+  check("dbr_branch_from_main_exists", strcmp(queryScalarText(dbA,
+      "SELECT count(*) FROM dolt_branches WHERE name='feat'"), "1")==0);
+  closePark(dbA, dbB, dbpath);
+  dbA = dbB = 0;
+
+  check("dbr_other_park",
+        parkDeletedFeat("test_deleted_branch_recreate_other", 0,
+                        &dbA, &dbB, dbpath, sizeof(dbpath)));
+  if( !dbA || !dbB ){
+    closePark(dbA, dbB, dbpath);
+    return;
+  }
+  check("dbr_other_begin", execSql(dbA, "BEGIN;")==SQLITE_OK);
+  check("dbr_other_create",
+        execSql(dbA, "SELECT dolt_branch('other','main');")==SQLITE_OK);
+  check("dbr_other_feat_absent", strcmp(queryScalarText(dbB,
+      "SELECT count(*) FROM dolt_branches WHERE name='feat'"), "0")==0);
+  rc = execErr(dbA, "INSERT INTO w(id,v) VALUES(4,'more');", zErr, sizeof(zErr));
+  expectBusyGone("dbr_other_insert_not_corrupt", rc, zErr, "feat");
+  check("dbr_other_rollback", execSql(dbA, "ROLLBACK;")==SQLITE_OK);
+  /* The connection that deleted the branch keeps this file mapped, and on
+  ** Windows that view stays at the old refs after the new branch is
+  ** published. A later open reads the published ref. */
+  check("dbr_other_close_a", sqlite3_close(dbA)==SQLITE_OK);
+  check("dbr_other_close_b", sqlite3_close(dbB)==SQLITE_OK);
+  dbA = dbB = 0;
+  if( open_db(dbpath, &dbA)!=SQLITE_OK ){
+    check("dbr_other_reopen", 0);
+    closePark(dbA, 0, dbpath);
+    return;
+  }
+  check("dbr_other_reopen", 1);
+  {
+    const char *zCount = queryScalarText(dbA,
+        "SELECT count(*) FROM dolt_branches WHERE name='other'");
+    if( strcmp(zCount, "1")!=0 ){
+      fprintf(stderr, "  dbr_other_exists count=%s\n", zCount);
+    }
+    check("dbr_other_exists", strcmp(zCount, "1")==0);
+  }
+  check("dbr_other_checkout",
+        execSql(dbA, "SELECT dolt_checkout('main');")==SQLITE_OK);
+  check("dbr_other_integrity",
+        strcmp(queryScalarText(dbA, "PRAGMA integrity_check"), "ok")==0);
+  check("dbr_other_still_there", strcmp(queryScalarText(dbA,
+      "SELECT count(*) FROM dolt_branches WHERE name='other'"), "1")==0);
+  closePark(dbA, dbB, dbpath);
+  dbA = dbB = 0;
+
+  check("dbr_auto_park",
+        parkDeletedFeat("test_deleted_branch_recreate_auto", 0,
+                        &dbA, &dbB, dbpath, sizeof(dbpath)));
+  if( !dbA || !dbB ){
+    closePark(dbA, dbB, dbpath);
+    return;
+  }
+  rc = execErr(dbA, "SELECT dolt_branch('spawn');", zErr, sizeof(zErr));
+  expectBusyGone("dbr_auto_names_branch", rc, zErr, "feat");
+  check("dbr_auto_not_resurrected", strcmp(queryScalarText(dbB,
+      "SELECT count(*) FROM dolt_branches WHERE name='spawn'"), "0")==0);
+  check("dbr_auto_feat_absent", strcmp(queryScalarText(dbB,
+      "SELECT count(*) FROM dolt_branches WHERE name='feat'"), "0")==0);
+  check("dbr_auto_checkout",
+        execSql(dbA, "SELECT dolt_checkout('main');")==SQLITE_OK);
+  check("dbr_auto_integrity",
+        strcmp(queryScalarText(dbA, "PRAGMA integrity_check"), "ok")==0);
+  closePark(dbA, dbB, dbpath);
+  dbA = dbB = 0;
+
+  check("dbr_unique_park",
+        parkDeletedFeat("test_deleted_branch_recreate_unique", 1,
+                        &dbA, &dbB, dbpath, sizeof(dbpath)));
+  if( !dbA || !dbB ){
+    closePark(dbA, dbB, dbpath);
+    return;
+  }
+  check("dbr_unique_begin", execSql(dbA, "BEGIN;")==SQLITE_OK);
+  rc = execErr(dbA, "SELECT dolt_branch('feat');", zErr, sizeof(zErr));
+  expectBusyGone("dbr_unique_names_branch", rc, zErr, "feat");
+  rc = execErr(dbA, "INSERT INTO w(id,v) VALUES(4,'more');", zErr, sizeof(zErr));
+  expectBusyGone("dbr_unique_insert_not_corrupt", rc, zErr, "feat");
+  check("dbr_unique_absent", strcmp(queryScalarText(dbB,
+      "SELECT count(*) FROM dolt_branches WHERE name='feat'"), "0")==0);
+  check("dbr_unique_rollback", execSql(dbA, "ROLLBACK;")==SQLITE_OK);
+  check("dbr_unique_checkout",
+        execSql(dbA, "SELECT dolt_checkout('main');")==SQLITE_OK);
+  check("dbr_unique_integrity",
+        strcmp(queryScalarText(dbA, "PRAGMA integrity_check"), "ok")==0);
+  check("dbr_unique_main_rows",
+        strcmp(queryScalarText(dbA, "SELECT count(*) FROM w"), "1")==0);
+  closePark(dbA, dbB, dbpath);
+}
+
 static void run_peer_commit_keeps_local_row_durable(void){
   sqlite3 *dbA = 0;
   sqlite3 *dbB = 0;
@@ -20773,6 +21002,7 @@ static const RegressionCase aCases[] = {
   { "persist_does_not_resurrect_deleted_branch", "Persist Does Not Resurrect Deleted Branch Test", run_persist_does_not_resurrect_deleted_branch },
   { "vc_persist_does_not_resurrect_deleted_branch", "VC Persist Does Not Resurrect Deleted Branch Test", run_vc_persist_does_not_resurrect_deleted_branch },
   { "deleted_branch_messages_and_reset_scan", "Deleted Branch Messages And Reset Scan Test", run_deleted_branch_messages_and_reset_scan },
+  { "deleted_branch_recreate_not_corrupt", "Deleted Branch Recreate Not Corrupt Test", run_deleted_branch_recreate_not_corrupt },
   { "peer_commit_keeps_local_row_durable", "Peer Commit Keeps Local Row Durable Test", run_peer_commit_keeps_local_row_durable },
   { "commit_recovers_after_peer_commit", "Commit Recovers After Peer Commit Test", run_commit_recovers_after_peer_commit },
   { "working_set_refreshes_staged_across_connections", "Working Set Refreshes Staged Across Connections Test", run_working_set_refreshes_staged_across_connections },

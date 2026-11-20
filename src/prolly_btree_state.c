@@ -731,10 +731,18 @@ int btreeReadResult(Btree *p, int rc){
   int changed = 0;
   int readRc;
   if( rc!=SQLITE_NOTFOUND || !p || p->pOrigBtree || !p->pBt
-   || p->inTrans==TRANS_WRITE
    || prollyHashIsEmpty(&p->headCommit) ) return rc;
   cs = p->pBt->pStore;
   if( cs->corruptMidStream || cs->corruptHeader ) return rc;
+  /* BeginTrans refuses a new write on a deleted branch. A write already
+  ** in progress can still read a swept chunk; that miss is the deletion. */
+  if( p->inTrans==TRANS_WRITE ){
+    readRc = btreeReadRefPresent(p, 0, &found);
+    if( readRc!=SQLITE_OK ) return readRc;
+    if( found ) return rc;
+    p->bBeginTransBranchMissing = 1;
+    return SQLITE_BUSY;
+  }
   if( cs->lockDepth>0 ){
     readRc = btreeReadRefPresent(p,0,&found);
     if( readRc!=SQLITE_OK ) return readRc;
