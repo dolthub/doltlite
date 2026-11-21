@@ -15,7 +15,7 @@ on:
 
 jobs:
   linux:
-    name: Linux (Wasm and NuGet)
+    name: Linux (Node, Wasm and NuGet)
     if: inputs.wasm
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -94,6 +94,21 @@ jobs:
           echo "::error::compiler warnings in wasm build"
           exit 1
         fi
+
+    - name: Check out the Node binding
+      uses: actions/checkout@v4
+      with:
+        repository: dolthub/doltlite-node
+        ref: 5917efb805215dd49ff6798f78383be02e75a548
+        path: build/node-binding
+        persist-credentials: false
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+
+    - name: Run Node binding regressions against this build
+      run: bash packaging/node/test-build.sh build/node-binding .
 
     - name: Smoke test DoltLite wasm runtime
       run: |
