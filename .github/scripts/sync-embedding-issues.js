@@ -1,6 +1,7 @@
 'use strict';
 
 const {execFile} = require('node:child_process');
+const {readFile} = require('node:fs/promises');
 const {promisify} = require('node:util');
 
 const run = promisify(execFile);
@@ -18,6 +19,10 @@ const overlap = 10 * 60 * 1000;
 const firstRunWindow = 48 * 60 * 60 * 1000;
 const issueMarker = id => `<!-- doltlite-embedding-issue:${id} -->`;
 const activityMarker = (type, id) => `<!-- doltlite-embedding-${type}:${id} -->`;
+
+function isOutsideContributor(user, members) {
+  return user?.type === 'User' && Number.isSafeInteger(user.id) && !members.has(user.id);
+}
 
 async function gh(endpoint, {all = false, fields} = {}) {
   const args = ['api', endpoint];
@@ -57,7 +62,7 @@ async function findStart(api, target, requestedSince, now) {
   return new Date(start).toISOString();
 }
 
-async function collectActivity(api, since) {
+async function collectActivity(api, since, members) {
   const activity = [];
   const start = Date.parse(since);
   const seen = new Set();
@@ -67,12 +72,12 @@ async function collectActivity(api, since) {
     for (const issue of issues) {
       if (issue.pull_request || seen.has(issue.id)) continue;
       seen.add(issue.id);
-      const opened = Date.parse(issue.created_at) >= start;
+      const opened = Date.parse(issue.created_at) >= start && isOutsideContributor(issue.user, members);
       const details = [];
       if (issue.comments > 0) {
         const comments = await api(list(`${path}/${issue.number}/comments`, {since}), {all: true});
         for (const comment of comments) {
-          if (Date.parse(comment.created_at) < start) continue;
+          if (Date.parse(comment.created_at) < start || !isOutsideContributor(comment.user, members)) continue;
           details.push({
             marker: activityMarker('comment', comment.id),
             link: `[New comment](${comment.html_url})`,
@@ -83,7 +88,8 @@ async function collectActivity(api, since) {
       if (!opened) {
         const events = await api(list(`${path}/${issue.number}/events`), {all: true});
         for (const event of events) {
-          if (event.event !== 'reopened' || Date.parse(event.created_at) < start) continue;
+          if (event.event !== 'reopened' || Date.parse(event.created_at) < start ||
+              !isOutsideContributor(event.actor, members)) continue;
           details.push({
             marker: activityMarker('event', event.id),
             link: `[Issue reopened](${issue.html_url}#event-${event.id})`,
@@ -104,10 +110,10 @@ function activityBody(details) {
   return details.map(({link, marker, createdAt}) => `- ${link} · ${createdAt} ${marker}`).join('\n');
 }
 
-async function sync({api = gh, target, requestedSince, apply = false, now = Date.now(), log = console.log}) {
+async function sync({api = gh, target, members, requestedSince, apply = false, now = Date.now(), log = console.log}) {
   const since = await findStart(api, target, requestedSince, now);
   log(`Checking embedding issue activity since ${since}`);
-  const activity = await collectActivity(api, since);
+  const activity = await collectActivity(api, since, members);
   if (!activity.length) {
     log('No embedding issue activity in this window.');
     return;
@@ -157,12 +163,21 @@ async function sync({api = gh, target, requestedSince, apply = false, now = Date
   }
 }
 
-if (require.main === module) {
-  sync({
+async function main() {
+  const ids = JSON.parse(await readFile(process.env.EMBEDDING_ISSUES_MEMBER_IDS, 'utf8'));
+  if (!Array.isArray(ids) || !ids.length || !ids.every(Number.isSafeInteger)) {
+    throw new Error('Expected the verified DoltHub member IDs.');
+  }
+  await sync({
     target: process.env.GITHUB_REPOSITORY || 'dolthub/doltlite',
+    members: new Set(ids),
     requestedSince: process.env.EMBEDDING_ISSUES_SINCE,
     apply: process.env.EMBEDDING_ISSUES_APPLY === 'true',
-  }).catch(error => {
+  });
+}
+
+if (require.main === module) {
+  main().catch(error => {
     console.error(error.message);
     process.exitCode = 1;
   });

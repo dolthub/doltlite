@@ -28,9 +28,28 @@ jobs:
     timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
+    - name: Read DoltHub membership
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.DOLTHUB_MEMBERS_TOKEN }}
+      run: |
+        if [ -z "$GH_TOKEN" ]; then
+          echo "::error::DOLTHUB_MEMBERS_TOKEN is required to read the DoltHub organization member roster."
+          exit 1
+        fi
+        umask 077
+        roster="$RUNNER_TEMP/embedding-issue-members.json"
+        public="$RUNNER_TEMP/embedding-issue-public-members.json"
+        gh api --paginate --slurp 'orgs/dolthub/members?per_page=100' | jq '[.[][] | .id]' > "$roster"
+        gh api --paginate --slurp 'orgs/dolthub/public_members?per_page=100' | jq '[.[][] | .id]' > "$public"
+        if ! jq -es '.[0] - .[1] | length > 0' "$roster" "$public" > /dev/null; then
+          echo "::error::The DoltHub membership token must be able to read concealed memberships."
+          exit 1
+        fi
     - name: Sync issue activity into DoltLite
       env:
         GH_TOKEN: ${{ github.token }}
+        EMBEDDING_ISSUES_MEMBER_IDS: ${{ runner.temp }}/embedding-issue-members.json
         EMBEDDING_ISSUES_APPLY: ${{ github.event_name == 'schedule' || !inputs.dry-run }}
         EMBEDDING_ISSUES_SINCE: ${{ inputs.since }}
       run: node .github/scripts/sync-embedding-issues.js
