@@ -26,6 +26,24 @@ static void tagSealSavepointError(sqlite3_context *ctx){
   (void)doltliteVcSealSavepointError(db);
 }
 
+/* A tag change ends the enclosing transaction, as a branch change does. */
+static int tagSealTxn(
+  sqlite3_context *ctx, int hadExplicitTxn, int bHookApproved
+){
+  sqlite3 *db = sqlite3_context_db_handle(ctx);
+  int rc;
+  if( hadExplicitTxn ){
+    int (*xHook)(void*) = db->xCommitCallback;
+    if( bHookApproved ) db->xCommitCallback = 0;
+    rc = doltliteVcSealBranchStyleTxn(db);
+    db->xCommitCallback = xHook;
+  }else{
+    rc = doltliteVcSealAutocommitSavepoint(db);
+  }
+  if( rc!=SQLITE_OK ) doltliteVcResultSealError(ctx, db, rc);
+  return rc;
+}
+
 static int mutateTagRef(sqlite3 *db, ChunkStore *cs, void *pArg){
   TagMutationCtx *p = (TagMutationCtx*)pArg;
   if( !doltliteUserRefNameIsValid(p->zName) ) return SQLITE_CONSTRAINT;
@@ -74,6 +92,8 @@ static void doltTagParsedFunc(
   const char *zCommitRef = nPositional>1 ? azPositional[1] : 0;
   char *zParsedTagger = 0;
   char *zParsedEmail = 0;
+  int hadExplicitTxn = !db->autoCommit;
+  int bHookApproved = 0;
   int rc;
 
   if( !cs ){
@@ -89,6 +109,10 @@ static void doltTagParsedFunc(
     TagDeleteCtx d;
     d.nName = nPositional;
     d.azName = azPositional;
+    if( hadExplicitTxn && doltliteVcSealPrecheck(ctx, &bHookApproved) ){
+      tagSealSavepointError(ctx);
+      return;
+    }
     rc = doltliteMutateRefs(db, mutateTagDelete, &d);
     if( rc==SQLITE_CONSTRAINT && doltliteSessionHasUnresolvedConflicts(db) ){
       doltliteVcResultError(ctx, db,
@@ -100,11 +124,7 @@ static void doltTagParsedFunc(
       doltliteRefResultError(ctx, rc, "tag not found", 0);
       return;
     }
-    rc = doltliteVcSealAutocommitSavepoint(db);
-    if( rc!=SQLITE_OK ){
-      doltliteVcResultSealError(ctx, db, rc);
-      return;
-    }
+    if( tagSealTxn(ctx, hadExplicitTxn, bHookApproved)!=SQLITE_OK ) return;
     sqlite3_result_int(ctx, 0);
     return;
   }
@@ -138,6 +158,12 @@ static void doltTagParsedFunc(
   m.zMessage = zMessage ? zMessage : "";
   m.zName = arg0;
 
+  if( hadExplicitTxn && doltliteVcSealPrecheck(ctx, &bHookApproved) ){
+    sqlite3_free(zParsedTagger);
+    sqlite3_free(zParsedEmail);
+    tagSealSavepointError(ctx);
+    return;
+  }
   rc = doltliteMutateRefs(db, mutateTagRef, &m);
   sqlite3_free(zParsedTagger);
   sqlite3_free(zParsedEmail);
@@ -157,11 +183,7 @@ static void doltTagParsedFunc(
     doltliteRefResultError(ctx, rc, "tag not found", "tag already exists");
     return;
   }
-  rc = doltliteVcSealAutocommitSavepoint(db);
-  if( rc!=SQLITE_OK ){
-    doltliteVcResultSealError(ctx, db, rc);
-    return;
-  }
+  if( tagSealTxn(ctx, hadExplicitTxn, bHookApproved)!=SQLITE_OK ) return;
   sqlite3_result_int(ctx, 0);
 }
 
