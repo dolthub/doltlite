@@ -46,9 +46,9 @@ reduce the effect of runner noise.
 | Ceiling / Result | The allowed latency or ratio and whether the measurement passed it. |
 
 A PR can improve substantially over its base and still be slower than SQLite.
-The two comparisons answer different questions. PR aggregate ratios use summed
-workload times, so a long-running workload has more influence than a short one.
-They are not per-query averages.
+The two comparisons answer different questions. Aggregate ratios, in the PR
+comparison and in the nightly report, are the mean of the individual workload
+ratios, so a short workload counts as much as a long-running one.
 
 PR SQL and hotspot gates use a 1.50× individual-workload threshold and 1.25×
 aggregate threshold, with a 10 ms minimum increase. Version-control individual
