@@ -158,7 +158,7 @@ SELECT 'final', bal FROM acct;
 SQL
 )
     case "$op" in
-      dolt_branch*|dolt_reset*)
+      dolt_branch*|dolt_reset*|dolt_tag*)
         expected=$'initial|100\nafter|600\nfinal|601'
         balance=601
         if [ ! -s "$ROOT/ref_boundary.err" ]; then

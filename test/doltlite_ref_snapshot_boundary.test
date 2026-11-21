@@ -12,6 +12,8 @@ foreach txn {begin savepoint nested} {
         rename {SELECT dolt_branch('-m','b1','x')}
         rename-current {SELECT dolt_branch('-f','-m','main','x')}
         soft-reset {SELECT dolt_reset('--soft')}
+        tag {SELECT dolt_tag('v1')}
+        tag-delete {SELECT dolt_tag('-d','old')}
       } {
         set prefix ref-snapshot-$txn.$committed.$staged.$name
         reset_db
@@ -21,6 +23,7 @@ foreach txn {begin savepoint nested} {
           INSERT INTO acct VALUES(1,100);
           SELECT dolt_commit('-Am','seed');
           SELECT dolt_branch('b1');
+          SELECT dolt_tag('old');
         }
         sqlite3 peer test.db
         switch $txn {
@@ -65,7 +68,6 @@ foreach txn {begin savepoint nested} {
 
 foreach {name op} {
   control {SELECT 1}
-  tag {SELECT dolt_tag('v1')}
   remote {SELECT dolt_remote('add','o','file:///nonexistent')}
   failed-checkout {SELECT dolt_checkout('-b','b1')}
 } {
