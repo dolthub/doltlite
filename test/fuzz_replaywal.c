@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include "sqliteInt.h"
-#include "chunk_store.h"
+#include "chunk_store_int.h"
 #include "prolly_hash.h"
 #include "lib/test_tmpdir.h"
 
@@ -99,5 +99,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   }
 
   unlink(path);
+  if (csLockSidecarDelete(pVfs, path) != SQLITE_OK) abort();
   return 0;
 }
