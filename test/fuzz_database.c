@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 
-#include "sqlite3.h"
+#include "chunk_store_int.h"
 #include "lib/test_tmpdir.h"
 
 static int g_initialized = 0;
@@ -48,5 +48,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   }
   if (db) sqlite3_close(db);
   unlink(path);
+  if (csLockSidecarDelete(sqlite3_vfs_find(0), path) != SQLITE_OK) abort();
   return 0;
 }
