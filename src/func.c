@@ -724,6 +724,18 @@ static const struct compareInfo likeInfoAlt = { '%', '_',   0, 0 };
 #define SQLITE_NOWILDCARDMATCH   2
 
 #ifdef DOLTLITE_PROLLY
+static int likeFoldedEqual(const u8 *zA, const u8 *zB, int n){
+  int j;
+  for(j=0; j<n; j++){
+    u8 a = zA[j];
+    u8 b = zB[j];
+    if( a<0x80 ) a = sqlite3Tolower(a);
+    if( b<0x80 ) b = sqlite3Tolower(b);
+    if( a!=b ) return 0;
+  }
+  return 1;
+}
+
 /*
 ** Fast path for LIKE patterns of the form '%literal%'.  This is a common
 ** table-scan predicate and is equivalent to searching for the literal byte
@@ -740,7 +752,7 @@ static int likeContainsLiteralFast(
   const struct compareInfo *pInfo,
   u32 escape
 ){
-  int i, j;
+  int i;
   int nLit;
   const u8 *zLit;
   assert( zPat!=0 && zStr!=0 );
@@ -761,33 +773,62 @@ static int likeContainsLiteralFast(
       return -1;
     }
   }
+  if( pInfo->noCase ){
+    /* The generic matcher stops at the first NUL of the string, so nothing
+    ** at or after one can match, and the scan looks for a NUL as it goes.
+    ** A word is examined byte by byte only if it may hold a NUL or the
+    ** first literal byte followed by the second; testing two bytes keeps
+    ** that rare enough that the branch predicts. The word tests can flag a
+    ** byte that does not qualify, never miss one that does. */
+    const u64 kOnes = ((u64)0x01010101)<<32 | 0x01010101;
+    const u64 kHigh = kOnes<<7;
+    u8 aFold[2] = {0, 0}, aByte[2] = {0, 0};
+    u64 aFoldMask[2] = {0, 0}, aByteMask[2] = {0, 0};
+    int bTwo = nLit>1 && zLit[1]<0x80;
+    int nLast = nStr - nLit;
+    if( nLit==0 ) return 1;
+    if( zLit[0]>=0x80 ) return -1;
+    for(i=0; i<=bTwo; i++){
+      aFold[i] = sqlite3Isalpha(zLit[i]) ? 0x20 : 0;
+      aByte[i] = zLit[i] | aFold[i];
+      aFoldMask[i] = kOnes * aFold[i];
+      aByteMask[i] = kOnes * aByte[i];
+    }
+    i = 0;
+    while( i<=nLast ){
+      int iEnd = i+1;
+      if( i+8+bTwo<=nStr ){
+        u64 w, x, t;
+        memcpy(&w, zStr+i, 8);
+        x = (w | aFoldMask[0]) ^ aByteMask[0];
+        t = (x - kOnes) & ~x;
+        if( bTwo ){
+          memcpy(&x, zStr+i+1, 8);
+          x = (x | aFoldMask[1]) ^ aByteMask[1];
+          t &= (x - kOnes) & ~x;
+        }
+        iEnd = i+8;
+        if( ((t | ((w - kOnes) & ~w)) & kHigh)==0 ){
+          i = iEnd;
+          continue;
+        }
+      }
+      for(; i<iEnd && i<=nLast; i++){
+        u8 c = zStr[i];
+        if( c==0 ) return 0;
+        if( (c | aFold[0])==aByte[0] && likeFoldedEqual(zStr+i, zLit, nLit) ){
+          return 1;
+        }
+      }
+    }
+    return 0;
+  }
   if( memchr(zStr, 0, nStr)!=0 ){
     return -1;
   }
   if( nLit==0 ) return 1;
   if( nLit>nStr ) return 0;
-
-  if( pInfo->noCase ){
-    char zStop[3];
-    if( zLit[0]>=0x80 ) return -1;
-    zStop[0] = sqlite3Toupper(zLit[0]);
-    zStop[1] = sqlite3Tolower(zLit[0]);
-    zStop[2] = 0;
-    i = 0;
-    while( i<=nStr-nLit ){
-      i += (int)strcspn((const char*)zStr+i, zStop);
-      if( i>nStr-nLit ) break;
-      for(j=0; j<nLit; j++){
-        u8 a = zStr[i+j];
-        u8 b = zLit[j];
-        if( a<0x80 ) a = sqlite3Tolower(a);
-        if( b<0x80 ) b = sqlite3Tolower(b);
-        if( a!=b ) break;
-      }
-      if( j==nLit ) return 1;
-      i++;
-    }
-  }else{
+  {
     u8 first = zLit[0];
     for(i=0; i<=nStr-nLit; i++){
       const void *p = memchr(zStr+i, first, (size_t)(nStr-nLit-i+1));

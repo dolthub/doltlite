@@ -1,0 +1,59 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# LIKE '%literal%' scans the string a word at a time. The answer has to be
+# the generic matcher's at every alignment: a literal found only before the
+# first NUL, case folded for ASCII letters only, wherever it sits relative
+# to an eight-byte word and to the end of the string.
+
+proc hexof {s} {
+  binary scan $s H* h
+  return $h
+}
+
+# Expected result by brute force over the bytes before the first NUL.
+proc expect_like {str lit} {
+  set z [string first "\x00" $str]
+  if {$z>=0} {set str [string range $str 0 [expr {$z-1}]]}
+  expr {[string first [string tolower $lit] [string tolower $str]]>=0}
+}
+
+set nCase 0
+set nBad 0
+foreach lit {a ab aBc 1x .q zzzzzzzzz} {
+  set nLit [string length $lit]
+  for {set n 0} {$n<=27} {incr n} {
+    for {set pos -1} {$pos+$nLit<=$n} {incr pos} {
+      foreach nul {-1 0 3 8 9 16 20} {
+        set s [string repeat m $n]
+        if {$pos>=0} {
+          set hit [string toupper $lit]
+          set s [string replace $s $pos [expr {$pos+$nLit-1}] $hit]
+        }
+        if {$nul>=0 && $nul<$n} {set s [string replace $s $nul $nul "\x00"]}
+        set got [db one "SELECT CAST(x'[hexof $s]' AS TEXT) LIKE '%$lit%'"]
+        incr nCase
+        if {$got != [expect_like $s $lit]} {
+          incr nBad
+          if {$nBad==1} {set first "lit=$lit n=$n pos=$pos nul=$nul got=$got"}
+        }
+      }
+    }
+  }
+}
+do_test like-contains-alignments {
+  list [expr {$nCase>5000}] $nBad
+} {1 0}
+
+# A non-ASCII byte is never case folded, alone or after an ASCII byte.
+do_execsql_test like-contains-non-ascii {
+  SELECT 'xxxxxxxxaÉxx' LIKE '%aé%', 'xxxxxxxxAéxx' LIKE '%aé%',
+         'xxxxxxxxxÉxx' LIKE '%é%',  'xxxxxxxxxéxx' LIKE '%é%';
+} {0 1 0 1}
+
+do_execsql_test like-contains-case-sensitive {
+  PRAGMA case_sensitive_like=1;
+  SELECT 'xxxxxxxxxabcx' LIKE '%abc%', 'xxxxxxxxxaBcx' LIKE '%abc%';
+} {1 0}
+
+finish_test
