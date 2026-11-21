@@ -35,6 +35,8 @@ proc stale_setup {} {
 
 # A command that persists the session's working set is refused as a stale
 # write. One that only moves refs refreshes them first and goes through.
+# The remote added first writes refs from inside the stale transaction
+# without ending it.
 foreach {name stale refused} {
   reset-soft   {SELECT dolt_reset('--soft')} 1
   reset-hard   {SELECT dolt_reset('--hard')} 1
@@ -57,7 +59,7 @@ foreach {name stale refused} {
       SELECT dolt_commit('-Am','m1');
       INSERT INTO w VALUES(11,'b1'),(12,'b1');
     }
-    catchsql {SELECT dolt_tag('t_0')}
+    catchsql {SELECT dolt_remote('add','r_0','file:///nonexistent/remote')}
     c2 eval {INSERT INTO w VALUES(20,'b3')}
     c1 eval {INSERT INTO w VALUES(13,'b1'); SELECT dolt_reset('--soft')}
     c2 eval {SELECT dolt_add('w'); SELECT dolt_commit('-m','m2')}

@@ -10,7 +10,7 @@ statement, with two rules that are easy to miss.
 | Row writes, `dolt_add` | Undone, staging included |
 | `dolt_reset` (`--soft`, `--hard`, or no args) | Kept. The SQL transaction is committed, then a new one begun, as in Dolt. |
 | `dolt_branch` (create, `-c`, `-m`, `-f`, `-d`, `-D`) | Kept. The SQL transaction is committed, then a new one begun, as in Dolt. |
-| `dolt_tag`, `dolt_tag('-d')` | Kept. The tag change is durable the moment the call returns. The transaction stays open, and its row writes can still be rolled back. |
+| `dolt_tag`, `dolt_tag('-d')` | Kept. The SQL transaction is committed, then a new one begun, as in Dolt. |
 | `dolt_checkout -b` | Kept. The SQL transaction is committed, then a new one begun. |
 | `dolt_checkout` of an existing branch | Kept. The connection stays on the new branch. |
 | `dolt_commit`, `dolt_commit_all`, and any merge, cherry-pick, revert, or rebase that completes | Kept. The SQL transaction is committed, then a new one begun, as in Dolt. |
