@@ -740,20 +740,152 @@ jobs:
         echo "doltlite-python workflow succeeded, but PyPI does not report ${version}"
         exit 1
 
-  # ── Publish WASM package to npm ──────────────────────────
-  # Unlike the node/python bindings (which live in their own repos and are
-  # triggered by release-bindings), the wasm "binding" is pure build output:
-  # the JS API lives in ext/wasm/api and is assembled by the build, so there
-  # is no separate repo to maintain. We publish @dolthub/doltlite-wasm straight
-  # ── Publish the PHP Composer package ─────────────────────
-  # Packagist tracks the dolthub/doltlite-php git repository, so publishing
-  # means pushing a snapshot there: the package source from packaging/composer
-  # plus the per-platform shared libraries extracted from this release's
-  # doltlite-lib-*.zip assets, committed and tagged to match. Packagist picks
-  # the tag up through its GitHub webhook.
+  php-go-rust-candidates:
+    needs: [source, build]
+    permissions:
+      contents: read
+    name: Test PHP, Go and Rust release candidates (Linux x64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      php: ${{ steps.upload-php.outcome }}
+      go: ${{ steps.upload-go.outcome }}
+      rust: ${{ steps.upload-rust.outcome }}
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.23'
+        cache: false
+
+    - uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.3'
+        extensions: ffi
+        tools: composer
+
+    - name: Install native build dependencies
+      run: bash .github/scripts/install-apt-deps.sh build-essential zlib1g-dev
+
+    - uses: actions/download-artifact@v4
+      with:
+        pattern: binaries-*
+        path: release-assets
+        merge-multiple: true
+
+    - uses: actions/download-artifact@v4
+      with:
+        name: source
+        path: release-assets
+
+    - name: Assemble and install the Composer snapshot
+      run: |
+        version="${TAG#v}"
+        mkdir -p dist
+        bash packaging/composer/assemble.sh "$version" dist/php --release-assets release-assets
+        bash packaging/composer/test-package.sh --staged "$version" dist/php "v$version"
+        tar -cf dist/php-candidate.tar -C dist/php .
+
+    - uses: actions/upload-artifact@v4
+      id: upload-php
+      with:
+        name: php-candidate
+        path: dist/php-candidate.tar
+        if-no-files-found: error
+
+    - name: Extract the release amalgamation
+      id: amalgamation
+      if: ${{ !cancelled() }}
+      run: |
+        version="${TAG#v}"
+        base="doltlite-amalgamation-$version"
+        mkdir -p amalgamation dist
+        unzip -p "release-assets/$base.zip" "$base/doltlite.c" > amalgamation/sqlite3.c
+        unzip -p "release-assets/$base.zip" "$base/doltlite.h" > amalgamation/sqlite3.h
+
+    - name: Assemble and install the tagged Go module
+      id: go
+      if: ${{ !cancelled() && steps.amalgamation.outcome == 'success' }}
+      run: |
+        version="${TAG#v}"
+        bash packaging/go/assemble.sh "$version" dist/go amalgamation
+        rm dist/go/.version
+        bash packaging/go/test-module.sh "$version" dist/go
+        tar -cf dist/go-candidate.tar -C dist/go .
+
+    - uses: actions/upload-artifact@v4
+      id: upload-go
+      if: ${{ !cancelled() && steps.go.outcome == 'success' }}
+      with:
+        name: go-candidate
+        path: dist/go-candidate.tar
+        if-no-files-found: error
+
+    - name: Assemble and test the packaged Rust crate
+      id: rust
+      if: ${{ !cancelled() && steps.amalgamation.outcome == 'success' }}
+      run: |
+        version="${TAG#v}"
+        bash packaging/rust/assemble.sh "$version" dist/rust amalgamation
+        cargo generate-lockfile --manifest-path dist/rust/Cargo.toml
+        bash packaging/rust/test-package.sh --staged "$version" dist/rust
+        tar -cf dist/rust-candidate.tar -C dist/rust .
+
+    - uses: actions/upload-artifact@v4
+      id: upload-rust
+      if: ${{ !cancelled() && steps.rust.outcome == 'success' }}
+      with:
+        name: rust-candidate
+        path: dist/rust-candidate.tar
+        if-no-files-found: error
+
+  php-candidate-platforms:
+    permissions:
+      contents: read
+    name: Test installed PHP release candidate (${{ matrix.platform }})
+    needs: php-go-rust-candidates
+    if: ${{ !cancelled() && needs.php-go-rust-candidates.outputs.php == 'success' }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Linux arm64
+            runner: ubuntu-24.04-arm
+          - platform: macOS arm64
+            runner: macos-latest
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.3'
+        extensions: ffi
+        tools: composer
+
+    - uses: actions/download-artifact@v4
+      with:
+        name: php-candidate
+        path: dist
+
+    - name: Install and test the Composer snapshot
+      run: |
+        version="${TAG#v}"
+        mkdir dist/php
+        tar -xf dist/php-candidate.tar -C dist/php
+        bash packaging/composer/test-package.sh --staged "$version" dist/php "v$version"
+
   release-php:
-    if: github.event_name != 'workflow_dispatch'
-    needs: release
+    if: >-
+      ${{ !cancelled() && github.event_name != 'workflow_dispatch' &&
+        needs.release.result == 'success' && needs.php-candidate-platforms.result == 'success' }}
+    needs: [release, php-candidate-platforms]
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
@@ -768,7 +900,10 @@ jobs:
         gh auth status
         gh auth setup-git
 
-    - uses: actions/checkout@v4
+    - uses: actions/download-artifact@v4
+      with:
+        name: php-candidate
+        path: dist
 
     - name: Configure git identity
       run: |
@@ -778,45 +913,14 @@ jobs:
     - name: Release doltlite-php
       run: |
         set -euo pipefail
-        version="${VERSION#v}"
-
         if gh api "repos/dolthub/doltlite-php/git/ref/tags/${VERSION}" >/dev/null 2>&1; then
           echo "doltlite-php ${VERSION} already exists; skipping"
           exit 0
         fi
 
-        # release target -> package platform dir : library extension
         stage="$(mktemp -d)"
-        for spec in \
-          "linux-x64 linux-x86_64 so" \
-          "linux-arm64 linux-arm64 so" \
-          "osx-arm64 darwin-arm64 dylib" \
-          "win-x64 windows-x86_64 dll"; do
-          read -r target platdir ext <<<"$spec"
-          gh release download "${VERSION}" --repo dolthub/doltlite \
-            --pattern "doltlite-lib-${target}-${version}.zip" --dir "$stage"
-          unzip -q "$stage/doltlite-lib-${target}-${version}.zip" -d "$stage"
-          lib="$stage/doltlite-lib-${target}-${version}/libdoltlite.$ext"
-          if [ ! -f "$lib" ]; then
-            # The lib zips copy the shared library best-effort; Windows is
-            # untested for this package, so its absence must not block the
-            # release. The Unix platforms are the product.
-            if [ "$target" = "win-x64" ]; then
-              echo "warning: no libdoltlite.dll in the win-x64 assets; packaging without it"
-              continue
-            fi
-            echo "ERROR: missing libdoltlite.$ext in doltlite-lib-${target}-${version}.zip"
-            exit 1
-          fi
-          mkdir -p "$stage/pkg/lib/$platdir"
-          cp "$lib" "$stage/pkg/lib/$platdir/libdoltlite.$ext"
-        done
-
-        cp -R packaging/composer/src "$stage/pkg/src"
-        cp packaging/composer/README.md "$stage/pkg/README.md"
-        cp LICENSE.md "$stage/pkg/LICENSE.md"
-        jq --arg v "$version" '.version = $v' packaging/composer/composer.json \
-          > "$stage/pkg/composer.json"
+        mkdir "$stage/pkg"
+        tar -xf dist/php-candidate.tar -C "$stage/pkg"
 
         gh repo clone dolthub/doltlite-php "$stage/doltlite-php"
         cd "$stage/doltlite-php"
@@ -838,8 +942,10 @@ jobs:
   # tracks this engine release. Named -driver, not -go: dolthub/doltlite-go is
   # a different, pure-Go library for the sync protocol.
   release-go:
-    if: github.event_name != 'workflow_dispatch'
-    needs: release
+    if: >-
+      ${{ !cancelled() && github.event_name != 'workflow_dispatch' &&
+        needs.release.result == 'success' && needs.php-go-rust-candidates.outputs.go == 'success' }}
+    needs: [release, php-go-rust-candidates]
     runs-on: ubuntu-latest
     concurrency:
       group: doltlite-driver-publish
@@ -857,42 +963,33 @@ jobs:
         gh auth status
         gh auth setup-git
 
-    - uses: actions/checkout@v4
-
-    - name: Install dependencies
-      run: bash .github/scripts/install-apt-deps.sh build-essential zlib1g-dev tcl
+    - uses: actions/download-artifact@v4
+      with:
+        name: go-candidate
+        path: dist
 
     - name: Configure git identity
       run: |
         git config --global user.name "DoltHub Release Bot"
         git config --global user.email "releases@dolthub.com"
 
-    - name: Build the amalgamation
-      run: |
-        mkdir -p build && cd build
-        ../configure
-        make sqlite3.c sqlite3.h
-
     - name: Release doltlite-driver
       run: |
         set -euo pipefail
-        version="${VERSION#v}"
-
         if gh api "repos/dolthub/doltlite-driver/git/ref/tags/${VERSION}" >/dev/null 2>&1; then
           echo "doltlite-driver ${VERSION} already exists; skipping"
           exit 0
         fi
 
         stage="$(mktemp -d)"
-        bash packaging/go/assemble.sh "$version" "$stage/pkg" build
+        mkdir "$stage/pkg"
+        tar -xf dist/go-candidate.tar -C "$stage/pkg"
 
         gh repo clone dolthub/doltlite-driver "$stage/doltlite-driver"
         cd "$stage/doltlite-driver"
         git checkout main
         find . -mindepth 1 -maxdepth 1 -not -name .git -exec rm -rf {} +
         cp -R "$stage/pkg/." .
-        # assemble.sh leaves .version for the pushing side; the tag carries it.
-        rm -f .version
         git add -A
         if ! git diff --cached --quiet; then
           git commit -m "doltlite ${VERSION}"
@@ -955,20 +1052,16 @@ jobs:
           --skip-duplicate
 
   # ── Publish the Rust crate ───────────────────────────────
-  # crates.io takes uploaded source, so there is no split repo: stage the
-  # crate with this build's amalgamation vendored into it and publish.
-  # Verification is left on -- cargo builds the packaged crate before
-  # uploading -- because a crates.io publish is permanent: there is no
-  # delete and no unlist, only `cargo yank`, which still serves the files.
-  #
   # Authentication is crates.io trusted publishing: the action exchanges
   # this job's OIDC token for a short-lived key, so there is no stored
   # secret. The crate's publisher policy names this workflow file, so
   # renaming or moving it breaks publishing until the policy is updated.
   release-crates:
-    if: github.event_name != 'workflow_dispatch'
-    needs: release
-    runs-on: ubuntu-latest
+    if: >-
+      ${{ !cancelled() && github.event_name != 'workflow_dispatch' &&
+        needs.release.result == 'success' && needs.php-go-rust-candidates.outputs.rust == 'success' }}
+    needs: [release, php-go-rust-candidates]
+    runs-on: ubuntu-24.04
     permissions:
       id-token: write
       contents: read
@@ -976,20 +1069,18 @@ jobs:
       VERSION: ${{ github.ref_name }}
     steps:
     - uses: actions/checkout@v4
+    - uses: actions/download-artifact@v4
+      with:
+        name: rust-candidate
+        path: dist
 
     - name: Install dependencies
-      run: bash .github/scripts/install-apt-deps.sh build-essential zlib1g-dev tcl
+      run: bash .github/scripts/install-apt-deps.sh build-essential zlib1g-dev
 
-    - name: Build the amalgamation
+    - name: Restore the tested crate sources
       run: |
-        mkdir -p build && cd build
-        ../configure
-        make sqlite3.c sqlite3.h
-
-    - name: Stage the crate
-      run: |
-        version="${VERSION#v}"
-        bash packaging/rust/assemble.sh "$version" dist/crate build
+        mkdir dist/rust
+        tar -xf dist/rust-candidate.tar -C dist/rust
 
     - name: Authenticate to crates.io (trusted publishing)
       uses: rust-lang/crates-io-auth-action@v1
@@ -1008,12 +1099,10 @@ jobs:
           echo "doltlite ${version} already published; skipping"
           exit 0
         fi
-        cd dist/crate
-        cargo publish --allow-dirty
+        cd dist/rust
+        cargo publish --allow-dirty --locked
 
-  # from here — build, pack and test the canonical npm distributables before
-  # publishing the tested archive. Requires the NPM_TOKEN
-  # secret: an npm automation token with publish rights to the @dolthub scope.
+  # ── Publish the WASM npm package ──────────────────────────
   wasm-npm-candidate:
     runs-on: ubuntu-24.04
     permissions:

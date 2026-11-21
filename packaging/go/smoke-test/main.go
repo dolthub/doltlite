@@ -50,10 +50,12 @@ func main() {
 
 	db, err := sql.Open("doltlite", dbPath)
 	must(err)
-	defer db.Close()
 	var buildVersion string
 	must(db.QueryRow(`SELECT dolt_version()`).Scan(&buildVersion))
 	check("engine version is stamped", buildVersion, doltlite.BuildVersion)
+	if want := os.Getenv("DOLTLITE_EXPECT_VERSION"); want != "" {
+		check("engine version matches the module tag", buildVersion, want)
+	}
 
 	_, err = db.Exec(`CREATE TABLE t(pk INTEGER PRIMARY KEY, s TEXT, f REAL, b BLOB)`)
 	must(err)
@@ -207,6 +209,16 @@ func main() {
 	concurrentTx(dbPath)
 	closedConnCleanup(dbPath)
 	columnMetadata(db)
+	must(db.Close())
+
+	reopened, err := sql.Open("doltlite", dbPath)
+	must(err)
+	defer reopened.Close()
+	must(reopened.QueryRow(`SELECT s FROM t WHERE pk = 1`).Scan(&s))
+	check("reopened database has merged data", s, "branched")
+	var persistedCommit string
+	must(reopened.QueryRow(`SELECT commit_hash FROM dolt_log WHERE message = 'first commit'`).Scan(&persistedCommit))
+	check("reopened database has the first commit", persistedCommit, commit)
 
 	if failures == 0 {
 		fmt.Println("smoke-test: all checks passed")

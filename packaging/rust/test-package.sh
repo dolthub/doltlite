@@ -6,13 +6,13 @@
 # This exercises the real published payload -- notably whether the vendored
 # amalgamation is actually included -- not just the working tree.
 #
-# Usage: test-package.sh [build_dir]   (default: ./build)
+# Usage: test-package.sh [build_dir]
+#        test-package.sh --staged <version> <crate_dir>
 
 set -euo pipefail
 
 PKG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$PKG_DIR/../.." && pwd)"
-BUILD_DIR="$(cd "${1:-$ROOT/build}" && pwd)"
 
 command -v cargo >/dev/null || { echo "ERROR: cargo is required" >&2; exit 1; }
 
@@ -27,15 +27,24 @@ else
 fi
 trap 'rm -rf "$STAGE" "$CONSUMER"' EXIT
 
-bash "$PKG_DIR/assemble.sh" "0.0.0" "$STAGE/pkg" "$BUILD_DIR"
+if [ "${1:-}" = --staged ]; then
+  version="${2:?crate version required}"
+  package="$(cd "${3:?crate directory required}" && pwd)"
+  set -- --locked
+else
+  version=0.0.0
+  package="$STAGE/pkg"
+  bash "$PKG_DIR/assemble.sh" "$version" "$package" "${1:-$ROOT/build}"
+  set --
+fi
 
 # Package exactly what would be published, then build against that copy.
-( cd "$STAGE/pkg" && cargo package --no-verify --allow-dirty --quiet )
-TARBALL="$STAGE/pkg/target/package/doltlite-0.0.0.crate"
+(cd "$package" && CARGO_TARGET_DIR="$STAGE/target" cargo package --no-verify --allow-dirty --quiet "$@")
+TARBALL="$STAGE/target/package/doltlite-$version.crate"
 [ -f "$TARBALL" ] || { echo "ERROR: cargo package produced no .crate" >&2; exit 1; }
 mkdir -p "$STAGE/extracted"
 tar -xzf "$TARBALL" -C "$STAGE/extracted"
-EXTRACTED="$STAGE/extracted/doltlite-0.0.0"
+EXTRACTED="$STAGE/extracted/doltlite-$version"
 [ -f "$EXTRACTED/vendor/doltlite.c" ] || {
   echo "ERROR: packaged crate has no vendored amalgamation" >&2; exit 1; }
 # The vendored amalgamation carries mbedtls/ed25519/BLAKE3, whose notices live
@@ -53,4 +62,4 @@ if [ -n "${DOLTLITE_PACKAGE_TARGET_DIR:-}" ]; then
   bash "$PKG_DIR/refresh-package.sh" "$EXTRACTED"
   export CARGO_TARGET_DIR="$DOLTLITE_PACKAGE_TARGET_DIR"
 fi
-DOLTLITE_EXPECT_VERSION="v0.0.0" cargo run --release --quiet
+DOLTLITE_EXPECT_VERSION="v$version" cargo run --release --quiet

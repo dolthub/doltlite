@@ -7,36 +7,44 @@
 # package metadata -- autoload map, bundled library resolution -- not just
 # the raw source files.
 #
-# Usage: test-package.sh [build_dir]   (default: ./build)
+# Usage: test-package.sh [build_dir]
+#        test-package.sh --staged <version> <package_dir> <engine_version>
 
 set -euo pipefail
 
 PKG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$PKG_DIR/../.." && pwd)"
-BUILD_DIR="$(cd "${1:-$ROOT/build}" && pwd)"
 
 command -v php >/dev/null || { echo "ERROR: php is required" >&2; exit 1; }
 command -v composer >/dev/null || { echo "ERROR: composer is required" >&2; exit 1; }
 php -r 'exit(extension_loaded("ffi") ? 0 : 1);' \
   || { echo "ERROR: the php ffi extension is required" >&2; exit 1; }
 
-STAGE="$(mktemp -d)"
-CONSUMER="$(mktemp -d)"
-trap 'rm -rf "$STAGE" "$CONSUMER"' EXIT
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
 
-bash "$PKG_DIR/assemble.sh" "0.0.0" "$STAGE/pkg" "$BUILD_DIR"
+if [ "${1:-}" = --staged ]; then
+  version="${2:?package version required}"
+  package="$(cd "${3:?package directory required}" && pwd)"
+  export DOLTLITE_EXPECT_VERSION="${4:?engine version required}"
+else
+  version=0.0.0
+  package="$WORK/pkg"
+  bash "$PKG_DIR/assemble.sh" "$version" "$package" "${1:-$ROOT/build}"
+fi
 
-cd "$CONSUMER"
+mkdir "$WORK/consumer"
+cd "$WORK/consumer"
 cat > composer.json <<EOF
 {
   "repositories": [
-    { "type": "path", "url": "$STAGE/pkg", "options": { "symlink": false } },
+    { "type": "path", "url": "$package", "options": { "symlink": false } },
     { "packagist.org": false }
   ],
-  "require": { "dolthub/doltlite-php": "0.0.0" }
+  "require": { "dolthub/doltlite-php": "$version" }
 }
 EOF
 composer install --no-interaction --quiet
 
 cp "$PKG_DIR/smoke-test.php" .
-php -d ffi.enable=1 smoke-test.php
+env -u DOLTLITE_PHP_LIB DOLTLITE_PACKAGE_VERSION="$version" php -d ffi.enable=1 smoke-test.php
