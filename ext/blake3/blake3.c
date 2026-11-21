@@ -497,82 +497,240 @@ void blake3_hash_oneshot(const void *input, size_t input_len, uint8_t *out,
 }
 /* DOLTLITE: hash many buffers at once, 32-byte output each. A single prolly
 ** node has about four chunks, too few to fill an 8- or 16-lane SIMD batch, so
-** chunk j of every buffer in a group goes through one hash_many() call. Each
-** buffer's chunk CVs then fold through the same lazy-merge stack the
-** incremental hasher uses, so output matches blake3_hash_oneshot(). */
+** the group is hashed column-wise instead: chunk j of every buffer goes
+** through one hash_many() call, the trailing partial chunks are compressed
+** four at a time, and each level of parent nodes across the group is another
+** hash_many() call. Pairing adjacent chaining values and carrying an odd one
+** up a level builds the same left-full tree the incremental hasher does, so
+** output matches blake3_hash_oneshot(). */
 #define DOLTLITE_MANY_GROUP 16
-#define DOLTLITE_MANY_MAX_CHUNKS 32
-#define DOLTLITE_MANY_STACK 6
+#define DOLTLITE_MANY_MAX_CHUNKS 16
 
 typedef struct {
-  uint8_t cv[DOLTLITE_MANY_STACK][BLAKE3_OUT_LEN];
-  size_t n;
-} doltlite_cv_stack;
+  const uint8_t *p;
+  size_t len;
+  uint64_t counter;
+  uint8_t *out;
+} doltlite_tail;
 
-INLINE void doltlite_push_cv(doltlite_cv_stack *st, const uint8_t cv[32],
-                             uint64_t chunk_counter) {
-  size_t post = (size_t)popcnt(chunk_counter);
-  while (st->n > post) {
-    output_t output = parent_output(st->cv[st->n - 2], IV, 0);
-    output_chaining_value(&output, st->cv[st->n - 2]);
-    st->n--;
+static void doltlite_tail_scalar(const doltlite_tail *t) {
+  blake3_chunk_state chunk;
+  output_t output;
+  chunk_state_init(&chunk, IV, 0);
+  chunk.chunk_counter = t->counter;
+  chunk_state_update(&chunk, t->p, t->len);
+  output = chunk_state_output(&chunk);
+  output_chaining_value(&output, t->out);
+}
+
+#if defined(__GNUC__)
+/* hash_many() starts every lane from one key and runs every lane for the
+** same number of whole blocks, which a set of partial chunks does not offer.
+** This compresses one block in each of four independent chunk states. */
+typedef uint32_t doltlite_v4 __attribute__((vector_size(16)));
+
+#define DOLTLITE_ROTR(x, c) (((x) >> (c)) | ((x) << (32 - (c))))
+#define DOLTLITE_G(a, b, c, d, x, y)                                           \
+  do {                                                                         \
+    s[a] = s[a] + s[b] + (x);                                                  \
+    s[d] = DOLTLITE_ROTR(s[d] ^ s[a], 16);                                     \
+    s[c] = s[c] + s[d];                                                        \
+    s[b] = DOLTLITE_ROTR(s[b] ^ s[c], 12);                                     \
+    s[a] = s[a] + s[b] + (y);                                                  \
+    s[d] = DOLTLITE_ROTR(s[d] ^ s[a], 8);                                      \
+    s[c] = s[c] + s[d];                                                        \
+    s[b] = DOLTLITE_ROTR(s[b] ^ s[c], 7);                                      \
+  } while (0)
+
+static void doltlite_compress4(doltlite_v4 cv[8], const uint8_t *const blk[4],
+                               const uint32_t block_len[4],
+                               const uint32_t counter[4],
+                               const uint32_t flags[4],
+                               const uint32_t mask[4]) {
+  doltlite_v4 m[16];
+  doltlite_v4 s[16];
+  doltlite_v4 keep = (doltlite_v4){mask[0], mask[1], mask[2], mask[3]};
+  size_t r, w;
+  for (w = 0; w < 16; w++) {
+    m[w] = (doltlite_v4){load32(blk[0] + 4 * w), load32(blk[1] + 4 * w),
+                         load32(blk[2] + 4 * w), load32(blk[3] + 4 * w)};
   }
-  memcpy(st->cv[st->n++], cv, BLAKE3_OUT_LEN);
+  for (w = 0; w < 8; w++) s[w] = cv[w];
+  for (w = 0; w < 4; w++) s[8 + w] = (doltlite_v4){IV[w], IV[w], IV[w], IV[w]};
+  s[12] = (doltlite_v4){counter[0], counter[1], counter[2], counter[3]};
+  s[13] = (doltlite_v4){0, 0, 0, 0};
+  s[14] = (doltlite_v4){block_len[0], block_len[1], block_len[2], block_len[3]};
+  s[15] = (doltlite_v4){flags[0], flags[1], flags[2], flags[3]};
+  for (r = 0; r < 7; r++) {
+    const uint8_t *z = MSG_SCHEDULE[r];
+    DOLTLITE_G(0, 4, 8, 12, m[z[0]], m[z[1]]);
+    DOLTLITE_G(1, 5, 9, 13, m[z[2]], m[z[3]]);
+    DOLTLITE_G(2, 6, 10, 14, m[z[4]], m[z[5]]);
+    DOLTLITE_G(3, 7, 11, 15, m[z[6]], m[z[7]]);
+    DOLTLITE_G(0, 5, 10, 15, m[z[8]], m[z[9]]);
+    DOLTLITE_G(1, 6, 11, 12, m[z[10]], m[z[11]]);
+    DOLTLITE_G(2, 7, 8, 13, m[z[12]], m[z[13]]);
+    DOLTLITE_G(3, 4, 9, 14, m[z[14]], m[z[15]]);
+  }
+  for (w = 0; w < 8; w++) {
+    cv[w] = ((s[w] ^ s[w + 8]) & keep) | (cv[w] & ~keep);
+  }
+}
+
+/* a[] is ordered longest first, so a lane only ever idles after its own
+** chunk has ended. An idle lane compresses zeros and keeps its value. */
+static void doltlite_tails4(const doltlite_tail *a, size_t n) {
+  static const uint8_t zeros[BLAKE3_BLOCK_LEN] = {0};
+  uint8_t pad[4][BLAKE3_BLOCK_LEN];
+  doltlite_v4 cv[8];
+  size_t blocks[4];
+  size_t b, l, w;
+  for (w = 0; w < 8; w++) cv[w] = (doltlite_v4){IV[w], IV[w], IV[w], IV[w]};
+  for (l = 0; l < 4; l++) {
+    blocks[l] = l < n ? (a[l].len + BLAKE3_BLOCK_LEN - 1) / BLAKE3_BLOCK_LEN : 0;
+  }
+  for (b = 0; b < blocks[0]; b++) {
+    const uint8_t *blk[4];
+    uint32_t block_len[4], counter[4], flags[4], mask[4];
+    for (l = 0; l < 4; l++) {
+      size_t rem;
+      if (b >= blocks[l]) {
+        blk[l] = zeros;
+        block_len[l] = 0;
+        counter[l] = 0;
+        flags[l] = 0;
+        mask[l] = 0;
+        continue;
+      }
+      rem = a[l].len - b * BLAKE3_BLOCK_LEN;
+      if (rem >= BLAKE3_BLOCK_LEN) {
+        blk[l] = a[l].p + b * BLAKE3_BLOCK_LEN;
+        block_len[l] = BLAKE3_BLOCK_LEN;
+      } else {
+        memset(pad[l], 0, BLAKE3_BLOCK_LEN);
+        memcpy(pad[l], a[l].p + b * BLAKE3_BLOCK_LEN, rem);
+        blk[l] = pad[l];
+        block_len[l] = (uint32_t)rem;
+      }
+      counter[l] = (uint32_t)a[l].counter;
+      flags[l] = (b == 0 ? CHUNK_START : 0) | (b + 1 == blocks[l] ? CHUNK_END : 0);
+      mask[l] = 0xffffffffu;
+    }
+    doltlite_compress4(cv, blk, block_len, counter, flags, mask);
+  }
+  for (l = 0; l < n; l++) {
+    for (w = 0; w < 8; w++) store32(a[l].out + 4 * w, cv[w][l]);
+  }
+}
+#endif
+
+static void doltlite_hash_tails(doltlite_tail *a, size_t n) {
+  size_t i = 0;
+#if defined(__GNUC__)
+  size_t j;
+  for (i = 1; i < n; i++) {
+    doltlite_tail t = a[i];
+    for (j = i; j > 0 && a[j - 1].len < t.len; j--) a[j] = a[j - 1];
+    a[j] = t;
+  }
+  for (i = 0; i + 1 < n; i += 4) {
+    doltlite_tails4(&a[i], n - i < 4 ? n - i : 4);
+  }
+#endif
+  for (; i < n; i++) doltlite_tail_scalar(&a[i]);
+}
+
+/* hash_many() vectorizes whole groups of four or more and compresses the
+** stragglers one at a time. Repeating the first input to fill the last group
+** costs nothing a SIMD lane was not already doing. */
+static void doltlite_hash_batch(const uint8_t **batch, uint8_t **dest,
+                                size_t k, size_t blocks, uint64_t counter,
+                                uint8_t flags, uint8_t flags_start,
+                                uint8_t flags_end) {
+  uint8_t cvs[DOLTLITE_MANY_GROUP * BLAKE3_OUT_LEN];
+  size_t padded = k;
+  size_t i;
+  while (padded & 3) batch[padded++] = batch[0];
+  blake3_hash_many(batch, padded, blocks, IV, counter, false, flags,
+                   flags_start, flags_end, cvs);
+  for (i = 0; i < k; i++) {
+    memcpy(dest[i], &cvs[i * BLAKE3_OUT_LEN], BLAKE3_OUT_LEN);
+  }
 }
 
 static void doltlite_hash_group(const uint8_t *const *inputs,
                                 const size_t *lens, size_t n, uint8_t *out) {
-  doltlite_cv_stack st[DOLTLITE_MANY_GROUP];
+  uint8_t cv[DOLTLITE_MANY_GROUP][DOLTLITE_MANY_MAX_CHUNKS * BLAKE3_OUT_LEN];
+  size_t count[DOLTLITE_MANY_GROUP];
+  doltlite_tail tails[DOLTLITE_MANY_GROUP];
   const uint8_t *batch[DOLTLITE_MANY_GROUP];
-  size_t who[DOLTLITE_MANY_GROUP];
-  uint8_t cvs[DOLTLITE_MANY_GROUP * BLAKE3_OUT_LEN];
+  uint8_t *dest[DOLTLITE_MANY_GROUP];
   size_t max_len = 0;
-  size_t i, j;
+  size_t n_tails = 0;
+  size_t more = 1;
+  size_t i, j, k;
 
   for (i = 0; i < n; i++) {
-    st[i].n = 0;
+    count[i] = (lens[i] + BLAKE3_CHUNK_LEN - 1) / BLAKE3_CHUNK_LEN;
     if (lens[i] > max_len) max_len = lens[i];
   }
   for (j = 0; j * BLAKE3_CHUNK_LEN < max_len; j++) {
     size_t off = j * BLAKE3_CHUNK_LEN;
-    size_t k = 0;
+    k = 0;
     for (i = 0; i < n; i++) {
       if (off >= lens[i]) continue;
       if (lens[i] - off >= BLAKE3_CHUNK_LEN) {
         batch[k] = inputs[i] + off;
-        who[k++] = i;
+        dest[k++] = &cv[i][j * BLAKE3_OUT_LEN];
       } else {
-        blake3_chunk_state chunk;
-        output_t output;
-        uint8_t cv[BLAKE3_OUT_LEN];
-        chunk_state_init(&chunk, IV, 0);
-        chunk.chunk_counter = j;
-        chunk_state_update(&chunk, inputs[i] + off, lens[i] - off);
-        output = chunk_state_output(&chunk);
-        output_chaining_value(&output, cv);
-        doltlite_push_cv(&st[i], cv, j);
+        tails[n_tails].p = inputs[i] + off;
+        tails[n_tails].len = lens[i] - off;
+        tails[n_tails].counter = j;
+        tails[n_tails++].out = &cv[i][j * BLAKE3_OUT_LEN];
       }
     }
     if (k > 0) {
-      blake3_hash_many(batch, k, BLAKE3_CHUNK_LEN / BLAKE3_BLOCK_LEN, IV, j,
-                       false, 0, CHUNK_START, CHUNK_END, cvs);
-      for (i = 0; i < k; i++) {
-        doltlite_push_cv(&st[who[i]], &cvs[i * BLAKE3_OUT_LEN], j);
+      doltlite_hash_batch(batch, dest, k, BLAKE3_CHUNK_LEN / BLAKE3_BLOCK_LEN,
+                          j, 0, CHUNK_START, CHUNK_END);
+    }
+  }
+  doltlite_hash_tails(tails, n_tails);
+
+  /* A parent's value lands in a slot at or below the pair it was read from,
+  ** and a batch is read whole before any of it is written back. An odd
+  ** value moves up only once its level is done, since the slot it moves to
+  ** may be half of a pair still waiting in the batch. */
+  while (more) {
+    more = 0;
+    k = 0;
+    for (i = 0; i < n; i++) {
+      size_t pairs = count[i] > 2 ? count[i] / 2 : 0;
+      for (j = 0; j < pairs; j++) {
+        batch[k] = &cv[i][2 * j * BLAKE3_OUT_LEN];
+        dest[k++] = &cv[i][j * BLAKE3_OUT_LEN];
+        if (k == DOLTLITE_MANY_GROUP) {
+          doltlite_hash_batch(batch, dest, k, 1, 0, PARENT, 0, 0);
+          k = 0;
+        }
       }
+    }
+    if (k > 0) doltlite_hash_batch(batch, dest, k, 1, 0, PARENT, 0, 0);
+    for (i = 0; i < n; i++) {
+      size_t pairs = count[i] / 2;
+      if (count[i] <= 2) continue;
+      if (count[i] & 1) {
+        memcpy(&cv[i][pairs * BLAKE3_OUT_LEN],
+               &cv[i][(count[i] - 1) * BLAKE3_OUT_LEN], BLAKE3_OUT_LEN);
+      }
+      count[i] = pairs + (count[i] & 1);
+      if (count[i] > 2) more = 1;
     }
   }
   for (i = 0; i < n; i++) {
-    size_t r = st[i].n - 2;
-    output_t output = parent_output(st[i].cv[r], IV, 0);
-    while (r > 0) {
-      uint8_t block[BLAKE3_BLOCK_LEN];
-      r--;
-      memcpy(block, st[i].cv[r], BLAKE3_OUT_LEN);
-      output_chaining_value(&output, &block[BLAKE3_OUT_LEN]);
-      output = parent_output(block, IV, 0);
-    }
-    output_root_bytes(&output, 0, out + i * BLAKE3_OUT_LEN, BLAKE3_OUT_LEN);
+    batch[i] = cv[i];
+    dest[i] = out + i * BLAKE3_OUT_LEN;
   }
+  doltlite_hash_batch(batch, dest, n, 1, 0, PARENT | ROOT, 0, 0);
 }
 
 void blake3_hash_oneshot_many(const void *const *inputs,

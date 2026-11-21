@@ -119,7 +119,9 @@ int main(int argc, char **argv){
       r = r*1103515245u + 12345u; me = (int)((r>>16) % (uint32_t)n);
       for(k=0; k<n; k++){
         r = r*1103515245u + 12345u;
-        an[k] = k==me ? L : (int)((r>>8) % 8000);
+        /* Every third case lets the neighbours grow to the largest node,
+        ** so parent levels of every depth share a batch. */
+        an[k] = k==me ? L : (int)((r>>8) % (L%3==0 ? 16385 : 8000));
         ap[k] = buf + (r>>20) % 5000;
       }
       prollyHashComputeMany(ap, an, n, aMany);
