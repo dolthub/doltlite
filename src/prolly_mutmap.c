@@ -13,6 +13,56 @@
 #define MUTMAP_RADIX_SORT_MIN 128
 #define MUTMAP_RADIX_PREFIX_LIMIT 32
 #define MUTMAP_SORTED_WRITE_WINDOW 64
+#define MUTMAP_ARENA_MIN 4096
+#define MUTMAP_ARENA_MAX 262144
+
+struct ProllyMutMapBlock {
+  ProllyMutMapBlock *pNext;
+  int nUsed;
+  int nSize;
+};
+
+static u8 *arenaAlloc(ProllyMutMap *mm, int n){
+  ProllyMutMapBlock *b = mm->pArena;
+  int nSize;
+  if( b && b->nSize-b->nUsed>=n ){
+    u8 *p = (u8*)&b[1] + b->nUsed;
+    b->nUsed += n;
+    return p;
+  }
+  nSize = b ? b->nSize*2 : MUTMAP_ARENA_MIN;
+  if( nSize>MUTMAP_ARENA_MAX ) nSize = MUTMAP_ARENA_MAX;
+  if( n>nSize/4 ){
+    ProllyMutMapBlock *pBig = sqlite3_malloc64(sizeof(*pBig) + (u64)n);
+    if( !pBig ) return 0;
+    pBig->nSize = pBig->nUsed = n;
+    if( b ){
+      pBig->pNext = b->pNext;
+      b->pNext = pBig;
+    }else{
+      pBig->pNext = 0;
+      mm->pArena = pBig;
+    }
+    return (u8*)&pBig[1];
+  }
+  b = sqlite3_malloc64(sizeof(*b) + (u64)nSize);
+  if( !b ) return 0;
+  b->pNext = mm->pArena;
+  b->nSize = nSize;
+  b->nUsed = n;
+  mm->pArena = b;
+  return (u8*)&b[1];
+}
+
+static void arenaFree(ProllyMutMap *mm){
+  ProllyMutMapBlock *b = mm->pArena;
+  while( b ){
+    ProllyMutMapBlock *pNext = b->pNext;
+    sqlite3_free(b);
+    b = pNext;
+  }
+  mm->pArena = 0;
+}
 
 i64 prollyMutMapEntryIntKey(const ProllyMutMapEntry *e){
   if( e->nKey != 8 || e->pKey == 0 ) return 0;
@@ -252,10 +302,8 @@ static void fixInlinePtrs(ProllyMutMapEntry *e){
 }
 
 static void freeEntryData(ProllyMutMapEntry *e){
-  if( !entryHasInlineKey(e) ){
-    sqlite3_free(e->pKey);
-  }
-  if( !e->bValInline ) sqlite3_free(e->pVal);
+  if( e->bValHeap ) sqlite3_free(e->pVal);
+  e->bValHeap = 0;
   e->pKey = 0;
   e->pVal = 0;
   e->nKey = 0;
@@ -281,7 +329,7 @@ static int copyEntryData(ProllyMutMap *mm, ProllyMutMapEntry *e,
     if( nKey <= (int)sizeof(e->aKeyInline) ){
       e->pKey = e->aKeyInline;
     }else{
-      e->pKey = (u8*)sqlite3_malloc(nKey);
+      e->pKey = arenaAlloc(mm, nKey);
       if( !e->pKey ) return SQLITE_NOMEM;
     }
     memcpy(e->pKey, pKey, nKey);
@@ -295,12 +343,9 @@ static int copyEntryData(ProllyMutMap *mm, ProllyMutMapEntry *e,
       e->pVal = e->aKeyInline + nKey;
       e->bValInline = 1;
     }else{
-      e->pVal = (u8*)sqlite3_malloc(nVal);
+      e->pVal = arenaAlloc(mm, nVal);
     }
     if( !e->pVal ){
-      if( !entryHasInlineKey(e) ){
-        sqlite3_free(e->pKey);
-      }
       e->pKey = 0;
       return SQLITE_NOMEM;
     }
@@ -314,21 +359,23 @@ static int copyEntryData(ProllyMutMap *mm, ProllyMutMapEntry *e,
 static int replaceEntryValue(ProllyMutMap *mm, ProllyMutMapEntry *e,
                              const u8 *pVal, int nVal){
   if( !pVal || nVal<=0 ){
-    if( !e->bValInline ) sqlite3_free(e->pVal);
+    if( e->bValHeap ) sqlite3_free(e->pVal);
     e->pVal = 0;
     e->nVal = 0;
     e->nValAlloc = 0;
     e->bValInline = 0;
+    e->bValHeap = 0;
     e->nZeroTail = 0;
     return SQLITE_OK;
   }
   if( e->nValAlloc < nVal ){
-    u8 *pNew = (u8*)sqlite3_realloc(e->bValInline ? 0 : e->pVal, nVal);
+    u8 *pNew = (u8*)sqlite3_realloc(e->bValHeap ? e->pVal : 0, nVal);
     if( !pNew ) return SQLITE_NOMEM;
     mm->nBytes += nVal;
     e->pVal = pNew;
     e->nValAlloc = nVal;
     e->bValInline = 0;
+    e->bValHeap = 1;
   }
   memcpy(e->pVal, pVal, nVal);
   e->nVal = nVal;
@@ -1247,6 +1294,7 @@ void prollyMutMapClear(ProllyMutMap *mm){
   mm->levelBase = 0;
   mm->nBytes = 0;
   mm->nScanSkip = 0;
+  arenaFree(mm);
 }
 
 void prollyMutMapFree(ProllyMutMap *mm){

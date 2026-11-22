@@ -11,10 +11,12 @@
 typedef struct ProllyMutMap ProllyMutMap;
 typedef struct ProllyMutMapEntry ProllyMutMapEntry;
 typedef struct ProllyMutMapIter ProllyMutMapIter;
+typedef struct ProllyMutMapBlock ProllyMutMapBlock;
 
 struct ProllyMutMapEntry {
   u8 op;
   u8 bValInline;
+  u8 bValHeap;
   u8 bInTree;
   u8 *pKey;
   int nKey;
@@ -80,6 +82,10 @@ struct ProllyMutMap {
   /* Bytes of keys, values, entries and undo copies added since the last
   ** clear; it never shrinks before then. */
   i64 nBytes;
+  /* Keys and first-written values live here and are released together by
+  ** a clear. A value regrown in place moves to the heap, so rewriting one
+  ** row repeatedly cannot grow the arena. */
+  ProllyMutMapBlock *pArena;
   u64 nScanSkip;
   ProllyStats *pStats;
 };
