@@ -1213,6 +1213,7 @@ static void testPointReadsKeepInternalNodes(sqlite3 *db){
   ChunkStore *pStore = doltliteGetChunkStore(db);
   sqlite3_io_methods methods;
   int nReads;
+  int nScan;
   execSql(db, "CREATE TABLE point_ws(id INTEGER PRIMARY KEY, v INT, payload BLOB);"
       "WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<32768)"
       " INSERT INTO point_ws SELECT i,(i*7919)%1000000,"
@@ -1228,6 +1229,14 @@ static void testPointReadsKeepInternalNodes(sqlite3 *db){
   check("point reads past the cache read at most the leaf", nReads<=8192+512);
   check("point read accounting", cacheBytes(pCache)==pCache->nByte
       && budgetMatches(db, 2048*1024));
+  nRead = 0;
+  execSql(db, "SELECT sum(v) FROM point_ws");
+  nScan = nRead;
+  clearNodes(pCache);
+  nRead = 0;
+  execSql(db, "SELECT sum(v) FROM point_ws");
+  check("a scan after point reads reads no more than a clean scan",
+      nScan<=nRead+nRead/8);
   pStore->file.pFile->pMethods = pReadMethods;
   execSql(db, "DROP TABLE point_ws; PRAGMA cache_size=-65536");
 }
