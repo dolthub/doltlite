@@ -493,6 +493,61 @@ static int csReadManifest(ChunkStore *cs){
 }
 
 static void csCaptureDamageFinger(ChunkStore *cs);
+void doltliteTestPause(const char *zEnv);
+
+/* Only a sealed root followed by padding bounds an immutable WAL prefix. */
+static int csReadOpenBoundary(ChunkStore *cs, i64 *pEnd, ProllyHash *pRefs){
+  u8 aBuf[4096];
+  const int rootSize = 1 + CHUNK_MANIFEST_SIZE;
+  i64 size, limit, end;
+  int rc, moved = 0;
+
+  *pEnd = -1;
+  rc = sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED, &moved);
+  if( rc==SQLITE_NOTFOUND || moved ) return SQLITE_OK;
+  if( rc!=SQLITE_OK ) return rc;
+  rc = sqlite3OsFileSize(cs->file.pFile, &size);
+  if( rc!=SQLITE_OK ) return rc;
+  if( size==cs->wal.iWalOffset ){
+    *pEnd = size;
+    *pRefs = cs->refs.refsHash;
+    return SQLITE_OK;
+  }
+
+  limit = MAX(cs->wal.iWalOffset, size-CS_ZERO_TAIL_BYTES-65536);
+  for(end=size; end>limit; ){
+    int n = (int)MIN(end-limit, (i64)sizeof(aBuf));
+    i64 start = end-n;
+    int i;
+
+    rc = sqlite3OsRead(cs->file.pFile, aBuf, n, start);
+    if( rc!=SQLITE_OK ) return rc;
+    for(i=n-1; i>=0 && aBuf[i]==0; i--){}
+    if( i>=0 ){
+      i64 last = start+i;
+      start = MAX(cs->wal.iWalOffset, last-rootSize+1);
+      n = (int)MIN(size-start, last-start+rootSize);
+      rc = sqlite3OsRead(cs->file.pFile, aBuf, n, start);
+      if( rc!=SQLITE_OK ) return rc;
+      for(i=0; i+rootSize<=n && start+i<=last; i++){
+        const u8 *root = aBuf+i+1;
+        i64 offset = start+i;
+        if( offset+rootSize<=last || aBuf[i]!=CS_WAL_TAG_ROOT
+         || CS_READ_U32(root)!=CHUNK_STORE_MAGIC
+         || csManifestHashState(root, offset)!=CS_MANIFEST_HASH_OK
+         || csValidateWalRootManifest(cs, root, offset)!=SQLITE_OK ){
+          continue;
+        }
+        *pEnd = offset+rootSize;
+        memcpy(pRefs->data, root+CS_MANIFEST_REFS_HASH_OFF, PROLLY_HASH_SIZE);
+        return SQLITE_OK;
+      }
+      break;
+    }
+    end = start;
+  }
+  return SQLITE_OK;
+}
 
 static int csOpen(
   ChunkStore *cs,
@@ -500,7 +555,8 @@ static int csOpen(
   const char *zFilename,
   int flags,
   int deferBusy,
-  CsReadLock *pReadLock
+  CsReadLock *pReadLock,
+  int *pRetryLocked
 ){
   int rc;
   int exists = 0;
@@ -585,6 +641,8 @@ static int csOpen(
 
   if( exists ){
     int wantReadOnly = (flags & SQLITE_OPEN_READONLY)!=0;
+    i64 iSnapshotEnd = -1;
+    ProllyHash snapshotRefs;
     int openFlags = (wantReadOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE)
                   | SQLITE_OPEN_MAIN_DB
                   | (flags & SQLITE_OPEN_NOFOLLOW);
@@ -668,15 +726,37 @@ static int csOpen(
       return rc;
     }
 
+    if( pRetryLocked && pReadLock->pFile && !pReadLock->zName ){
+      rc = csReadOpenBoundary(cs, &iSnapshotEnd, &snapshotRefs);
+      if( rc==SQLITE_OK && iSnapshotEnd>=0 ) rc = csReadUnlock(cs, pReadLock);
+      if( rc!=SQLITE_OK ){
+        chunkStoreClose(cs);
+        return rc;
+      }
+    }
     {
       int loadedCheckpoint = 0;
       i64 iSkipStart = 0;
       i64 iSkipEnd = 0;
+      if( pRetryLocked ) doltliteTestPause("DOLTLITE_PAUSE_READONLY_OPEN_REPLAY");
       rc = csTryLoadWalCheckpoint(cs, &loadedCheckpoint,
-                                  &iSkipStart, &iSkipEnd);
+                                  &iSkipStart, &iSkipEnd, iSnapshotEnd);
       if( rc==SQLITE_OK && !loadedCheckpoint ) rc = csReadIndex(cs);
       if( rc==SQLITE_OK && !loadedCheckpoint ){
-        rc = csReplayWalSkipping(cs, iSkipStart, iSkipEnd);
+        rc = csReplayWalSkipping(cs, iSkipStart, iSkipEnd, iSnapshotEnd);
+      }
+    }
+    if( iSnapshotEnd>=0 ){
+      int moved = 0;
+      int movedRc = sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED,
+                                         &moved);
+      if( rc!=SQLITE_NOMEM && (moved
+       || (rc==SQLITE_OK && (movedRc!=SQLITE_OK || cs->corruptMidStream
+           || cs->wal.nWalData!=iSnapshotEnd-cs->wal.iWalOffset
+           || prollyHashCompare(&snapshotRefs, &cs->refs.refsHash)!=0))) ){
+        *pRetryLocked = 1;
+        chunkStoreClose(cs);
+        return SQLITE_BUSY;
       }
     }
     if( rc != SQLITE_OK ){
@@ -863,8 +943,15 @@ static int csOpenUnlocked(
   ** close trims the zero tail, and then reads past the new end. The trim
   ** is brief and the file is whole again once it is done. */
   do{
-    rc = csOpen(cs, pVfs, zFilename, flags, deferBusy, &readLock);
+    int retryLocked = 0;
+    int *pRetry = deferBusy && (flags & SQLITE_OPEN_READONLY)!=0
+                ? &retryLocked : 0;
+    rc = csOpen(cs, pVfs, zFilename, flags, deferBusy, &readLock, pRetry);
     rc2 = csReadUnlock(cs, &readLock);
+    if( retryLocked && rc2==SQLITE_OK ){
+      rc = csOpen(cs, pVfs, zFilename, flags, deferBusy, &readLock, 0);
+      rc2 = csReadUnlock(cs, &readLock);
+    }
   }while( rc==SQLITE_IOERR_SHORT_READ && ++nTry<CS_NOLOCK_READ_RETRIES
        && (flags & SQLITE_OPEN_URI)!=0 && (flags & SQLITE_OPEN_READONLY)!=0
        && sqlite3_uri_boolean(zFilename, "nolock", 0) );

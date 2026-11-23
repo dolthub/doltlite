@@ -700,7 +700,8 @@ static int csReplayWalFrom(
   i64 iStart,
   i64 iSkipStart,
   i64 iSkipEnd,
-  int bTailMode
+  int bTailMode,
+  i64 iEnd
 ){
   i64 walSize;
   i64 iFileSizeBefore;
@@ -728,9 +729,11 @@ static int csReplayWalFrom(
 
   iFileSizeBefore = cs->file.iFileSize;
   {
-    i64 fileSize = 0;
-    int rc = sqlite3OsFileSize(cs->file.pFile, &fileSize);
-    if( rc != SQLITE_OK ) return rc;
+    i64 fileSize = iEnd;
+    if( fileSize<0 ){
+      rc = sqlite3OsFileSize(cs->file.pFile, &fileSize);
+      if( rc!=SQLITE_OK ) return rc;
+    }
     /* A WAL offset past the end of a file that holds a header would read as
     ** "no WAL tail" and serve the store one commit behind. */
     if( fileSize>=CHUNK_MANIFEST_SIZE && cs->wal.iWalOffset > fileSize ){
@@ -1070,10 +1073,11 @@ replay_error:
 /* Ingest records appended after iStart into the live store. The caller
 ** proved the prefix below iStart is the content it already holds. */
 int csReplayWalTail(ChunkStore *cs, i64 iStart){
-  return csReplayWalFrom(cs, iStart, 0, 0, 1);
+  return csReplayWalFrom(cs, iStart, 0, 0, 1, -1);
 }
 
-int csReplayWalSkipping(ChunkStore *cs, i64 iSkipStart, i64 iSkipEnd){
+int csReplayWalSkipping(ChunkStore *cs, i64 iSkipStart, i64 iSkipEnd,
+                        i64 iEnd){
   cs->wal.iCheckpointOffset = 0;
   cs->wal.nCheckpointIndex = 0;
   cs->wal.iCheckpointReplay = 0;
@@ -1087,7 +1091,7 @@ int csReplayWalSkipping(ChunkStore *cs, i64 iSkipStart, i64 iSkipEnd){
        && (iSkipStart<cs->wal.iWalOffset || iSkipEnd<=iSkipStart)) ){
     return SQLITE_CORRUPT;
   }
-  return csReplayWalFrom(cs, cs->wal.iWalOffset, iSkipStart, iSkipEnd, 0);
+  return csReplayWalFrom(cs, cs->wal.iWalOffset, iSkipStart, iSkipEnd, 0, iEnd);
 }
 
 static int csCheckpointIndexInsert(
@@ -1301,13 +1305,14 @@ int csTryLoadWalCheckpoint(
   ChunkStore *cs,
   int *pLoaded,
   i64 *pSkipStart,
-  i64 *pSkipEnd
+  i64 *pSkipEnd,
+  i64 iEnd
 ){
   u8 aTail[1 + CHUNK_MANIFEST_SIZE];
   u8 aRoot[1 + CHUNK_MANIFEST_SIZE];
   u8 aHeader[CS_WAL_CHUNK_HDR_SIZE];
   u8 *aBuf = 0;
-  i64 nFile = 0;
+  i64 nFile = iEnd;
   i64 iTail;
   i64 iRoot;
   i64 iRead;
@@ -1327,8 +1332,10 @@ int csTryLoadWalCheckpoint(
   *pSkipStart = 0;
   *pSkipEnd = 0;
   if( cs->wal.iWalOffset<=0 || !cs->file.pFile ) return SQLITE_OK;
-  rc = sqlite3OsFileSize(cs->file.pFile, &nFile);
-  if( rc!=SQLITE_OK ) return rc;
+  if( nFile<0 ){
+    rc = sqlite3OsFileSize(cs->file.pFile, &nFile);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   stamp = cs->wal;
   rc = csFindLastCheckpointRoot(cs, nFile, aTail, &iTail, &stamp, &found);
   if( rc!=SQLITE_OK || !found ) return rc;
@@ -1427,7 +1434,7 @@ int csTryLoadWalCheckpoint(
     cs->wal.checkpointMagic = stamp.checkpointMagic;
     cs->wal.nCheckpointRun = nRun;
     memcpy(cs->wal.aCheckpointRun, aRun, nRun*sizeof(aRun[0]));
-    rc = csReplayWalFrom(cs, stamp.iCheckpointReplay, 0, 0, 0);
+    rc = csReplayWalFrom(cs, stamp.iCheckpointReplay, 0, 0, 0, iEnd);
     if( rc!=SQLITE_OK ){
       memset(&cs->index.lazy, 0, sizeof(cs->index.lazy));
       cs->wal.iCheckpointOffset = 0;
@@ -1514,7 +1521,7 @@ int csTryLoadWalCheckpoint(
   aIndex = 0;
   sqlite3_free(aBuf);
   aBuf = 0;
-  rc = csReplayWalFrom(cs, stamp.iCheckpointReplay, 0, 0, 0);
+  rc = csReplayWalFrom(cs, stamp.iCheckpointReplay, 0, 0, 0, iEnd);
   if( rc!=SQLITE_OK ) return rc;
   *pLoaded = 1;
   return SQLITE_OK;

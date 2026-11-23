@@ -147,6 +147,88 @@ static void test_readonly_still_sees_peer_changes(const char *zPath){
   remove(zPath);
 }
 
+static void test_readonly_open_replay(
+  const char *zPath, int checkpoint, int replaceFile
+){
+  sqlite3 *writer = 0;
+  char pause[384], ready[400];
+  FILE *f;
+  pid_t reader;
+  int status = 0;
+  int i;
+  int rc;
+
+  snprintf(pause, sizeof(pause), "%s.reader-pause", zPath);
+  snprintf(ready, sizeof(ready), "%s.ready", pause);
+  remove(zPath);
+  unlink(ready);
+  check("ro_open: writer open", sqlite3_open(zPath, &writer)==SQLITE_OK);
+  if( !writer ) return;
+  if( checkpoint ){
+    setenv("DOLTLITE_WAL_CHECKPOINT_CHUNKS", "1", 1);
+  }else{
+    setenv("DOLTLITE_WAL_CHECKPOINT_CHUNKS", "1000000000", 1);
+    setenv("DOLTLITE_WAL_CHECKPOINT_THRESHOLD", "1000000000", 1);
+  }
+  rc = sqlite3_exec(writer,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY, data BLOB);"
+      "INSERT INTO t VALUES(1, randomblob(8192));"
+      "SELECT dolt_commit('-Am','seed');", 0, 0, 0);
+  unsetenv("DOLTLITE_WAL_CHECKPOINT_CHUNKS");
+  unsetenv("DOLTLITE_WAL_CHECKPOINT_THRESHOLD");
+  if( rc==SQLITE_OK && !replaceFile ){
+    rc = sqlite3_exec(writer, "BEGIN; INSERT INTO t VALUES(2, randomblob(8192));",
+                      0, 0, 0);
+  }
+  check("ro_open: writer ready", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto done;
+
+  f = fopen(pause, "w");
+  check("ro_open: create pause file", f!=0);
+  if( !f ) goto done;
+  fputs("pause", f);
+  fclose(f);
+  reader = fork();
+  if( reader==0 ){
+    sqlite3 *db = 0;
+    int moved = 1;
+    setenv("DOLTLITE_PAUSE_READONLY_OPEN_REPLAY", pause, 1);
+    rc = sqlite3_open_v2(zPath, &db, SQLITE_OPEN_READONLY, 0);
+    if( rc==SQLITE_OK && replaceFile ){
+      rc = sqlite3_file_control(db, "main", SQLITE_FCNTL_HAS_MOVED, &moved);
+      if( rc==SQLITE_OK && moved ) rc = SQLITE_ERROR;
+    }
+    if( rc==SQLITE_OK && scalar(db, "SELECT sum(length(data)) FROM t")!=16384 ){
+      rc = SQLITE_ERROR;
+    }
+    sqlite3_close(db);
+    _exit(rc!=SQLITE_OK);
+  }
+  check("ro_open: fork", reader>0);
+  if( reader<0 ) goto done;
+  for(i=0; i<200 && access(ready, F_OK)!=0; i++) sqlite3_sleep(10);
+  check("ro_open: reader reached replay", access(ready, F_OK)==0);
+  sqlite3_busy_timeout(writer, 10);
+  if( replaceFile ){
+    rc = sqlite3_exec(writer, "INSERT INTO t VALUES(2, randomblob(8192));"
+                              "SELECT dolt_gc();", 0, 0, 0);
+    check("ro_open: GC replaced the open reader's file", rc==SQLITE_OK);
+  }else{
+    rc = sqlite3_exec(writer, "COMMIT", 0, 0, 0);
+    check("ro_open: writer committed while reader was in replay", rc==SQLITE_OK);
+  }
+  unlink(pause);
+  check("ro_open: reader observed completed commit after open",
+        waitpid(reader, &status, 0)==reader
+        && WIFEXITED(status) && WEXITSTATUS(status)==0);
+
+done:
+  unlink(pause);
+  unlink(ready);
+  sqlite3_close(writer);
+  remove(zPath);
+}
+
 /* A refused reset must not clear cs->readOnly; later VC writers stay refused. */
 static int exec_rc(sqlite3 *db, const char *zSql){
   return sqlite3_exec(db, zSql, 0, 0, 0);
@@ -358,6 +440,9 @@ int main(void){
   test_readonly_status_does_not_starve_a_writer(zPath, 1);
   test_readonly_status_does_not_starve_a_writer(zPath, 4);
   test_readonly_still_sees_peer_changes(zPath);
+  test_readonly_open_replay(zPath, 0, 0);
+  test_readonly_open_replay(zPath, 1, 0);
+  test_readonly_open_replay(zPath, 0, 1);
   test_readonly_reset_does_not_unlock_writers(zPath);
   for(readonly=0; readonly<2; readonly++){
     for(boundary=0; boundary<3; boundary++){
