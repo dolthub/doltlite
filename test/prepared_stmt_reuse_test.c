@@ -728,6 +728,170 @@ static void test_deferred_pk_seek_after_write(void){
   remove(zPath);
 }
 
+static void collectIntRows(
+  sqlite3_stmt *pStmt,
+  char *zOut,
+  size_t nOut
+){
+  size_t n = 0;
+  zOut[0] = 0;
+  while( sqlite3_step(pStmt)==SQLITE_ROW ){
+    int v = sqlite3_column_int(pStmt, 0);
+    int w = snprintf(zOut + n, nOut - n, "%s%d", n ? " " : "", v);
+    if( w>0 && n + (size_t)w < nOut ) n += (size_t)w;
+  }
+}
+
+static void test_custom_collation_eq_lookup(void){
+  const char *zPath = "custom_collation_eq_lookup.db";
+  sqlite3 *db = 0;
+  sqlite3_stmt *st = 0;
+  char zOut[256];
+  int rc;
+
+  remove(zPath);
+  rc = sqlite3_open(zPath, &db);
+  check("custom_coll_eq: open", rc==SQLITE_OK);
+
+  /* Wide numeric (ASC, DESC): reverse insertion order in pMutMap (pPending != pCur->pMutMap) */
+  execSql(db, "CREATE TABLE p1(id INTEGER PRIMARY KEY, a INTEGER)");
+  execSql(db, "INSERT INTO p1 VALUES(1, 1),(2, 9007199254740992)");
+  execSql(db, "CREATE TABLE t1(a INTEGER, b INTEGER)");
+  execSql(db, "CREATE INDEX idx1 ON t1(a ASC, b DESC)");
+  execSql(db, "INSERT INTO t1 VALUES(1, 99)");
+
+  rc = sqlite3_prepare_v2(db,
+      "SELECT t1.b FROM p1 CROSS JOIN t1 INDEXED BY idx1 ON t1.a = p1.a ORDER BY p1.id",
+      -1, &st, 0);
+  check("custom_coll_eq: prepare wide mutmap", rc==SQLITE_OK);
+  execSql(db, "BEGIN");
+  check("custom_coll_eq: wide mutmap step 1", sqlite3_step(st)==SQLITE_ROW);
+  execSql(db, "INSERT INTO t1 VALUES(9007199254740992, 10)");
+  execSql(db, "INSERT INTO t1 VALUES(9007199254740992, 20)");
+  collectIntRows(st, zOut, sizeof(zOut));
+  check_str("custom_coll_eq: wide mutmap reverse insert", zOut, "20 10");
+  sqlite3_finalize(st);
+  execSql(db, "ROLLBACK");
+
+  /* Wide numeric (ASC, DESC): pCur->pMutMap already attached before seek */
+  rc = sqlite3_prepare_v2(db,
+      "SELECT t1.b FROM p1 CROSS JOIN t1 INDEXED BY idx1 ON t1.a = p1.a ORDER BY p1.id",
+      -1, &st, 0);
+  check("custom_coll_eq: prepare wide attached", rc==SQLITE_OK);
+  execSql(db, "BEGIN");
+  execSql(db, "INSERT INTO t1 VALUES(2, 88)");
+  check("custom_coll_eq: wide attached step 1", sqlite3_step(st)==SQLITE_ROW);
+  execSql(db, "INSERT INTO t1 VALUES(9007199254740992, 10)");
+  execSql(db, "INSERT INTO t1 VALUES(9007199254740992, 20)");
+  collectIntRows(st, zOut, sizeof(zOut));
+  check_str("custom_coll_eq: wide attached reverse insert", zOut, "20 10");
+  sqlite3_finalize(st);
+  execSql(db, "ROLLBACK");
+
+  /* Wide numeric (ASC, DESC): interleaved committed tree + pMutMap */
+  rc = sqlite3_prepare_v2(db,
+      "SELECT t1.b FROM p1 CROSS JOIN t1 INDEXED BY idx1 ON t1.a = p1.a ORDER BY p1.id",
+      -1, &st, 0);
+  check("custom_coll_eq: prepare wide interleaved", rc==SQLITE_OK);
+  check("custom_coll_eq: wide interleaved step 1", sqlite3_step(st)==SQLITE_ROW);
+  execSql(db, "INSERT INTO t1 VALUES(9007199254740992, 20)");
+  execSql(db, "BEGIN");
+  execSql(db, "INSERT INTO t1 VALUES(9007199254740992, 10)");
+  execSql(db, "INSERT INTO t1 VALUES(9007199254740992, 30)");
+  collectIntRows(st, zOut, sizeof(zOut));
+  check_str("custom_coll_eq: wide interleaved tree+mutmap", zOut, "30 20 10");
+  sqlite3_finalize(st);
+  execSql(db, "ROLLBACK");
+  execSql(db, "DELETE FROM t1 WHERE a = 9007199254740992");
+
+  /* Wide numeric (ASC, DESC): tree smallest + delete tombstone in pMutMap */
+  rc = sqlite3_prepare_v2(db,
+      "SELECT t1.b FROM p1 CROSS JOIN t1 INDEXED BY idx1 ON t1.a = p1.a ORDER BY p1.id",
+      -1, &st, 0);
+  check("custom_coll_eq: prepare wide tree-first", rc==SQLITE_OK);
+  check("custom_coll_eq: wide tree-first step 1", sqlite3_step(st)==SQLITE_ROW);
+  execSql(db, "INSERT INTO t1 VALUES(9007199254740992, 40),(9007199254740992, 30)");
+  execSql(db, "BEGIN");
+  execSql(db, "DELETE FROM t1 WHERE a = 9007199254740992 AND b = 40");
+  execSql(db, "INSERT INTO t1 VALUES(9007199254740992, 10)");
+  execSql(db, "INSERT INTO t1 VALUES(9007199254740992, 20)");
+  collectIntRows(st, zOut, sizeof(zOut));
+  check_str("custom_coll_eq: wide tree-first + delete tombstone", zOut, "30 20 10");
+  sqlite3_finalize(st);
+  execSql(db, "ROLLBACK");
+  execSql(db, "DELETE FROM t1 WHERE a = 9007199254740992");
+
+  /* Wide numeric (ASC, DESC): SeekLE / reverse scan (ORDER BY b ASC) */
+  rc = sqlite3_prepare_v2(db,
+      "SELECT t1.b FROM p1 CROSS JOIN t1 INDEXED BY idx1 ON t1.a = p1.a "
+      "ORDER BY p1.id, t1.b ASC",
+      -1, &st, 0);
+  check("custom_coll_eq: prepare wide reverse scan", rc==SQLITE_OK);
+  check("custom_coll_eq: wide reverse step 1", sqlite3_step(st)==SQLITE_ROW);
+  execSql(db, "INSERT INTO t1 VALUES(9007199254740992, 20)");
+  execSql(db, "BEGIN");
+  execSql(db, "INSERT INTO t1 VALUES(9007199254740992, 30)");
+  execSql(db, "INSERT INTO t1 VALUES(9007199254740992, 10)");
+  collectIntRows(st, zOut, sizeof(zOut));
+  check_str("custom_coll_eq: wide SeekLE tree+mutmap", zOut, "10 20 30");
+  sqlite3_finalize(st);
+  execSql(db, "ROLLBACK");
+
+  /* COLLATE NOCASE with embedded NUL: reverse insert in pMutMap */
+  execSql(db, "CREATE TABLE p2(id INTEGER PRIMARY KEY, a TEXT)");
+  execSql(db, "INSERT INTO p2 VALUES(1, 'normal'),(2, 'a' || char(0) || 'b')");
+  execSql(db, "CREATE TABLE t2(a TEXT COLLATE NOCASE, b INTEGER)");
+  execSql(db, "CREATE INDEX idx2 ON t2(a, b)");
+  execSql(db, "INSERT INTO t2 VALUES('normal', 99)");
+
+  rc = sqlite3_prepare_v2(db,
+      "SELECT t2.b FROM p2 CROSS JOIN t2 INDEXED BY idx2 ON t2.a = p2.a ORDER BY p2.id",
+      -1, &st, 0);
+  check("custom_coll_eq: prepare nocase mutmap", rc==SQLITE_OK);
+  execSql(db, "BEGIN");
+  check("custom_coll_eq: nocase mutmap step 1", sqlite3_step(st)==SQLITE_ROW);
+  execSql(db, "INSERT INTO t2 VALUES('a' || char(0) || 'b', 20)");
+  execSql(db, "INSERT INTO t2 VALUES('a' || char(0) || 'b', 10)");
+  collectIntRows(st, zOut, sizeof(zOut));
+  check_str("custom_coll_eq: nocase mutmap reverse insert", zOut, "10 20");
+  sqlite3_finalize(st);
+  execSql(db, "ROLLBACK");
+
+  /* COLLATE NOCASE with embedded NUL: committed tree + pMutMap + delete tombstone */
+  rc = sqlite3_prepare_v2(db,
+      "SELECT t2.b FROM p2 CROSS JOIN t2 INDEXED BY idx2 ON t2.a = p2.a ORDER BY p2.id",
+      -1, &st, 0);
+  check("custom_coll_eq: prepare nocase tree+mutmap", rc==SQLITE_OK);
+  check("custom_coll_eq: nocase tree+mutmap step 1", sqlite3_step(st)==SQLITE_ROW);
+  execSql(db, "INSERT INTO t2 VALUES('a' || char(0) || 'b', 1),('a' || char(0) || 'b', 3)");
+  execSql(db, "BEGIN");
+  execSql(db, "DELETE FROM t2 WHERE a = ('a' || char(0) || 'b') AND b = 1");
+  execSql(db, "INSERT INTO t2 VALUES('a' || char(0) || 'b', 4)");
+  execSql(db, "INSERT INTO t2 VALUES('a' || char(0) || 'b', 2)");
+  collectIntRows(st, zOut, sizeof(zOut));
+  check_str("custom_coll_eq: nocase tree+mutmap+delete", zOut, "2 3 4");
+  sqlite3_finalize(st);
+  execSql(db, "ROLLBACK");
+  execSql(db, "DELETE FROM t2 WHERE a = ('a' || char(0) || 'b')");
+
+  /* COLLATE NOCASE with embedded NUL: tree smallest + mutmap larger */
+  rc = sqlite3_prepare_v2(db,
+      "SELECT t2.b FROM p2 CROSS JOIN t2 INDEXED BY idx2 ON t2.a = p2.a ORDER BY p2.id",
+      -1, &st, 0);
+  check("custom_coll_eq: prepare nocase tree-smallest", rc==SQLITE_OK);
+  check("custom_coll_eq: nocase tree-smallest step 1", sqlite3_step(st)==SQLITE_ROW);
+  execSql(db, "INSERT INTO t2 VALUES('a' || char(0) || 'b', 1)");
+  execSql(db, "BEGIN");
+  execSql(db, "INSERT INTO t2 VALUES('a' || char(0) || 'b', 2)");
+  collectIntRows(st, zOut, sizeof(zOut));
+  check_str("custom_coll_eq: nocase tree-smallest + mutmap", zOut, "1 2");
+  sqlite3_finalize(st);
+  execSql(db, "ROLLBACK");
+
+  sqlite3_close(db);
+  remove(zPath);
+}
+
 int main(int argc, char **argv){
   TestTempDir temp;
   if( !testTempDirSetup(&temp) ){
@@ -776,6 +940,9 @@ int main(int argc, char **argv){
 
   printf("--- deferred primary-key seek after a write ---\n");
   test_deferred_pk_seek_after_write();
+
+  printf("--- custom collation equality lookup ---\n");
+  test_custom_collation_eq_lookup();
 
   check("temporary directory cleanup", testTempDirCleanup(&temp));
   printf("\n=== Results: %d passed, %d failed ===\n", nPass, nFail);

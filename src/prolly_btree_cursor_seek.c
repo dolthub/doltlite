@@ -330,6 +330,7 @@ static int scanMutMapForCustomCollation(
   BtCursor *pCur,
   ProllyMutMap *pMap,
   UnpackedRecord *pIdxKey,
+  int dir,
   ProllyMutMapEntry **ppMatch,
   int *pCmp
 ){
@@ -344,12 +345,21 @@ static int scanMutMapForCustomCollation(
     return SQLITE_OK;
   }
 
-  for(i=0; i<pMap->nEntries; i++){
-    ProllyMutMapEntry *pEntry = &pMap->aEntries[i];
-    const u8 *pRec = pEntry->pVal;
-    int nRec = pEntry->nVal;
+  rc = prollyMutMapEnsureOrder(pMap);
+  if( rc!=SQLITE_OK ) return rc;
+
+  for(i = (dir<0 ? pMap->nEntries-1 : 0);
+      i>=0 && i<pMap->nEntries;
+      i += dir){
+    ProllyMutMapEntry *pEntry = 0;
+    const u8 *pRec;
+    int nRec;
     int cmp;
 
+    rc = orderedMutMapEntryAt(pMap, i, &pEntry);
+    if( rc!=SQLITE_OK ) break;
+    pRec = pEntry->pVal;
+    nRec = pEntry->nVal;
     if( pEntry->op!=PROLLY_EDIT_INSERT ){
       pMap->nScanSkip++;
       continue;
@@ -377,6 +387,7 @@ static int scanMutMapForCustomCollation(
 static int scanTreeForCustomCollation(
   BtCursor *pCur,
   UnpackedRecord *pIdxKey,
+  int dir,
   int *pFound,
   int *pCmp
 ){
@@ -387,14 +398,15 @@ static int scanTreeForCustomCollation(
 
   *pFound = 0;
   *pCmp = 0;
-  rc = prollyCursorFirst(&pCur->pCur, &res);
+  rc = dir<0 ? prollyCursorLast(&pCur->pCur, &res)
+             : prollyCursorFirst(&pCur->pCur, &res);
   while( rc==SQLITE_OK && res==0 && prollyCursorIsValid(&pCur->pCur) ){
     const u8 *pKey = 0;
     int nKey = 0;
     const u8 *pRec = 0;
     int nRec = 0;
     int cmp;
-    int isDeleted = 0;
+    int isShadowed = 0;
 
     rc = prollyCursorCheckInterrupt(pCur);
     if( rc!=SQLITE_OK ) break;
@@ -403,9 +415,9 @@ static int scanTreeForCustomCollation(
       ProllyMutMapEntry *pEntry = 0;
       rc = prollyMutMapFindScanRc(pCur->pMutMap, pKey, nKey, 0, &pEntry);
       if( rc!=SQLITE_OK ) break;
-      if( pEntry && pEntry->op==PROLLY_EDIT_DELETE ) isDeleted = 1;
+      if( pEntry ) isShadowed = 1;
     }
-    if( !isDeleted ){
+    if( !isShadowed ){
       ProllyCacheEntry *pFull = 0;
       ProllyCursorLevel *pLevel = &pCur->pCur.aLevel[pCur->pCur.iLevel];
       rc = prollyLoadNode(pCur->pCur.pStore, pCur->pCur.pCache,
@@ -430,7 +442,8 @@ static int scanTreeForCustomCollation(
         break;
       }
     }
-    rc = prollyCursorNext(&pCur->pCur);
+    rc = dir<0 ? prollyCursorPrev(&pCur->pCur)
+               : prollyCursorNext(&pCur->pCur);
   }
 
   pCur->pMovetoRec = pRecBuf;
@@ -640,9 +653,11 @@ static int indexMovetoCustomCollation(
   struct TableEntry *pTE;
   ProllyMutMap *pPending;
   ProllyMutMapEntry *pEntry = 0;
-  int cmp = 0;
+  int mutCmp = 0;
+  int treeCmp = 0;
   int treeFound = 0;
   int hasNocaseNul;
+  int dir;
   int rc;
 
   *pDone = 0;
@@ -661,48 +676,50 @@ static int indexMovetoCustomCollation(
   }
   pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
   pPending = pTE ? (ProllyMutMap*)pTE->pPending : 0;
+  if( pPending && pCur->pMutMap!=pPending ){
+    pCur->pMutMap = pPending;
+  }
+  dir = pIdxKey->default_rc<0 ? -1 : 1;
 
   rc = scanMutMapForCustomCollation(
-      pCur, (ProllyMutMap*)pCur->pMutMap, pIdxKey, &pEntry, &cmp);
+      pCur, (ProllyMutMap*)pCur->pMutMap, pIdxKey, dir, &pEntry, &mutCmp);
   if( rc!=SQLITE_OK ) return rc;
-  if( pEntry ){
-    setCursorToMutMapEntryPhys(
-        pCur, (int)(pEntry - pCur->pMutMap->aEntries));
-    pCur->deferredTreeSeek = 1;
-    *pRes = cmp;
-    pIdxKey->eqSeen = 1;
-    *pDone = 1;
-    return SQLITE_OK;
-  }
 
-  if( pPending && pPending!=pCur->pMutMap ){
-    rc = scanMutMapForCustomCollation(
-        pCur, pPending, pIdxKey, &pEntry, &cmp);
-    if( rc!=SQLITE_OK ) return rc;
-    if( pEntry ){
-      const u8 *pVal = pEntry->pVal;
-      int nVal = pEntry->nVal;
-      if( nVal==0 ){
-        rc = cacheCursorPayloadReconstructed(
-            pCur, pEntry->pKey, pEntry->nKey);
-      }else{
-        rc = cacheCursorPayloadCopy(pCur, pVal, nVal);
+  rc = scanTreeForCustomCollation(pCur, pIdxKey, dir, &treeFound, &treeCmp);
+  if( rc!=SQLITE_OK ) return rc;
+
+  if( pEntry ){
+    int useMut = !treeFound;
+    if( treeFound ){
+      const u8 *pTreeKey = 0;
+      int nTreeKey = 0;
+      int nCmp;
+      int keyCmp;
+      prollyCursorKey(&pCur->pCur, &pTreeKey, &nTreeKey);
+      nCmp = nTreeKey < pEntry->nKey ? nTreeKey : pEntry->nKey;
+      keyCmp = memcmp(pTreeKey, pEntry->pKey, nCmp);
+      if( keyCmp==0 ){
+        keyCmp = (nTreeKey < pEntry->nKey) ? -1
+               : (nTreeKey > pEntry->nKey) ? 1 : 0;
       }
-      if( rc!=SQLITE_OK ) return rc;
-      pCur->eState = CURSOR_VALID;
-      *pRes = cmp;
+      if( keyCmp * dir >= 0 ) useMut = 1;
+    }
+    if( useMut ){
+      setCursorToMutMapEntryPhys(
+          pCur, (int)(pEntry - pCur->pMutMap->aEntries));
+      pCur->deferredTreeSeek = 1;
+      pCur->mergeStepDir = (i8)dir;
+      *pRes = mutCmp;
       pIdxKey->eqSeen = 1;
       *pDone = 1;
       return SQLITE_OK;
     }
   }
 
-  rc = scanTreeForCustomCollation(pCur, pIdxKey, &treeFound, &cmp);
-  if( rc!=SQLITE_OK ) return rc;
   if( treeFound ){
     pCur->eState = CURSOR_VALID;
     cacheCurrentTreeStoredPayloadNonIntKey(pCur);
-    *pRes = cmp;
+    *pRes = treeCmp;
     pIdxKey->eqSeen = 1;
     *pDone = 1;
   }
