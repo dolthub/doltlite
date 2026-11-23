@@ -3,6 +3,19 @@
 #include "doltlite_merge_int.h"
 #include "vdbeInt.h"
 
+typedef struct RecField RecField;
+struct RecField { u64 st; int off; int len; };
+
+static const RecField kNullField = { 0, 0, 0 };
+
+typedef struct MergeDefaultFields MergeDefaultFields;
+struct MergeDefaultFields {
+  u8 *pRec;
+  int nRec;
+  RecField *aFields;
+  int nFields;
+};
+
 typedef struct RowMergeCtx RowMergeCtx;
 struct RowMergeCtx {
   sqlite3 *db;
@@ -11,6 +24,7 @@ struct RowMergeCtx {
   sqlite3_stmt *pGeneratedStmt;
   ProllyMutMap *pEdits;
   const MergeRowPolicy *pPolicy;
+  MergeDefaultFields defaults;
   u8 isIntKey;
   MergeIndexInfo *aIndexes;
   int nIndexes;
@@ -31,9 +45,26 @@ static int mergeGeneratedField(Table *pTab, int iField){
   return (pTab->aCol[iCol].colFlags & COLFLAG_STORED)!=0;
 }
 
+static void mergeDefaultField(
+  const MergeDefaultFields *pDef,
+  int iField,
+  const u8 **ppRec,
+  RecField **ppField
+){
+  if( pDef && iField>=0 && iField<pDef->nFields && pDef->aFields[iField].st!=0 ){
+    *ppRec = pDef->pRec;
+    *ppField = &pDef->aFields[iField];
+  }else{
+    *ppRec = 0;
+    *ppField = (RecField*)&kNullField;
+  }
+}
 
-typedef struct RecField RecField;
-struct RecField { u64 st; int off; int len; };
+static void mergeDefaultFieldsFree(MergeDefaultFields *p){
+  sqlite3_free(p->pRec);
+  sqlite3_free(p->aFields);
+  memset(p, 0, sizeof(*p));
+}
 
 static int parseRecordFields(const u8 *pRec, int nRec,
                              RecField **ppFields, int *pnFields){
@@ -192,13 +223,12 @@ static int fieldNumbersEqual(const u8 *pRecA, const RecField *fA,
   return 0;
 }
 
-/* Every field is byte-identical or the same SQLite number. Trailing
-** omitted fields are NULL, matching the cell merge. */
+/* Every field is byte-identical or the same SQLite number. */
 static int recordsNumericallyEqual(
+  const MergeDefaultFields *pDef,
   const u8 *pA, int nA,
   const u8 *pB, int nB
 ){
-  static const RecField kNullField = { 0, 0, 0 };
   RecField *aA = 0, *aB = 0;
   int nFieldA = 0, nFieldB = 0;
   int nField, i;
@@ -210,10 +240,14 @@ static int recordsNumericallyEqual(
   }
   nField = nFieldA>nFieldB ? nFieldA : nFieldB;
   for(i=0; i<nField; i++){
-    const RecField *fA = i<nFieldA ? &aA[i] : &kNullField;
-    const RecField *fB = i<nFieldB ? &aB[i] : &kNullField;
-    if( fieldEquals(pA, fA, pB, fB)!=0
-     && fieldNumbersEqual(pA, fA, pB, fB)==0 ){
+    const u8 *pRecA = pA, *pRecB = pB;
+    RecField *fA, *fB;
+    if( i<nFieldA ){ fA = &aA[i]; }
+    else{ mergeDefaultField(pDef, i, &pRecA, &fA); }
+    if( i<nFieldB ){ fB = &aB[i]; }
+    else{ mergeDefaultField(pDef, i, &pRecB, &fB); }
+    if( fieldEquals(pRecA, fA, pRecB, fB)!=0
+     && fieldNumbersEqual(pRecA, fA, pRecB, fB)==0 ){
       sqlite3_free(aA);
       sqlite3_free(aB);
       return 0;
@@ -243,6 +277,7 @@ static int recordIsNumberOrNull(const u8 *pRec, int nRec){
 }
 
 static int recordsEqualFields(
+  const MergeDefaultFields *pDef,
   const u8 *pA,
   int nA,
   const u8 *pB,
@@ -253,7 +288,6 @@ static int recordsEqualFields(
   int nSkip,
   int *pbEqual
 ){
-  static const RecField nullField = { 0, 0, 0 };
   RecField *aA = 0, *aB = 0;
   int nFieldA = 0, nFieldB = 0;
   int i, j;
@@ -267,13 +301,19 @@ static int recordsEqualFields(
   *pbEqual = 1;
   for(i=0; i<nField; i++){
     int f = aiField[i];
-    const RecField *pFieldA = f<nFieldA ? &aA[f] : &nullField;
-    const RecField *pFieldB = f<nFieldB ? &aB[f] : &nullField;
+    const u8 *pRecA = pA, *pRecB = pB;
+    RecField *pFieldA, *pFieldB;
     for(j=0; j<nSkip; j++){
       if( aiSkip[j]==f ) break;
     }
     if( j<nSkip ) continue;
-    if( fieldEquals(pA, pFieldA, pB, pFieldB)!=0 ){
+    if( f<nFieldA ){ pFieldA = &aA[f]; }
+    else{ mergeDefaultField(pDef, f, &pRecA, &pFieldA); }
+    if( f<nFieldB ){ pFieldB = &aB[f]; }
+    else{ mergeDefaultField(pDef, f, &pRecB, &pFieldB); }
+    if( fieldEquals(pRecA, pFieldA, pRecB, pFieldB)!=0
+     && !((f>=nFieldA || f>=nFieldB)
+          && fieldNumbersEqual(pRecA, pFieldA, pRecB, pFieldB)) ){
       *pbEqual = 0;
       break;
     }
@@ -380,6 +420,7 @@ static int fieldHasUnknownBase(const MergeRowPolicy *pPolicy, int iField){
 static u8 *tryCellMerge(
   Table *pGeneratedTable,
   const MergeRowPolicy *pPolicy,
+  const MergeDefaultFields *pDef,
   const u8 *pBase, int nBase,
   const u8 *pOurs, int nOurs,
   const u8 *pTheirs, int nTheirs,
@@ -403,9 +444,6 @@ static u8 *tryCellMerge(
 
   {
     MergeWinner *winners;
-    /* Past stored width is a missing field. It compares equal to an
-    ** encoded NULL, so an omitted NULL and a stored NULL still merge. */
-    static const RecField kNullField = { 0, 0, 0 };
     int nEmit = 0;
 
     winners = sqlite3_malloc(nfMax * (int)sizeof(*winners));
@@ -417,25 +455,30 @@ static u8 *tryCellMerge(
     }
 
     for(i=0; i<nfMax; i++){
-      RecField *fB = (i<nfBase)   ? &aBase[i]   : (RecField*)&kNullField;
-      RecField *fO = (i<nfOurs)   ? &aOurs[i]   : (RecField*)&kNullField;
-      RecField *fT = (i<nfTheirs) ? &aTheirs[i] : (RecField*)&kNullField;
+      const u8 *pRecB = pBase, *pRecO = pOurs, *pRecT = pTheirs;
+      RecField *fB, *fO, *fT;
       int oursChanged, theirsChanged;
       int j;
       int bDropped = 0;
+      if( i<nfBase ){ fB = &aBase[i]; }
+      else{ mergeDefaultField(pDef, i, &pRecB, &fB); }
+      if( i<nfOurs ){ fO = &aOurs[i]; }
+      else{ mergeDefaultField(pDef, i, &pRecO, &fO); }
+      if( i<nfTheirs ){ fT = &aTheirs[i]; }
+      else{ mergeDefaultField(pDef, i, &pRecT, &fT); }
       for(j=0; pPolicy && j<pPolicy->nDropFields; j++){
         if( pPolicy->aiDropFields[j]!=i ) continue;
         bDropped = 1;
         if( pBase ){
-          const u8 *pSurv = pPolicy->bSchemaIsTheirs ? pTheirs : pOurs;
+          const u8 *pSurv = pPolicy->bSchemaIsTheirs ? pRecT : pRecO;
           RecField *fSurv = pPolicy->bSchemaIsTheirs ? fT : fO;
-          const u8 *pDrop = pPolicy->bSchemaIsTheirs ? pOurs : pTheirs;
+          const u8 *pDrop = pPolicy->bSchemaIsTheirs ? pRecO : pRecT;
           RecField *fDrop = pPolicy->bSchemaIsTheirs ? fO : fT;
           if( !mergeGeneratedField(pGeneratedTable, i)
-           && fieldEquals(pBase, fB, pSurv, fSurv)!=0
-           && !fieldNumbersEqual(pBase, fB, pSurv, fSurv)
-           && (fSurv->st!=0 || (fieldEquals(pBase, fB, pDrop, fDrop)!=0
-               && !fieldNumbersEqual(pBase, fB, pDrop, fDrop))) ){
+           && fieldEquals(pRecB, fB, pSurv, fSurv)!=0
+           && !fieldNumbersEqual(pRecB, fB, pSurv, fSurv)
+           && (fSurv->st!=0 || (fieldEquals(pRecB, fB, pDrop, fDrop)!=0
+               && !fieldNumbersEqual(pRecB, fB, pDrop, fDrop))) ){
             sqlite3_free(winners);
             goto fail;
           }
@@ -461,22 +504,26 @@ static u8 *tryCellMerge(
         oursChanged = 1;
         theirsChanged = 1;
       }else{
-        oursChanged   = fieldEquals(pBase, fB, pOurs, fO)!=0;
-        theirsChanged = fieldEquals(pBase, fB, pTheirs, fT)!=0;
+        oursChanged = fieldEquals(pRecB, fB, pRecO, fO)!=0
+            && !((i>=nfBase || i>=nfOurs)
+                 && fieldNumbersEqual(pRecB, fB, pRecO, fO));
+        theirsChanged = fieldEquals(pRecB, fB, pRecT, fT)!=0
+            && !((i>=nfBase || i>=nfTheirs)
+                 && fieldNumbersEqual(pRecB, fB, pRecT, fT));
       }
 
       if( mergeGeneratedField(pGeneratedTable, i) || !theirsChanged ){
 
-        winners[i].pRec = pOurs; winners[i].pField = fO;
+        winners[i].pRec = pRecO; winners[i].pField = fO;
       }else if(!oursChanged){
 
-        winners[i].pRec = pTheirs; winners[i].pField = fT;
-      }else if( fieldEquals(pOurs, fO, pTheirs, fT)==0
-             || fieldNumbersEqual(pOurs, fO, pTheirs, fT) ){
+        winners[i].pRec = pRecT; winners[i].pField = fT;
+      }else if( fieldEquals(pRecO, fO, pRecT, fT)==0
+             || fieldNumbersEqual(pRecO, fO, pRecT, fT) ){
 
-        winners[i].pRec = pOurs; winners[i].pField = fO;
+        winners[i].pRec = pRecO; winners[i].pField = fO;
       }else if( paKeptBase && pBase && nBase>0 ){
-        winners[i].pRec = pBase; winners[i].pField = fB;
+        winners[i].pRec = pRecB; winners[i].pField = fB;
         (*paKeptBase)[(*pnKeptBase)++] = i;
       }else{
         sqlite3_free(winners); goto fail;
@@ -598,7 +645,6 @@ static int vbSidesDiffer(
   int bR, const u8 *pR, int nR,
   int *pbDiffer
 ){
-  static const RecField kNullField = { 0, 0, 0 };
   RecField *aL = 0, *aR = 0;
   int nfL = 0, nfR = 0, nf, i;
 
@@ -620,13 +666,17 @@ static int vbSidesDiffer(
   }
   nf = nfL>nfR ? nfL : nfR;
   for(i=0; i<nf && !*pbDiffer; i++){
-    const RecField *fL = i<nfL ? &aL[i] : &kNullField;
-    const RecField *fR = i<nfR ? &aR[i] : &kNullField;
+    const u8 *pRecL = pL, *pRecR = pR;
+    RecField *fL, *fR;
     if( !mergeVbRowForces(pRow, i) || mergeGeneratedField(ctx->pGeneratedTable, i) ){
       continue;
     }
-    *pbDiffer = fieldEquals(pL, fL, pR, fR)!=0
-             && !fieldNumbersEqual(pL, fL, pR, fR);
+    if( i<nfL ){ fL = &aL[i]; }
+    else{ mergeDefaultField(&ctx->defaults, i, &pRecL, &fL); }
+    if( i<nfR ){ fR = &aR[i]; }
+    else{ mergeDefaultField(&ctx->defaults, i, &pRecR, &fR); }
+    *pbDiffer = fieldEquals(pRecL, fL, pRecR, fR)!=0
+             && !fieldNumbersEqual(pRecL, fL, pRecR, fR);
   }
   sqlite3_free(aL);
   sqlite3_free(aR);
@@ -664,7 +714,7 @@ static int vbKeepBase(
    && !vbTableKeyless(ctx->pTable) && !mergeVbRowWhole(pForced) ){
     int *aKept = 0;
     int nKept = 0, nMerged = 0;
-    u8 *pMerged = tryCellMerge(ctx->pGeneratedTable, 0,
+    u8 *pMerged = tryCellMerge(ctx->pGeneratedTable, 0, &ctx->defaults,
         p->pBaseVal, p->nBaseVal, p->pOurVal, p->nOurVal,
         p->pTheirVal, p->nTheirVal, pForced, &aKept, &nKept, &nMerged);
     if( !pMerged ) return SQLITE_NOMEM;
@@ -845,7 +895,8 @@ static int rowMergeChange(void *pCtx, const ThreeWayChange *pChange){
         if( (!oursHas && !theirsHas)
          || (!ctx->pTable && pNum && recordIsNumberOrNull(pNum, nNum))
          || (oursHas && theirsHas
-             && recordsNumericallyEqual(pChange->pOurVal, pChange->nOurVal,
+             && recordsNumericallyEqual(&ctx->defaults,
+                                         pChange->pOurVal, pChange->nOurVal,
                                          pChange->pTheirVal,
                                          pChange->nTheirVal)) ){
           break;
@@ -853,7 +904,7 @@ static int rowMergeChange(void *pCtx, const ThreeWayChange *pChange){
       }
 
       pMerged = tryCellMerge(
-          ctx->pGeneratedTable, ctx->pPolicy,
+          ctx->pGeneratedTable, ctx->pPolicy, &ctx->defaults,
           pChange->pBaseVal, pChange->nBaseVal,
           pOurs, nOurs, pTheirs, nTheirs, pForced, 0, 0, &nMerged);
 
@@ -892,6 +943,7 @@ static int rowMergeChange(void *pCtx, const ThreeWayChange *pChange){
         int nSurv = pChange->pOurVal ? pChange->nOurVal : pChange->nTheirVal;
         int bSharedEqual = 0;
         rc = recordsEqualFields(
+            &ctx->defaults,
             pChange->pBaseVal, pChange->nBaseVal,
             pSurv, nSurv, ctx->pPolicy->aiDeleteCompareFields,
             ctx->pPolicy->nDeleteCompareFields,
@@ -1459,115 +1511,6 @@ done:
   return rc;
 }
 
-/* Without column tags a column is matched by name, so a rename onto a name
-** another ancestor column had (a swap, or b->c then a->b) would route the
-** other side's cells into the wrong column. A name that moved slots can
-** also come from dropping and re-adding a column; refuse only when a row the
-** side kept rules that out. Fewer columns are the same trap when the rename
-** took a dropped column's name: the kept cells no longer match that name.
-** Only the incoming side is refused then. The branch that did the rename
-** still accepts the other side's rows, mapped by those cells. */
-int mergePass1CheckRenameReusingColumnName(MergePass1Ctx *c){
-  int side, i, j;
-
-  for(side=0; side<2; side++){
-    SchemaEntry *aRen = side ? c->aTheirsSchema : c->aOursSchema;
-    int nRen = side ? c->nTheirsSchema : c->nOursSchema;
-    SchemaEntry *aOth = side ? c->aOursSchema : c->aTheirsSchema;
-    int nOth = side ? c->nOursSchema : c->nTheirsSchema;
-    struct TableEntry *aRenCat = side ? c->aTheirs : c->aOurs;
-    int nRenCat = side ? c->nTheirs : c->nOurs;
-    struct TableEntry *aOthCat = side ? c->aOurs : c->aTheirs;
-    int nOthCat = side ? c->nOurs : c->nTheirs;
-
-    for(i=0; i<c->nAncSchema; i++){
-      const char *zTable = c->aAncSchema[i].zName;
-      SchemaEntry *pRenSe, *pOthSe;
-      struct TableEntry *pAncCat, *pRenCatEnt, *pOthCatEnt;
-      ParsedColumn *aAncCols = 0, *aRenCols = 0;
-      int nAncCols = 0, nRenCols = 0;
-      const char *zMoved = 0;
-      int bKept = 0;
-      int bReuseDecided = 0;
-      int rc;
-
-      if( !zTable || !c->aAncSchema[i].zType ) continue;
-      if( strcmp(c->aAncSchema[i].zType, "table")!=0 ) continue;
-      pRenSe = findSchemaEntry(aRen, nRen, zTable);
-      pOthSe = findSchemaEntry(aOth, nOth, zTable);
-      if( !pRenSe || !pOthSe || !pRenSe->zSql || !pOthSe->zSql ) continue;
-      if( strcmp(pRenSe->zSql, c->aAncSchema[i].zSql)==0 ) continue;
-      if( strcmp(pRenSe->zSql, pOthSe->zSql)==0 ) continue;
-      pAncCat = doltliteFindTableByName(c->aAnc, c->nAnc, zTable);
-      pRenCatEnt = doltliteFindTableByName(aRenCat, nRenCat, zTable);
-      pOthCatEnt = doltliteFindTableByName(aOthCat, nOthCat, zTable);
-      if( !pAncCat || !pRenCatEnt || !pOthCatEnt ) continue;
-      if( strcmp(pOthSe->zSql, c->aAncSchema[i].zSql)==0
-       && prollyHashCompare(&pAncCat->root, &pOthCatEnt->root)==0 ){
-        continue;
-      }
-      if( parseColumns(c->aAncSchema[i].zSql, &aAncCols, &nAncCols)!=SQLITE_OK ){
-        continue;
-      }
-      if( parseColumns(pRenSe->zSql, &aRenCols, &nRenCols)!=SQLITE_OK ){
-        freeColumns(aAncCols, nAncCols);
-        continue;
-      }
-      if( nRenCols>=nAncCols ){
-        for(j=0; j<nAncCols && !zMoved; j++){
-          int k;
-          if( sqlite3_stricmp(aRenCols[j].zName, aAncCols[j].zName)==0 ) continue;
-          k = parsedColumnIndexByName(aAncCols, nAncCols, aRenCols[j].zName);
-          if( k>=0 && k!=j ) zMoved = aRenCols[j].zName;
-        }
-      }else if( side==1 ){
-        char *zReuse = 0;
-        rc = mergeRenameHoldingDroppedName(
-            c->db, &pAncCat->root, &pRenCatEnt->root,
-            pAncCat->flags, pRenCatEnt->flags,
-            c->aAncSchema[i].zSql, pRenSe->zSql, zTable,
-            0, 0, &zReuse);
-        if( rc!=SQLITE_OK ){
-          freeColumns(aAncCols, nAncCols);
-          freeColumns(aRenCols, nRenCols);
-          return rc;
-        }
-        if( zReuse ){
-          int kReuse = parsedColumnIndexByName(aRenCols, nRenCols, zReuse);
-          sqlite3_free(zReuse);
-          if( kReuse>=0 ){
-            zMoved = aRenCols[kReuse].zName;
-            bKept = 1;
-            bReuseDecided = 1;
-          }
-        }
-      }
-      rc = SQLITE_OK;
-      if( zMoved && !bReuseDecided ){
-        rc = mergeSchemaReusesColumnSlots(c->db,
-            &pAncCat->root, &pRenCatEnt->root,
-            pAncCat->flags, pRenCatEnt->flags,
-            c->aAncSchema[i].zSql, pRenSe->zSql, zTable,
-            strcmp(pOthSe->zSql, c->aAncSchema[i].zSql)==0, &bKept);
-      }
-
-      if( rc==SQLITE_OK && zMoved && c->pzErrMsg && bKept ){
-        sqlite3_free(*c->pzErrMsg);
-        *c->pzErrMsg = sqlite3_mprintf(
-            "cannot %s: table '%s' renames a column to '%s', a name another "
-            "of its columns had, so the column each change belongs to is "
-            "ambiguous; make the same renames on both branches first",
-            c->bBranchMerge ? "merge" : "apply", zTable, zMoved);
-      }
-      freeColumns(aAncCols, nAncCols);
-      freeColumns(aRenCols, nRenCols);
-      if( rc!=SQLITE_OK ) return rc;
-      if( zMoved && bKept ) return SQLITE_ERROR;
-    }
-  }
-  return SQLITE_OK;
-}
-
 /* Other side changed this field in a pre-existing row. Drop vs that
 ** edit is a Dolt conflict; adds/removes and other columns are not. */
 int mergeRowEditsColumn(
@@ -1629,44 +1572,27 @@ int mergeRowEditsColumn(
   return rc==SQLITE_ROW || rc==SQLITE_DONE ? SQLITE_OK : rc;
 }
 
-int canFastMerge(
+static int mergeDefaultFieldsInit(
   sqlite3 *db,
-  const char *zName,
-  int schemaUnchangedBothSides
+  Table *pTab,
+  MergeDefaultFields *pOut
 ){
-  Table *pTab;
-  FKey *pFK;
-  int i;
-
-  if( !schemaUnchangedBothSides ) return 0;
-  if( !zName || !db ) return 0;
-
-  pTab = sqlite3FindTable(db, zName, 0);
-  if( !pTab ) return 0;
-  if( pTab->tabFlags & TF_HasStored ) return 0;
-
-  if( pTab->pIndex ) return 0;
-  if( pTab->pCheck && pTab->pCheck->nExpr>0 ) return 0;
-
-  for(i=0; i<pTab->nCol; i++){
-    Column *pCol = &pTab->aCol[i];
-    if( (pCol->colFlags & COLFLAG_PRIMKEY)!=0 ) continue;
-    if( pCol->notNull!=OE_None ) return 0;
+  int rc;
+  memset(pOut, 0, sizeof(*pOut));
+  rc = mergeDefaultRecordInit(db, pTab, &pOut->pRec, &pOut->nRec);
+  if( rc==SQLITE_OK && pOut->pRec
+   && parseRecordFields(pOut->pRec, pOut->nRec,
+                        &pOut->aFields, &pOut->nFields)<0 ){
+    mergeDefaultFieldsFree(pOut);
+    return SQLITE_NOMEM;
   }
-
-  for(pFK=pTab->u.tab.pFKey; pFK; pFK=pFK->pNextFrom){
-    if( pFK->aAction[0]!=OE_None || pFK->aAction[1]!=OE_None ) return 0;
-  }
-  for(pFK=sqlite3FkReferences(pTab); pFK; pFK=pFK->pNextTo){
-    if( pFK->aAction[0]!=OE_None || pFK->aAction[1]!=OE_None ) return 0;
-  }
-
-  return 1;
+  return rc;
 }
 
 static void freeRowMergeCtx(RowMergeCtx *ctx){
   int i;
   sqlite3_finalize(ctx->pGeneratedStmt);
+  mergeDefaultFieldsFree(&ctx->defaults);
   for(i=0; i<ctx->nConflicts; i++){
     doltliteConflictRowFree(&ctx->aConflicts[i]);
   }
@@ -1728,6 +1654,9 @@ int mergeTableRows(
   if( !ctx.pEdits ) return SQLITE_NOMEM;
   rc = prollyMutMapInit(ctx.pEdits, ctx.isIntKey);
   if( rc!=SQLITE_OK ){ sqlite3_free(ctx.pEdits); return rc; }
+
+  rc = mergeDefaultFieldsInit(db, pTab, &ctx.defaults);
+  if( rc!=SQLITE_OK ) goto merge_err;
 
   for(i=0; i<nIndexes; i++){
     aIndexes[i].pEdits = sqlite3_malloc(sizeof(ProllyMutMap));
