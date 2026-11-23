@@ -216,7 +216,7 @@ int doltlitePartialIndexMatchesRecord(
     if( doltliteColumnIsVirtual(pTab, i) ) continue;
     iField = partialStoredSlot(pTab, pCols, i);
     if( iField<0 || iField>=info.nField ){
-      rc = sqlite3_bind_null(pStmt, iParam);
+      rc = doltliteBindColumnDefault(db, pStmt, iParam, pTab, i);
       iParam++;
       continue;
     }
