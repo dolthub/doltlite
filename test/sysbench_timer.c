@@ -5,6 +5,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
+
+#define WARM_HEAP_CHUNK (1<<20)
+#define WARM_HEAP_CHUNKS 128
 
 typedef struct Str {
   char *z;
@@ -98,6 +104,26 @@ static int exec_sql(sqlite3 *db, const char *sql, const char *label){
   return rc;
 }
 
+/* Without this the timed phase runs on whatever free heap the setup phase
+** happened to leave mapped, so an engine that frees less during setup pays
+** page faults in the timed phase that an engine with more garbage does not. */
+static void pin_heap(void){
+#ifdef __GLIBC__
+  mallopt(M_TRIM_THRESHOLD, 1<<30);
+  mallopt(M_MMAP_THRESHOLD, 32<<20);
+#endif
+}
+
+static void warm_heap(void){
+  static void *a[WARM_HEAP_CHUNKS];
+  int i;
+  for(i=0; i<WARM_HEAP_CHUNKS; i++){
+    a[i] = malloc(WARM_HEAP_CHUNK);
+    if( a[i] ) memset(a[i], 1, WARM_HEAP_CHUNK);
+  }
+  for(i=0; i<WARM_HEAP_CHUNKS; i++) free(a[i]);
+}
+
 int main(int argc, char **argv){
   sqlite3 *db = 0;
   Str setup = {0,0,0};
@@ -106,6 +132,7 @@ int main(int argc, char **argv){
   long long t0, t1;
   int rc;
 
+  pin_heap();
   if( argc!=3 ){
     fprintf(stderr, "usage: %s DB SQL_FILE\n", argv[0]);
     printf("-1\n");
@@ -125,6 +152,7 @@ int main(int argc, char **argv){
     printf("-1\n");
     goto done;
   }
+  warm_heap();
   t0 = now_us();
   if( exec_sql(db, workload.z, "workload")!=SQLITE_OK ){
     printf("-1\n");
