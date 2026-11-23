@@ -55,13 +55,14 @@ void walStateSetOffset(WalState *w, i64 iOffset);
 void walStateSetDataSize(WalState *w, i64 nData);
 
 struct ChunkStore;
-int csReplayWalSkipping(struct ChunkStore *cs, i64 iSkipStart, i64 iSkipEnd);
+int csReplayWalSkipping(struct ChunkStore *cs, i64 iSkipStart, i64 iSkipEnd,
+                        i64 iEnd);
 static inline int csReplayWal(struct ChunkStore *cs){
-  return csReplayWalSkipping(cs, 0, 0);
+  return csReplayWalSkipping(cs, 0, 0, -1);
 }
 int csReplayWalTail(struct ChunkStore *cs, i64 iStart);
 int csTryLoadWalCheckpoint(struct ChunkStore *cs, int *pLoaded,
-                           i64 *pSkipStart, i64 *pSkipEnd);
+                           i64 *pSkipStart, i64 *pSkipEnd, i64 iEnd);
 int csWriteWalCheckpoint(struct ChunkStore *cs, int sectorSize, int *pWritten);
 int csWalCheckpointDue(const struct ChunkStore *cs);
 void csStampWalCheckpoint(const struct ChunkStore *cs, u8 *aManifest);
