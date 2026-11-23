@@ -2797,5 +2797,129 @@ SQL
     ;;
 esac
 
+DB_DFLT1=/tmp/test_merge_dflt1_$$.db; rm -f "$DB_DFLT1"
+$DOLTLITE "$DB_DFLT1" >/dev/null 2>&1 <<'SQL'
+.dbconfig defensive off
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, d INT);
+INSERT INTO t VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300), (4, 40, 400), (5, 50, 500);
+PRAGMA writable_schema=ON;
+UPDATE sqlite_master SET sql='CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, d INT, c INT DEFAULT 42)' WHERE name='t';
+PRAGMA writable_schema=RESET;
+SELECT dolt_commit('-Am', 'base');
+
+SELECT dolt_branch('feat');
+UPDATE t SET a = 11 WHERE id = 1;
+UPDATE t SET a = 21 WHERE id = 2;
+UPDATE t SET c = NULL, d = 301 WHERE id = 3;
+UPDATE t SET a = 41 WHERE id = 4;
+UPDATE t SET c = 77 WHERE id = 5;
+SELECT dolt_commit('-Am', 'main');
+
+SELECT dolt_checkout('feat');
+UPDATE t SET c = NULL, d = 101 WHERE id = 1;
+UPDATE t SET c = 99 WHERE id = 2;
+UPDATE t SET a = 31 WHERE id = 3;
+UPDATE t SET d = 401 WHERE id = 4;
+SELECT dolt_commit('-Am', 'feat');
+
+SELECT dolt_checkout('main');
+SQL
+run_test_match "cell_merge_omitted_default_clean" "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB_DFLT1"
+run_test "cell_merge_omitted_default_set_null" "SELECT a || '|' || d || '|' || quote(c) FROM t WHERE id=1;" "11|101|NULL" "$DB_DFLT1"
+run_test "cell_merge_omitted_default_set_val" "SELECT a || '|' || d || '|' || quote(c) FROM t WHERE id=2;" "21|200|99" "$DB_DFLT1"
+run_test "cell_merge_omitted_default_ours_null" "SELECT a || '|' || d || '|' || quote(c) FROM t WHERE id=3;" "31|301|NULL" "$DB_DFLT1"
+run_test "cell_merge_omitted_default_both_keep" "SELECT a || '|' || d || '|' || quote(c) FROM t WHERE id=4;" "41|401|42" "$DB_DFLT1"
+run_test "cell_merge_omitted_default_one_edits" "SELECT a || '|' || d || '|' || quote(c) FROM t WHERE id=5;" "50|500|77" "$DB_DFLT1"
+
+DB_DFLT2=/tmp/test_merge_dflt2_$$.db; rm -f "$DB_DFLT2"
+$DOLTLITE "$DB_DFLT2" >/dev/null 2>&1 <<'SQL'
+.dbconfig defensive off
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+INSERT INTO t VALUES (1, 10);
+PRAGMA writable_schema=ON;
+UPDATE sqlite_master SET sql='CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, c INT DEFAULT 42)' WHERE name='t';
+PRAGMA writable_schema=RESET;
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feat');
+UPDATE t SET c = 77 WHERE id = 1;
+SELECT dolt_commit('-Am', 'main');
+SELECT dolt_checkout('feat');
+UPDATE t SET c = 99 WHERE id = 1;
+SELECT dolt_commit('-Am', 'feat');
+SELECT dolt_checkout('main');
+SQL
+run_test_error_match "cell_merge_omitted_default_real_conflict" "SELECT dolt_merge('feat');" "conflict" "$DB_DFLT2"
+
+DB_DFLT3=/tmp/test_merge_dflt3_$$.db; rm -f "$DB_DFLT3"
+$DOLTLITE "$DB_DFLT3" >/dev/null 2>&1 <<'SQL'
+.dbconfig defensive off
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, d INT);
+INSERT INTO t VALUES (1, 10, 100), (2, 20, 200);
+PRAGMA writable_schema=ON;
+UPDATE sqlite_master SET sql='CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, d INT, s TEXT DEFAULT ''hello'', r REAL DEFAULT 42.0, f REAL DEFAULT 3.5, b BLOB DEFAULT X''dead'', n INT DEFAULT -7, e TEXT DEFAULT '''', z INT DEFAULT 0)' WHERE name='t';
+PRAGMA writable_schema=RESET;
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feat');
+UPDATE t SET a = 11 WHERE id = 1;
+UPDATE t SET a = 21 WHERE id = 2;
+SELECT dolt_commit('-Am', 'main');
+SELECT dolt_checkout('feat');
+UPDATE t SET d = 101, s = NULL, r = NULL, f = NULL, b = NULL, n = NULL, e = NULL, z = NULL WHERE id = 1;
+UPDATE t SET s = 'world', r = 9.0, f = 1.25, b = X'beef', n = 5, e = 'x', z = 1 WHERE id = 2;
+SELECT dolt_commit('-Am', 'feat');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "cell_merge_omitted_default_types_merge" "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB_DFLT3"
+run_test "cell_merge_omitted_default_types_nulls" "SELECT a || '|' || d || '|' || quote(s) || '|' || quote(r) || '|' || quote(f) || '|' || quote(b) || '|' || quote(n) || '|' || quote(e) || '|' || quote(z) FROM t WHERE id=1;" "11|101|NULL|NULL|NULL|NULL|NULL|NULL|NULL" "$DB_DFLT3"
+run_test "cell_merge_omitted_default_types_vals" "SELECT a || '|' || quote(s) || '|' || r || '|' || f || '|' || hex(b) || '|' || n || '|' || quote(e) || '|' || z FROM t WHERE id=2;" "21|'world'|9.0|1.25|BEEF|5|'x'|1" "$DB_DFLT3"
+
+DB_DFLT4=/tmp/test_merge_dflt4_$$.db; rm -f "$DB_DFLT4"
+$DOLTLITE "$DB_DFLT4" >/dev/null 2>&1 <<'SQL'
+.dbconfig defensive off
+CREATE TABLE t(a INT, id TEXT PRIMARY KEY, d INT) WITHOUT ROWID;
+INSERT INTO t VALUES (10, 'k1', 100), (20, 'k2', 200);
+PRAGMA writable_schema=ON;
+UPDATE sqlite_master SET sql='CREATE TABLE t(a INT, id TEXT PRIMARY KEY, d INT, c INT DEFAULT 42) WITHOUT ROWID' WHERE name='t';
+PRAGMA writable_schema=RESET;
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feat');
+UPDATE t SET a = 11 WHERE id = 'k1';
+UPDATE t SET a = 21 WHERE id = 'k2';
+SELECT dolt_commit('-Am', 'main');
+SELECT dolt_checkout('feat');
+UPDATE t SET c = NULL, d = 101 WHERE id = 'k1';
+UPDATE t SET c = 99 WHERE id = 'k2';
+SELECT dolt_commit('-Am', 'feat');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "cell_merge_omitted_default_without_rowid_merge" "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB_DFLT4"
+run_test "cell_merge_omitted_default_without_rowid_null" "SELECT a || '|' || d || '|' || quote(c) FROM t WHERE id='k1';" "11|101|NULL" "$DB_DFLT4"
+run_test "cell_merge_omitted_default_without_rowid_val" "SELECT a || '|' || d || '|' || quote(c) FROM t WHERE id='k2';" "21|200|99" "$DB_DFLT4"
+
+DB_DFLT5=/tmp/test_merge_dflt5_$$.db; rm -f "$DB_DFLT5"
+$DOLTLITE "$DB_DFLT5" >/dev/null 2>&1 <<'SQL'
+.dbconfig defensive off
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, v INT GENERATED ALWAYS AS (a*2) VIRTUAL, d INT);
+INSERT INTO t(id, a, d) VALUES (1, 10, 100), (2, 20, 200);
+PRAGMA writable_schema=ON;
+UPDATE sqlite_master SET sql='CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, v INT GENERATED ALWAYS AS (a*2) VIRTUAL, d INT, c INT DEFAULT 42)' WHERE name='t';
+PRAGMA writable_schema=RESET;
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feat');
+UPDATE t SET a = 11 WHERE id = 1;
+UPDATE t SET a = 21 WHERE id = 2;
+SELECT dolt_commit('-Am', 'main');
+SELECT dolt_checkout('feat');
+UPDATE t SET c = NULL, d = 101 WHERE id = 1;
+UPDATE t SET c = 99 WHERE id = 2;
+SELECT dolt_commit('-Am', 'feat');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "cell_merge_omitted_default_virtual_col_merge" "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB_DFLT5"
+run_test "cell_merge_omitted_default_virtual_col_null" "SELECT a || '|' || v || '|' || d || '|' || quote(c) FROM t WHERE id=1;" "11|22|101|NULL" "$DB_DFLT5"
+run_test "cell_merge_omitted_default_virtual_col_val" "SELECT a || '|' || v || '|' || d || '|' || quote(c) FROM t WHERE id=2;" "21|42|200|99" "$DB_DFLT5"
+
+rm -f "$DB_DFLT1" "$DB_DFLT2" "$DB_DFLT3" "$DB_DFLT4" "$DB_DFLT5"
+
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95" "$DB96" "$DB97" "$DB98" "$DB99" "$DB100" "$DB101" "$DB102" "$DB103" "$DB104" "$DB105" "$DB106" "$DB107" "$DB108" "$DB109" "$DB110" "$DB111" "$DB112" "$DB113" "$DB114" "$DB115" "$DB116" "$DB117" "$DB118" "$DB119" "$DB120" "$DB121" "$DB122"
 dltest_finish

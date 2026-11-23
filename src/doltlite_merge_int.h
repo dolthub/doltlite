@@ -228,6 +228,7 @@ int mergeRowTable(
   MergePass1Ctx *c, const char *zName, int schemaChanged, int useTheirs,
   sqlite3 **ppSchemaDb, Table **ppTab
 );
+int mergeDefaultRecordInit(sqlite3 *db, Table *pTab, u8 **ppRec, int *pnRec);
 int mergeRebindIndexes(
   MergePass1Ctx *c, MergeIndexInfo *aIdxInfo, int nIdxInfo,
   sqlite3 *pSchemaDb, Table *pTab
