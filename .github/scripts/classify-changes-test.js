@@ -42,9 +42,11 @@ expect(['.github/workflows/benchmark.yml'], ['benchmarks']);
 expect(['test/sysbench_timer.c'], ['suites', 'platforms', 'benchmarks', 'compile']);
 
 expect(['packaging/rust/Cargo.toml'], ['platforms', 'wasm']);
-assert.strictEqual(expect(['packaging/swift/test-xcframework.sh'], ['platforms', 'wasm']).swift, true);
-assert.strictEqual(expect(['packaging/nuget/test-archive.sh'], ['platforms', 'wasm']).swift, false);
-assert.strictEqual(expect(['.github/workflows/swift-xcframework.yml'], ['suites']).swift, true);
+expect(['packaging/swift/test-xcframework.sh'], ['platforms', 'wasm']);
+expect(['packaging/nuget/test-archive.sh'], ['platforms', 'wasm']);
+expect(['.github/workflows/swift-xcframework.yml'], ['suites']);
+expect(['.github/workflows/nightly-macos.yml', '.github/workflows/macos-build.yml',
+  '.github/workflows/macos-test.yml'], ['suites']);
 expect(['.github/workflows/nuget-package.yml'], ['suites', 'platforms']);
 expect(['.dolt-oracle-version'], ['suites']);
 
@@ -79,6 +81,13 @@ function called(file, seen) {
 }
 const reachable = new Set();
 called('pr-ci.yml', reachable);
+const nightly = new Set();
+called('nightly-macos.yml', nightly);
+for (const file of ['macos-build.yml', 'macos-test.yml', 'swift-xcframework.yml']) {
+  assert(nightly.has(file), file + ' has no nightly macOS coverage');
+  assert(!reachable.has(file), file + ' is still in PR CI');
+  checks++;
+}
 for (const file of fs.readdirSync(workflows).filter(name => name.endsWith('.yml'))) {
   if (reachable.has(file)) {
     assert(!OFF_PR_WORKFLOWS.has(file), `${file} runs in PR CI but is classified off-PR`);
@@ -161,15 +170,15 @@ for (const [workflow, job] of Object.entries(SINGLE_JOB)) {
 }
 
 const {spawnSync} = require('child_process');
-const JOB_RESULTS = ['BUILD_UBUNTU', 'TEST_UBUNTU', 'COMPILE_CHECKS', 'TEST_EMBEDDINGS', 'BUILD_MACOS',
-  'TEST_MACOS', 'BUILD_WINDOWS', 'TEST_WINDOWS', 'WINDOWS_SUITES'];
+const JOB_RESULTS = ['BUILD_UBUNTU', 'TEST_UBUNTU', 'COMPILE_CHECKS', 'TEST_EMBEDDINGS',
+  'BUILD_WINDOWS', 'TEST_WINDOWS', 'WINDOWS_SUITES'];
 function gate(paths, results) {
   const c = classify(paths);
   const env = {PATH: process.env.PATH, CLASSIFY: 'success', LIGHT: String(c.light),
     SUITES: String(c.suites), PLATFORMS: String(c.platforms), BENCHMARKS: String(c.benchmarks),
-    COMPILE: String(c.compile), WASM_WANTED: String(c.wasm), SWIFT_WANTED: String(c.swift), DOC_LINKS: 'skipped'};
+    COMPILE: String(c.compile), WASM_WANTED: String(c.wasm), DOC_LINKS: 'skipped'};
   const wanted = {BUILD_UBUNTU: !c.light, TEST_UBUNTU: c.suites || c.platforms || c.benchmarks,
-    COMPILE_CHECKS: c.compile, TEST_EMBEDDINGS: c.wasm || c.swift};
+    COMPILE_CHECKS: c.compile, TEST_EMBEDDINGS: c.wasm};
   for (const job of JOB_RESULTS) {
     env[job] = (wanted[job] ?? c.platforms) ? 'success' : 'skipped';
   }
@@ -185,7 +194,7 @@ assert.strictEqual(gate(['src/btree.c'], {WINDOWS_SUITES: 'skipped'}), 1);
 assert.strictEqual(gate(['test/doltlite_merge.sh'], {TEST_UBUNTU: 'failure'}), 1);
 assert.strictEqual(gate(['doc/doltlite/merge.md'], {DOC_LINKS: 'failure'}), 1);
 assert.strictEqual(gate(['doc/doltlite/merge.md'], {TEST_EMBEDDINGS: 'cancelled'}), 1);
-assert.strictEqual(gate(['.github/workflows/release.yml'], {TEST_EMBEDDINGS: 'skipped'}), 1);
+assert.strictEqual(gate(['.github/workflows/release.yml'], {TEST_EMBEDDINGS: 'skipped'}), 0);
 assert.strictEqual(gate(['ext/wasm/api/sqlite3-api.js'], {TEST_EMBEDDINGS: 'skipped'}), 1);
 assert.strictEqual(gate(['src/btree.c'], {CLASSIFY: 'failure'}), 1);
 

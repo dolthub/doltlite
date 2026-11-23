@@ -154,6 +154,20 @@ def watchdog_arms_on_every_bad_end():
     checks += 1
 
 
+def macos_watchdog_reports_failures():
+    global checks
+    nightly = jobs('nightly-macos.yml')
+    watchdog, _ = nightly['watchdog']
+    needed = re.search(r'^    needs:[ \t]*\[([^\]]*)\]', watchdog, re.M)
+    assert needed, 'the macOS watchdog does not declare what it watches'
+    assert {job.strip() for job in needed[1].split(',')} == set(nightly) - {'watchdog'}
+    assert "if: failure() || (github.event_name == 'schedule' && cancelled())" in watchdog
+    assert 'issues: write' in watchdog
+    assert 'uses: ./.github/actions/report-failure-issue' in watchdog
+    assert 'label: nightly-macos' in watchdog
+    checks += 1
+
+
 for value, expected in (
     ('45', 45),
     ("${{ inputs.platform == 'windows' && 30 || 45 }}", 45),
@@ -168,4 +182,5 @@ seed_budgets()
 scheduled_workflows_report()
 heartbeat_covers_every_watchdog()
 watchdog_arms_on_every_bad_end()
+macos_watchdog_reports_failures()
 print(f'Seed cache budgets and scheduled-workflow reporting: {checks} checks passed')

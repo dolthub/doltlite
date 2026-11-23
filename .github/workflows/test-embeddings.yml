@@ -3,12 +3,6 @@ name: Test embeddings
 on:
   workflow_call:
     inputs:
-      wasm:
-        type: boolean
-        required: true
-      swift:
-        type: boolean
-        required: true
       nuget:
         type: boolean
         required: true
@@ -16,7 +10,6 @@ on:
 jobs:
   linux:
     name: Linux (Node, Wasm and NuGet)
-    if: inputs.wasm
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
@@ -166,8 +159,3 @@ jobs:
         path: |
           ext/wasm/jswasm/*
           ext/wasm/sqlite-wasm-*.zip
-
-  swift:
-    name: Swift
-    if: inputs.swift
-    uses: ./.github/workflows/swift-xcframework.yml
