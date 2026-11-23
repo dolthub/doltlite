@@ -24,12 +24,12 @@ struct ProllyCacheEntry {
   ProllyNode node;
   int nRef;
   u8 bTransient;
-  u8 nEvictChance;
   u8 bScanOnly;
   u8 bAllowPrefix;
   u8 bReadAheadUnused;
   u8 bWideFull;
   u8 bWideRow;
+  u8 bPointInternal;
   void *pBorrow;
   u64 iTouch;
   ProllyCacheEntry *pLruNext;
@@ -45,7 +45,9 @@ struct ProllyCache {
   int nBucket;
   u64 iClock;
   i64 nWideFull;
+  i64 nInternal;
   u32 nReadAheadStarved;
+  u32 nScanHold;
   ProllyCacheEntry **aBucket;
   ProllyCacheEntry lruHead;
   ProllyCacheEntry lruTail;
@@ -55,10 +57,13 @@ struct ProllyCache {
   ProllyCacheEntry wideTail;
   ProllyCacheEntry rowHead;
   ProllyCacheEntry rowTail;
+  ProllyCacheEntry internalHead;
+  ProllyCacheEntry internalTail;
   ProllyStats *pStats;
 };
 
 int prollyCacheInit(ProllyCache *cache, i64 nMaxByte);
+void prollyCacheNotePointRead(ProllyCache *cache, ProllyCacheEntry *entry);
 
 void prollyCacheSetBudget(ProllyCache *cache, i64 nMaxByte);
 void prollyCacheShrink(ProllyCache *cache);
