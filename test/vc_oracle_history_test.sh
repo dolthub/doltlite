@@ -211,7 +211,7 @@ SELECT dolt_checkout('main');
 
 noncurrent_oracle "history_exact_commit_on_sibling_branch_after_reopen" \
   "$NONCURRENT_SETUP" \
-  "SELECT CONCAT('H|', id, '|', v) FROM dolt_history_feature_only WHERE commit_hash = dolt_hashof('feature');" \
+  "SELECT CONCAT('H|', id, '|', v) FROM dolt_history_feature_only('feature') WHERE commit_hash = dolt_hashof('feature');" \
   "SELECT CONCAT('H|', id, '|', v) FROM feature_only AS OF 'feature';"
 
 noncurrent_oracle "history_start_ref_on_sibling_branch_after_reopen" \

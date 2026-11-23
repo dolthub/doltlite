@@ -153,7 +153,8 @@ SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "noncurrent_default_starts_at_head" "SELECT count(*) FROM dolt_history_feature_only;" "0" "$DB"
 run_test "noncurrent_start_ref" "SELECT count(*) FROM dolt_history_feature_only('feature');" "3" "$DB"
-run_test "noncurrent_exact_commit" "SELECT count(*) FROM dolt_history_feature_only WHERE commit_hash=dolt_hashof('feature');" "2" "$DB"
+run_test "noncurrent_exact_commit" "SELECT count(*) FROM dolt_history_feature_only WHERE commit_hash=dolt_hashof('feature');" "0" "$DB"
+run_test "noncurrent_start_ref_exact_commit" "SELECT count(*) FROM dolt_history_feature_only('feature') WHERE commit_hash=dolt_hashof('feature');" "2" "$DB"
 
 rm -f "$DB"
 
@@ -504,6 +505,40 @@ SELECT count(*) FROM dolt_history_z; SELECT count(*) FROM dolt_diff_z;" \
 1
 1
 2" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_hist_reachability_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','c1');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_commit('-A','-m','c2');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+C1=$(echo "SELECT hash FROM dolt_branches WHERE name='main';" | $DOLTLITE "$DB" 2>&1)
+C2=$(echo "SELECT hash FROM dolt_branches WHERE name='feat';" | $DOLTLITE "$DB" 2>&1)
+
+run_test "history_commit_eq_unreachable_from_head" \
+  "SELECT count(*) FROM dolt_history_t WHERE commit_hash='$C2';" "0" "$DB"
+run_test "history_commit_eq_unreachable_from_start_ref" \
+  "SELECT count(*) FROM dolt_history_t('main') WHERE commit_hash='$C2';" "0" "$DB"
+run_test "history_commit_eq_reachable_start_ref_head" \
+  "SELECT count(*) FROM dolt_history_t('feat') WHERE commit_hash='$C2';" "2" "$DB"
+run_test "history_commit_eq_reachable_start_ref_ancestor" \
+  "SELECT count(*) FROM dolt_history_t('feat') WHERE commit_hash='$C1';" "1" "$DB"
+run_test_error_match "history_commit_eq_bad_start_ref" \
+  "SELECT count(*) FROM dolt_history_t('nonexistent_ref') WHERE commit_hash='$C2';" \
+  "ref not found: nonexistent_ref" "$DB"
+run_test_error_match "history_invalid_commit_eq_bad_start_ref" \
+  "SELECT count(*) FROM dolt_history_t('nonexistent_ref') WHERE commit_hash='notahash';" \
+  "ref not found: nonexistent_ref" "$DB"
+run_test_error_match "history_commit_eq_null_start_ref" \
+  "SELECT count(*) FROM dolt_history_t(NULL) WHERE commit_hash='$C2';" \
+  "invalid argument: NULL" "$DB"
+run_test_error_match "history_commit_eq_nul_start_ref" \
+  "SELECT count(*) FROM dolt_history_t('main' || char(0) || 'x') WHERE commit_hash='$C2';" \
+  "contains a NUL byte" "$DB"
 rm -f "$DB"
 
 dltest_finish

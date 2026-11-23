@@ -428,6 +428,48 @@ int doltliteFindAncestor(
   return rc;
 }
 
+int doltliteCommitIsReachable(
+  sqlite3 *db,
+  const ProllyHash *pHead,
+  const ProllyHash *pTarget,
+  int *pReachable
+){
+  DoltliteCommitQueue queue;
+  int rc;
+
+  *pReachable = 0;
+  if( !pHead || !pTarget
+   || prollyHashIsEmpty(pHead) || prollyHashIsEmpty(pTarget) ){
+    return SQLITE_OK;
+  }
+  if( prollyHashCompare(pHead, pTarget)==0 ){
+    *pReachable = 1;
+    return SQLITE_OK;
+  }
+
+  memset(&queue, 0, sizeof(queue));
+  rc = doltliteCommitQueueInit(&queue, pHead);
+  while( rc==SQLITE_OK ){
+    ProllyHash hash;
+    DoltliteCommit commit;
+    int hasHash = 0;
+    rc = doltliteCommitQueueNext(&queue, &hash, &hasHash);
+    if( rc!=SQLITE_OK || !hasHash ) break;
+    if( prollyHashCompare(&hash, pTarget)==0 ){
+      *pReachable = 1;
+      break;
+    }
+    memset(&commit, 0, sizeof(commit));
+    rc = doltliteLoadCommit(db, &hash, &commit);
+    if( rc==SQLITE_OK ){
+      rc = doltliteCommitQueueEnqueueParents(&queue, &commit);
+    }
+    doltliteCommitClear(&commit);
+  }
+  doltliteCommitQueueClear(&queue);
+  return rc;
+}
+
 static void doltMergeBaseFunc(
   sqlite3_context *ctx,
   int argc,
