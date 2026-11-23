@@ -17,10 +17,17 @@
 
 static void cacheTrim(ProllyCache*, i64);
 
-/* Internal nodes outlive leaves and leaf prefixes while they hold less than
-** this share of the budget: a point read that misses one re-reads and
-** re-verifies a chunk a leaf prefix cannot stand in for. */
+/* Internal nodes a point read descended through outlive leaves and leaf
+** prefixes while they hold less than this share of the budget: a point
+** read that misses one re-reads and re-verifies a chunk a leaf prefix
+** cannot stand in for. A scan passes each internal node once, so the ones
+** only scans touched stay with the leaves and leave the budget to the
+** prefixes a repeated scan reuses. For the same reason a scan larger than
+** the cache puts them back behind prefixes for the next
+** PROLLY_CACHE_SCAN_HOLD lookups: point reads between its runs must not push
+** out its prefixes. */
 #define PROLLY_CACHE_INTERNAL_DIV 4
+#define PROLLY_CACHE_SCAN_HOLD 16384
 
 static int cacheHashBucket(const ProllyCache *cache, const ProllyHash *hash){
   u32 h;
@@ -38,7 +45,7 @@ static void lruRemove(ProllyCacheEntry *pEntry){
 /* Packed prefixes share the prefix LRU; decoded buffers can be discarded
 ** without losing the packed copy. */
 static ProllyCacheEntry *lruHeadFor(ProllyCache *cache, ProllyCacheEntry *p){
-  return p->node.level>0 ? &cache->internalHead
+  return p->bPointInternal ? &cache->internalHead
        : p->pPacked ? (p->pData ? &cache->lruHead : &cache->prefixHead)
        : p->node.nValuePrefix ? (p->bWideRow ? &cache->rowHead : &cache->prefixHead)
        : p->bWideFull ? &cache->wideHead : &cache->lruHead;
@@ -74,7 +81,7 @@ static void cacheEntryFreeData(ProllyCacheEntry *p){
 ** keep it ahead of cached prefixes. */
 static void cacheNoteEvicted(ProllyCache *cache, ProllyCacheEntry *p){
   if( p->bReadAheadUnused ) cache->nReadAheadStarved = 64;
-  if( p->node.level>0 ) cache->nInternal -= cacheEntryBytes(p);
+  if( p->bPointInternal ) cache->nInternal -= cacheEntryBytes(p);
 }
 
 static void cacheWideForget(ProllyCache *cache, ProllyCacheEntry *p){
@@ -208,6 +215,8 @@ static ProllyCacheEntry *cacheGet(
   ProllyCache *cache, const ProllyHash *hash, int bScan, int bPrefix
 ){
   ProllyCacheEntry *pEntry = cacheFind(cache, hash);
+  if( bScan ) cache->nScanHold = PROLLY_CACHE_SCAN_HOLD;
+  else if( cache->nScanHold ) cache->nScanHold--;
   if( !pEntry ) return 0;
   if( pEntry->node.nValuePrefix && !bPrefix ) return 0;
   if( pEntry->pPacked && !pEntry->pData ){
@@ -689,12 +698,14 @@ static ProllyCacheEntry *cacheInternalCandidate(ProllyCache *cache){
 
 static ProllyCacheEntry *cacheEvictOne(ProllyCache *cache){
   ProllyCacheEntry *pEntry = 0;
-  if( cache->nInternal>cache->nMaxByte/PROLLY_CACHE_INTERNAL_DIV ){
+  if( !cache->nScanHold
+   && cache->nInternal>cache->nMaxByte/PROLLY_CACHE_INTERNAL_DIV ){
     pEntry = cacheInternalCandidate(cache);
   }
   if( !pEntry ){
     ProllyCacheEntry *pRow = cacheRowCandidate(cache);
     pEntry = cacheOldestUnpinned(&cache->lruHead, &cache->lruTail);
+    if( !pEntry && cache->nScanHold ) pEntry = cacheInternalCandidate(cache);
     if( pRow && (!pEntry || pRow->iTouch<pEntry->iTouch) ){
       pEntry = pRow;
     }else if( !pEntry ){
@@ -772,7 +783,7 @@ static void cacheTrim(ProllyCache *cache, i64 nMaxByte){
   if( cache->nByte>nMaxByte && cache->nWideFull>0 ){
     cacheDrainWide(cache, 0, nMaxByte);
   }
-  while( cache->nByte>nMaxByte
+  while( cache->nByte>nMaxByte && !cache->nScanHold
       && cache->nInternal>nMaxByte/PROLLY_CACHE_INTERNAL_DIV ){
     ProllyCacheEntry *pOld = cacheInternalCandidate(cache);
     if( !pOld ) break;
@@ -782,6 +793,10 @@ static void cacheTrim(ProllyCache *cache, i64 nMaxByte){
     ProllyCacheEntry *pEntry = cache->lruTail.pLruPrev;
     int nVisit = cache->nUsed;
     if( pass==1 ){
+      if( cache->nScanHold ){
+        cacheTrimList(cache, &cache->internalHead, &cache->internalTail,
+                      nMaxByte);
+      }
       cacheTrimList(cache, &cache->rowHead, &cache->rowTail, nMaxByte);
       cacheTrimList(cache, &cache->prefixHead, &cache->prefixTail, nMaxByte);
       cacheTrimList(cache, &cache->internalHead, &cache->internalTail,
@@ -980,9 +995,18 @@ static ProllyCacheEntry *cacheInsert(
 
   cache->nUsed++;
   cache->nByte += cacheEntryBytes(pEntry);
-  if( pEntry->node.level>0 ) cache->nInternal += cacheEntryBytes(pEntry);
   cacheTrim(cache, cache->nMaxByte);
   return pEntry;
+}
+
+void prollyCacheNotePointRead(ProllyCache *cache, ProllyCacheEntry *entry){
+  if( entry->node.level==0 || entry->bPointInternal || entry->bTransient ){
+    return;
+  }
+  lruRemove(entry);
+  entry->bPointInternal = 1;
+  cache->nInternal += cacheEntryBytes(entry);
+  lruInsertHead(cache, entry);
 }
 
 ProllyCacheEntry *prollyCachePutOwned(

@@ -6,8 +6,12 @@
 #include <assert.h>
 
 static void cacheNoteLargeScan(ProllyCacheEntry *pEntry, ProllyCursor *cur){
-  if( cur->bLargeScan ) pEntry->bScanOnly |= PROLLY_CACHE_SCAN_ONLY;
-  else pEntry->bScanOnly &= (u8)~PROLLY_CACHE_SCAN_ONLY;
+  if( cur->bLargeScan ){
+    pEntry->bScanOnly |= PROLLY_CACHE_SCAN_ONLY;
+  }else{
+    pEntry->bScanOnly &= (u8)~PROLLY_CACHE_SCAN_ONLY;
+    prollyCacheNotePointRead(cur->pCache, pEntry);
+  }
   if( cur->bDropScan ) pEntry->bScanOnly |= PROLLY_CACHE_SCAN_DROP;
 }
 
@@ -57,6 +61,7 @@ static ProllyCacheEntry *cursorCachedNode(
       ? prollyCacheGetPrefix(cur->pCache, pHash, cur->bLargeScan)
       : cur->bLargeScan ? prollyCacheGetForScan(cur->pCache, pHash)
                         : prollyCacheGet(cur->pCache, pHash);
+  if( pEntry && !cur->bLargeScan ) prollyCacheNotePointRead(cur->pCache, pEntry);
   if( pEntry && cur->bAllowPrefix ) pEntry->bAllowPrefix = 1;
   if( pEntry && cur->bWriteScan ) pEntry->bScanOnly |= PROLLY_CACHE_SCAN_KEEP;
   return pEntry;

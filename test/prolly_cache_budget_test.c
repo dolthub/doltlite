@@ -1348,13 +1348,30 @@ static ProllyCacheEntry *putInternalNode(ProllyCache *pCache, int id){
   return prollyCachePutOwned(pCache, &hash, pData, nData, &rc);
 }
 
+static ProllyCacheEntry *putPointInternalNode(ProllyCache *pCache, int id){
+  ProllyCacheEntry *p = putInternalNode(pCache, id);
+  if( p ) prollyCacheNotePointRead(pCache, p);
+  return p;
+}
+
 static void testInternalNodes(void){
   ProllyCache cache;
   ProllyCacheEntry *p;
   ProllyCacheEntry *aPinned[4];
   int i;
-  check("init internal node cache", prollyCacheInit(&cache, 16384)==SQLITE_OK);
+  check("init scan internal cache", prollyCacheInit(&cache, 16384)==SQLITE_OK);
   p = putInternalNode(&cache, 1);
+  if( p ) prollyCacheRelease(&cache, p);
+  for(i=2; i<40; i++){
+    p = putNode(&cache, i, 1200);
+    if( p ) prollyCacheRelease(&cache, p);
+  }
+  check("internal node no point read used goes with the leaves",
+      !hasNode(&cache, 1) && cache.nInternal==0);
+  prollyCacheFree(&cache);
+
+  check("init internal node cache", prollyCacheInit(&cache, 16384)==SQLITE_OK);
+  p = putPointInternalNode(&cache, 1);
   check("cache internal node", p!=0);
   if( !p ){ prollyCacheFree(&cache); return; }
   prollyCacheRelease(&cache, p);
@@ -1369,7 +1386,7 @@ static void testInternalNodes(void){
   check("internal preference stays within budget", cache.nByte<=16384
       && cache.nByte==cacheBytes(&cache));
   for(i=200; i<206; i++){
-    p = putInternalNode(&cache, i);
+    p = putPointInternalNode(&cache, i);
     check("insert internal node under pressure", p!=0);
     if( p ) prollyCacheRelease(&cache, p);
   }
@@ -1384,7 +1401,7 @@ static void testInternalNodes(void){
 
   check("init all-internal cache", prollyCacheInit(&cache, 4096)==SQLITE_OK);
   for(i=80; i<100; i++){
-    p = putInternalNode(&cache, i);
+    p = putPointInternalNode(&cache, i);
     check("all-internal cache admits nodes", p!=0);
     if( p ) prollyCacheRelease(&cache, p);
   }
