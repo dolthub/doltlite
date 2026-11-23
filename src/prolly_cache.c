@@ -966,7 +966,7 @@ static ProllyCacheEntry *cacheInsert(
 
   pEntry->nEvictChance = pEntry->node.level>0
                       ? PROLLY_CACHE_INTERNAL_CHANCES : 0;
-  if( cache->nUsed/2>=cache->nBucket && cache->nBucket<0x40000000
+  if( cache->nUsed>=cache->nBucket/2 && cache->nBucket<0x40000000
       && (i64)cache->nBucket*2*sizeof(*cache->aBucket)<=cache->nMaxByte/16 ){
     cacheRehash(cache, cache->nBucket*2);
   }
