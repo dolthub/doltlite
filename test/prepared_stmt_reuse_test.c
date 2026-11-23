@@ -892,6 +892,135 @@ static void test_custom_collation_eq_lookup(void){
   remove(zPath);
 }
 
+static void collectNullableIntRows(
+  sqlite3_stmt *pStmt,
+  char *zOut,
+  size_t nOut
+){
+  size_t n = 0;
+  zOut[0] = 0;
+  while( sqlite3_step(pStmt)==SQLITE_ROW ){
+    int w;
+    if( sqlite3_column_type(pStmt, 0)==SQLITE_NULL ){
+      w = snprintf(zOut + n, nOut - n, "%sNULL", n ? " " : "");
+    }else{
+      w = snprintf(zOut + n, nOut - n, "%s%d", n ? " " : "",
+                   sqlite3_column_int(pStmt, 0));
+    }
+    if( w>0 && n + (size_t)w < nOut ) n += (size_t)w;
+  }
+}
+
+static void test_save_cursor_deferred_merged_seek(void){
+  const char *zPath = "save_cursor_deferred_seek.db";
+  sqlite3 *db = 0;
+  sqlite3_stmt *st = 0;
+  char zOut[256];
+  int rc;
+
+  remove(zPath);
+  rc = sqlite3_open(zPath, &db);
+  check("deferred_seek_save: open", rc==SQLITE_OK);
+
+  execSql(db, "CREATE TABLE y(k INT); INSERT INTO y VALUES(0),(1);");
+
+  /* Case 1: delete-masked intKey (pCur->pCur invalid) on reverse scan. */
+  execSql(db, "CREATE TABLE t1(id INTEGER PRIMARY KEY, v INT)");
+  execSql(db, "INSERT INTO t1 VALUES(1, 10),(2, 20),(3, 30),(5, 50)");
+  rc = sqlite3_prepare_v2(db,
+      "SELECT t1.id FROM t1 CROSS JOIN y WHERE t1.id <= 3 ORDER BY t1.id DESC",
+      -1, &st, 0);
+  check("deferred_seek_save: prepare delete-masked desc", rc==SQLITE_OK);
+  check("deferred_seek_save: delete-masked desc step 1",
+        sqlite3_step(st)==SQLITE_ROW);
+  check_int("deferred_seek_save: delete-masked desc row 1",
+            sqlite3_column_int(st, 0), 3);
+  execSql(db, "BEGIN");
+  execSql(db, "DELETE FROM t1 WHERE id = 3");
+  check("deferred_seek_save: delete-masked desc step 2",
+        sqlite3_step(st)==SQLITE_ROW);
+  check("deferred_seek_save: delete-masked desc row 2 null",
+        sqlite3_column_type(st, 0)==SQLITE_NULL);
+  execSql(db, "INSERT INTO t1 VALUES(10, 100)");
+  collectNullableIntRows(st, zOut, sizeof(zOut));
+  check_str("deferred_seek_save: delete-masked desc rest", zOut, "2 2 1 1");
+  sqlite3_finalize(st);
+  execSql(db, "ROLLBACK");
+
+  /* Case 2: delete-masked first row on forward scan. */
+  execSql(db, "CREATE TABLE t1f(id INTEGER PRIMARY KEY, v INT)");
+  execSql(db, "INSERT INTO t1f VALUES(3, 30),(5, 50)");
+  rc = sqlite3_prepare_v2(db,
+      "SELECT t1f.id FROM t1f CROSS JOIN y ORDER BY t1f.id ASC",
+      -1, &st, 0);
+  check("deferred_seek_save: prepare delete-masked asc", rc==SQLITE_OK);
+  check("deferred_seek_save: delete-masked asc step 1",
+        sqlite3_step(st)==SQLITE_ROW);
+  check_int("deferred_seek_save: delete-masked asc row 1",
+            sqlite3_column_int(st, 0), 3);
+  execSql(db, "BEGIN");
+  execSql(db, "DELETE FROM t1f WHERE id = 3");
+  check("deferred_seek_save: delete-masked asc step 2",
+        sqlite3_step(st)==SQLITE_ROW);
+  check("deferred_seek_save: delete-masked asc row 2 null",
+        sqlite3_column_type(st, 0)==SQLITE_NULL);
+  execSql(db, "INSERT INTO t1f VALUES(10, 100)");
+  collectNullableIntRows(st, zOut, sizeof(zOut));
+  check_str("deferred_seek_save: delete-masked asc rest", zOut, "5 5 10 10");
+  sqlite3_finalize(st);
+  execSql(db, "ROLLBACK");
+
+  /* Case 3: absent intKey (tree cursor at neighbor > intKey) on forward scan. */
+  execSql(db, "CREATE TABLE t2(id INTEGER PRIMARY KEY, v INT)");
+  execSql(db, "INSERT INTO t2 VALUES(1, 10),(2, 20),(3, 30),(5, 50)");
+  rc = sqlite3_prepare_v2(db,
+      "SELECT t2.id FROM t2 CROSS JOIN y WHERE t2.id >= 3 ORDER BY t2.id ASC",
+      -1, &st, 0);
+  check("deferred_seek_save: prepare absent asc", rc==SQLITE_OK);
+  check("deferred_seek_save: absent asc step 1",
+        sqlite3_step(st)==SQLITE_ROW);
+  check_int("deferred_seek_save: absent asc row 1",
+            sqlite3_column_int(st, 0), 3);
+  execSql(db, "DELETE FROM t2 WHERE id = 3");
+  execSql(db, "BEGIN");
+  execSql(db, "INSERT INTO t2 VALUES(10, 100)");
+  check("deferred_seek_save: absent asc step 2",
+        sqlite3_step(st)==SQLITE_ROW);
+  check("deferred_seek_save: absent asc row 2 null",
+        sqlite3_column_type(st, 0)==SQLITE_NULL);
+  execSql(db, "INSERT INTO t2 VALUES(11, 110)");
+  collectNullableIntRows(st, zOut, sizeof(zOut));
+  check_str("deferred_seek_save: absent asc rest", zOut, "5 5 10 10 11 11");
+  sqlite3_finalize(st);
+  execSql(db, "ROLLBACK");
+
+  /* Case 4: absent intKey (tree cursor at neighbor > intKey) on reverse scan. */
+  execSql(db, "INSERT INTO t2 VALUES(3, 30)");
+  rc = sqlite3_prepare_v2(db,
+      "SELECT t2.id FROM t2 CROSS JOIN y WHERE t2.id <= 3 ORDER BY t2.id DESC",
+      -1, &st, 0);
+  check("deferred_seek_save: prepare absent desc", rc==SQLITE_OK);
+  check("deferred_seek_save: absent desc step 1",
+        sqlite3_step(st)==SQLITE_ROW);
+  check_int("deferred_seek_save: absent desc row 1",
+            sqlite3_column_int(st, 0), 3);
+  execSql(db, "DELETE FROM t2 WHERE id = 3");
+  execSql(db, "BEGIN");
+  execSql(db, "INSERT INTO t2 VALUES(10, 100)");
+  check("deferred_seek_save: absent desc step 2",
+        sqlite3_step(st)==SQLITE_ROW);
+  check("deferred_seek_save: absent desc row 2 null",
+        sqlite3_column_type(st, 0)==SQLITE_NULL);
+  execSql(db, "INSERT INTO t2 VALUES(4, 40)");
+  collectNullableIntRows(st, zOut, sizeof(zOut));
+  check_str("deferred_seek_save: absent desc rest", zOut, "2 2 1 1");
+  sqlite3_finalize(st);
+  execSql(db, "ROLLBACK");
+
+  sqlite3_close(db);
+  remove(zPath);
+}
+
 int main(int argc, char **argv){
   TestTempDir temp;
   if( !testTempDirSetup(&temp) ){
@@ -943,6 +1072,9 @@ int main(int argc, char **argv){
 
   printf("--- custom collation equality lookup ---\n");
   test_custom_collation_eq_lookup();
+
+  printf("--- saveCursorPosition with deferredMergedSeek ---\n");
+  test_save_cursor_deferred_merged_seek();
 
   check("temporary directory cleanup", testTempDirCleanup(&temp));
   printf("\n=== Results: %d passed, %d failed ===\n", nPass, nFail);
