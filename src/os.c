@@ -266,6 +266,12 @@ int sqlite3OsReplaceFile(
 #if SQLITE_OS_WIN \
  || (SQLITE_OS_UNIX && !defined(SQLITE_WASM) && !defined(__EMSCRIPTEN__))
   return sqlite3OsReplaceFileNative(pVfs, zTmp, zDest, pRetainTmp);
+#elif defined(SQLITE_WASM) || defined(__EMSCRIPTEN__)
+  UNUSED_PARAMETER(pVfs);
+  UNUSED_PARAMETER(zTmp);
+  UNUSED_PARAMETER(zDest);
+  *pRetainTmp = 0;
+  return SQLITE_NOTFOUND;
 #else
   sqlite3_file *pIn = 0;
   sqlite3_file *pOut = 0;

@@ -697,6 +697,26 @@ static int csOpen(
         return rc;
       }
     }
+#if defined(SQLITE_WASM) || defined(__EMSCRIPTEN__)
+    {
+      int pending = 0;
+      rc = csWasmReplacementPending(cs, &pending);
+      if( rc==SQLITE_OK && pending && deferBusy && !cs->readOnly ){
+        rc = csReadUnlock(cs, pReadLock);
+        if( rc==SQLITE_OK ) rc = csWasmRecoverReplacement(cs);
+        if( rc==SQLITE_OK ) rc = csReadLock(cs, pReadLock);
+        if( rc==SQLITE_OK ) rc = csWasmReplacementPending(cs, &pending);
+      }
+      if( rc==SQLITE_OK && pending ){
+        rc = cs->readOnly ? SQLITE_READONLY_RECOVERY : SQLITE_BUSY_RECOVERY;
+      }
+      if( rc!=SQLITE_OK ){
+        csReadUnlock(cs, pReadLock);
+        chunkStoreClose(cs);
+        return rc;
+      }
+    }
+#endif
     rc = csReadManifest(cs);
     /* Stock defers NOTADB until first use; keep the garbage bytes. */
     if( rc==SQLITE_NOTADB ){

@@ -1433,6 +1433,9 @@ chunk_store.o:	$(TOP)/src/chunk_store.c $(TOP)/src/chunk_store_int.h $(DEPS_OBJ_
 chunk_store_lock.o:	$(TOP)/src/chunk_store_lock.c $(TOP)/src/chunk_store_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/chunk_store_lock.c
 
+chunk_store_replace.o:	$(TOP)/src/chunk_store_replace.c $(TOP)/src/chunk_store_int.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/chunk_store_replace.c
+
 chunk_store_refs_api.o:	$(TOP)/src/chunk_store_refs_api.c $(TOP)/src/chunk_store_int.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/chunk_store_refs_api.c
 
