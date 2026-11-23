@@ -412,44 +412,6 @@ static int blameCollectLiveRows(
   return SQLITE_OK;
 }
 
-static int blameSeekRowInTree(
-  ChunkStore *cs,
-  ProllyCache *pCache,
-  const ProllyHash *pRoot,
-  u8 flags,
-  const BlameRow *pRow,
-  const u8 **ppVal,
-  int *pnVal,
-  int *pFound
-){
-  ProllyCursor cur;
-  int res, rc;
-
-  *ppVal = 0;
-  *pnVal = 0;
-  *pFound = 0;
-
-  if( prollyHashIsEmpty(pRoot) ) return SQLITE_OK;
-  prollyCursorInit(&cur, cs, pCache, pRoot, flags);
-
-  if( flags & PROLLY_NODE_INTKEY ){
-    rc = prollyCursorSeekInt(&cur, pRow->intKey, &res);
-  }else{
-    rc = prollyCursorSeekBlob(&cur, pRow->pKey, pRow->nKey, &res);
-  }
-  if( rc!=SQLITE_OK ){ prollyCursorClose(&cur); return rc; }
-
-  if( res!=0 || !prollyCursorIsValid(&cur) ){
-    prollyCursorClose(&cur);
-    return SQLITE_OK;
-  }
-
-  *pFound = 1;
-  prollyCursorValue(&cur, ppVal, pnVal);
-  prollyCursorClose(&cur);
-  return SQLITE_OK;
-}
-
 static int blameBlobKeyCmp(
   const u8 *pA, int nA,
   const u8 *pB, int nB
@@ -630,7 +592,7 @@ static int blameCompareAgainstRef(
   int haveRef = 0;
   int refCurOpen = 0;
   int refCurValid = 0;
-  int canScanRef = 0;
+  int canCompareRef = 0;
   int rc = SQLITE_OK;
   int i;
 
@@ -646,15 +608,29 @@ static int blameCompareAgainstRef(
     }
   }
 
-  if( haveRef && pCurRoot && curFlags==refFlags
+  canCompareRef = haveRef
+      && pCurRoot
+      && !prollyHashIsEmpty(&refRoot)
+      && ((refFlags & PROLLY_NODE_INTKEY)==(curFlags & PROLLY_NODE_INTKEY));
+  if( !canCompareRef ){
+    for(i=0; i<pCur->nRows; i++){
+      BlameRow *r = &pCur->aRows[i];
+      if( r->blamed ) continue;
+      rc = blameResolveRow(r, pCommitHash, pCommit);
+      if( rc!=SQLITE_OK ) return rc;
+      pCur->nUnresolved--;
+    }
+    return SQLITE_OK;
+  }
+
+  if( curFlags==refFlags
    && prollyHashCompare(&refSchemaHash, pCurSchemaHash)!=0 ){
     rc = blameLoadDiffLayout(db, zTableName, pRefCatHash, &refSchemaHash,
                              pCurCatHash, pCurSchemaHash, &layout);
     if( rc!=SQLITE_OK ) return rc;
   }
 
-  if( haveRef && pCurRoot
-   && curFlags==refFlags
+  if( curFlags==refFlags
    && !layout.nSlot
    && prollyHashCompare(pCurRoot, &refRoot)==0 ){
     return SQLITE_OK;
@@ -663,7 +639,7 @@ static int blameCompareAgainstRef(
   /* After crossing a layout change the fallback's working records may
   ** use different slots than the historical pair. */
   if( layout.nSlot ) pCur->changedLayout = 1;
-  if( haveRef && pCurRoot && (!pCur->rebuiltKeyVals || pCur->changedLayout) ){
+  if( !pCur->rebuiltKeyVals || pCur->changedLayout ){
     int done = 0;
     rc = blameCompareByDiff(db, pCur, &refRoot, refFlags,
                 pCurRoot, curFlags, pCommitHash, pCommit, &layout, &done);
@@ -672,11 +648,9 @@ static int blameCompareAgainstRef(
     if( done ) return SQLITE_OK;
     if( pCur->nUnresolved<=0 ) return SQLITE_OK;
   }
+  doltliteDiffLayoutClear(&layout);
 
-  canScanRef = haveRef
-      && !prollyHashIsEmpty(&refRoot)
-      && ((refFlags & PROLLY_NODE_INTKEY)==(curFlags & PROLLY_NODE_INTKEY));
-  if( canScanRef ){
+  {
     int res = 0;
     BlameRow *r;
     for(i=0; i<pCur->nRows && pCur->aRows[i].blamed; i++){}
@@ -702,27 +676,19 @@ static int blameCompareAgainstRef(
     const u8 *pRefEff;
     int nRefEff;
     int equal;
+    int cmp = 1;
     if( r->blamed ) continue;
 
-    if( haveRef ){
-      if( canScanRef ){
-        int cmp = 1;
-        while( refCurValid ){
-          cmp = blameCursorCompareRowKey(&refCur, refFlags, r);
-          if( cmp>=0 ) break;
-          rc = prollyCursorNext(&refCur);
-          if( rc!=SQLITE_OK ) goto blame_compare_done;
-          refCurValid = prollyCursorIsValid(&refCur);
-        }
-        if( refCurValid && cmp==0 ){
-          refFound = 1;
-          prollyCursorValue(&refCur, &pRefVal, &nRefVal);
-        }
-      }else{
-        rc = blameSeekRowInTree(cs, pCache, &refRoot, refFlags, r,
-                                &pRefVal, &nRefVal, &refFound);
-        if( rc!=SQLITE_OK ) goto blame_compare_done;
-      }
+    while( refCurValid ){
+      cmp = blameCursorCompareRowKey(&refCur, refFlags, r);
+      if( cmp>=0 ) break;
+      rc = prollyCursorNext(&refCur);
+      if( rc!=SQLITE_OK ) goto blame_compare_done;
+      refCurValid = prollyCursorIsValid(&refCur);
+    }
+    if( refCurValid && cmp==0 ){
+      refFound = 1;
+      prollyCursorValue(&refCur, &pRefVal, &nRefVal);
     }
 
     /* Rebuild the ref's all-column-PK empty value from the key too, or it
