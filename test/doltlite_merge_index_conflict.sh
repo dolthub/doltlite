@@ -702,6 +702,121 @@ check "sortequal_unique_only_table_conflict" "t:1
 1:Abc:2
 ok" "$out"
 
+DB="$TMPROOT/short_default_normal.db"
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+.dbconfig defensive off
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+INSERT INTO t VALUES (1, 10);
+PRAGMA writable_schema=ON;
+UPDATE sqlite_master SET sql='CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT DEFAULT 42)' WHERE name='t';
+PRAGMA writable_schema=RESET;
+CREATE INDEX idx_b ON t(b);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES (2, 20, 99);
+SELECT dolt_commit('-Am', 'main insert');
+SELECT dolt_checkout('feat');
+DELETE FROM t WHERE id = 1;
+SELECT dolt_commit('-Am', 'feat delete');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+EOF
+out=$("$DOLTLITE" "$DB" "SELECT count(*) FROM t INDEXED BY idx_b WHERE b = 42; PRAGMA integrity_check;")
+check "short_default_normal_index" "0
+ok" "$out"
+
+DB="$TMPROOT/short_default_expr_partial.db"
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+.dbconfig defensive off
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, v INT AS (a * 2) VIRTUAL);
+INSERT INTO t(id, a) VALUES (1, 10);
+PRAGMA writable_schema=ON;
+UPDATE sqlite_master SET sql='CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, v INT AS (a * 2) VIRTUAL, b INT DEFAULT 42)' WHERE name='t';
+PRAGMA writable_schema=RESET;
+CREATE INDEX idx_expr ON t(b + 1);
+CREATE INDEX idx_vb ON t(v + b);
+CREATE INDEX idx_part ON t(a) WHERE b = 42;
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feat');
+INSERT INTO t(id, a, b) VALUES (2, 20, 99);
+SELECT dolt_commit('-Am', 'main insert');
+SELECT dolt_checkout('feat');
+DELETE FROM t WHERE id = 1;
+SELECT dolt_commit('-Am', 'feat delete');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+EOF
+out=$("$DOLTLITE" "$DB" "SELECT count(*) FROM t INDEXED BY idx_expr WHERE (b + 1) = 43;
+SELECT count(*) FROM t INDEXED BY idx_vb WHERE (v + b) = 62;
+SELECT count(*) FROM t INDEXED BY idx_part WHERE b = 42 AND a = 10;
+PRAGMA integrity_check;")
+check "short_default_expr_partial_virtual" "0
+0
+0
+ok" "$out"
+
+DB="$TMPROOT/short_default_without_rowid.db"
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+.dbconfig defensive off
+CREATE TABLE t(k TEXT PRIMARY KEY, a INT) WITHOUT ROWID;
+INSERT INTO t VALUES ('k1', 10);
+PRAGMA writable_schema=ON;
+UPDATE sqlite_master SET sql='CREATE TABLE t(k TEXT PRIMARY KEY, a INT, b INT DEFAULT 42) WITHOUT ROWID' WHERE name='t';
+PRAGMA writable_schema=RESET;
+CREATE INDEX idx_b ON t(b);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES ('k2', 20, 99);
+SELECT dolt_commit('-Am', 'main insert');
+SELECT dolt_checkout('feat');
+DELETE FROM t WHERE k = 'k1';
+SELECT dolt_commit('-Am', 'feat delete');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+EOF
+out=$("$DOLTLITE" "$DB" "SELECT count(*) FROM t INDEXED BY idx_b WHERE b = 42; PRAGMA integrity_check;")
+check "short_default_without_rowid" "0
+ok" "$out"
+
+DB="$TMPROOT/short_default_types.db"
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+.dbconfig defensive off
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+INSERT INTO t VALUES (1, 10);
+PRAGMA writable_schema=ON;
+UPDATE sqlite_master SET sql='CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, ni INT DEFAULT -7, r REAL DEFAULT 42, tx TEXT DEFAULT ''hello'', bl BLOB DEFAULT x''deadbeef'', af TEXT DEFAULT 123, nl INT DEFAULT NULL)' WHERE name='t';
+PRAGMA writable_schema=RESET;
+CREATE INDEX idx_ni ON t(ni);
+CREATE INDEX idx_r ON t(r);
+CREATE INDEX idx_tx ON t(tx);
+CREATE INDEX idx_bl ON t(bl);
+CREATE INDEX idx_af ON t(af);
+CREATE INDEX idx_nl ON t(nl);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES (2, 20, 1, 2.5, 'x', x'01', 'y', 5);
+SELECT dolt_commit('-Am', 'main insert');
+SELECT dolt_checkout('feat');
+DELETE FROM t WHERE id = 1;
+SELECT dolt_commit('-Am', 'feat delete');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+EOF
+out=$("$DOLTLITE" "$DB" "SELECT count(*) FROM t INDEXED BY idx_ni WHERE ni = -7;
+SELECT count(*) FROM t INDEXED BY idx_r WHERE r = 42.0;
+SELECT count(*) FROM t INDEXED BY idx_tx WHERE tx = 'hello';
+SELECT count(*) FROM t INDEXED BY idx_bl WHERE bl = x'deadbeef';
+SELECT count(*) FROM t INDEXED BY idx_af WHERE af = '123';
+SELECT count(*) FROM t INDEXED BY idx_nl WHERE nl IS NULL;
+PRAGMA integrity_check;")
+check "short_default_types" "0
+0
+0
+0
+0
+0
+ok" "$out"
+
 echo
 echo "doltlite_merge_index_conflict: $pass passed, $fail failed"
 if [ "$fail" -gt 0 ]; then

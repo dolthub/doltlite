@@ -154,7 +154,117 @@ static int indexRecordField(Table *pTab, int iCol){
   return sqlite3TableColumnToIndex(sqlite3PrimaryKeyIndex(pTab), iCol);
 }
 
+static int columnDefaultSerialValue(
+  sqlite3 *db,
+  Table *pTab,
+  int iCol,
+  DoltliteSerialValue *pOut,
+  u8 **ppKeep
+){
+  Column *pCol;
+  Expr *pDflt;
+  sqlite3_value *pVal = 0;
+  int eType, rc;
+
+  memset(pOut, 0, sizeof(*pOut));
+  pOut->eType = SQLITE_NULL;
+  if( ppKeep ) *ppKeep = 0;
+  if( !db || !pTab || iCol<0 || iCol>=pTab->nCol ) return SQLITE_OK;
+  pCol = &pTab->aCol[iCol];
+  if( !pCol->iDflt || (pCol->colFlags & COLFLAG_GENERATED)!=0 ){
+    return SQLITE_OK;
+  }
+  pDflt = sqlite3ColumnExpr(pTab, pCol);
+  if( !pDflt ) return SQLITE_OK;
+  rc = sqlite3ValueFromExpr(db, pDflt, SQLITE_UTF8, pCol->affinity, &pVal);
+  if( rc!=SQLITE_OK ){
+    sqlite3ValueFree(pVal);
+    return rc;
+  }
+  if( !pVal ) return SQLITE_OK;
+  eType = sqlite3_value_type(pVal);
+  if( eType==SQLITE_INTEGER ){
+#ifndef SQLITE_OMIT_FLOATING_POINT
+    if( pCol->affinity==SQLITE_AFF_REAL ){
+      pOut->eType = SQLITE_FLOAT;
+      pOut->r = sqlite3_value_double(pVal);
+    }else
+#endif
+    {
+      pOut->eType = SQLITE_INTEGER;
+      pOut->i = sqlite3_value_int64(pVal);
+    }
+  }else if( eType==SQLITE_FLOAT ){
+    pOut->eType = SQLITE_FLOAT;
+    pOut->r = sqlite3_value_double(pVal);
+  }else if( eType==SQLITE_TEXT || eType==SQLITE_BLOB ){
+    const void *pSrc = eType==SQLITE_TEXT
+        ? (const void*)sqlite3_value_text(pVal)
+        : sqlite3_value_blob(pVal);
+    int n = sqlite3_value_bytes(pVal);
+    u8 *pCopy = sqlite3_malloc(n ? n : 1);
+    if( !pCopy ){
+      sqlite3ValueFree(pVal);
+      return SQLITE_NOMEM;
+    }
+    if( n>0 && pSrc ) memcpy(pCopy, pSrc, n);
+    if( ppKeep ) *ppKeep = pCopy;
+    pOut->eType = eType;
+    pOut->p = pCopy;
+    pOut->n = n;
+  }else{
+    pOut->eType = SQLITE_NULL;
+  }
+  sqlite3ValueFree(pVal);
+  return SQLITE_OK;
+}
+
+int doltliteBindColumnDefault(
+  sqlite3 *db,
+  sqlite3_stmt *pStmt,
+  int iParam,
+  Table *pTab,
+  int iCol
+){
+  Column *pCol;
+  Expr *pDflt;
+  sqlite3_value *pVal = 0;
+  int rc;
+
+  if( !db || !pTab || iCol<0 || iCol>=pTab->nCol ){
+    return sqlite3_bind_null(pStmt, iParam);
+  }
+  pCol = &pTab->aCol[iCol];
+  if( !pCol->iDflt || (pCol->colFlags & COLFLAG_GENERATED)!=0 ){
+    return sqlite3_bind_null(pStmt, iParam);
+  }
+  pDflt = sqlite3ColumnExpr(pTab, pCol);
+  if( !pDflt ){
+    return sqlite3_bind_null(pStmt, iParam);
+  }
+  rc = sqlite3ValueFromExpr(db, pDflt, SQLITE_UTF8, pCol->affinity, &pVal);
+  if( rc!=SQLITE_OK ){
+    sqlite3ValueFree(pVal);
+    return rc;
+  }
+  if( !pVal ){
+    return sqlite3_bind_null(pStmt, iParam);
+  }
+#ifndef SQLITE_OMIT_FLOATING_POINT
+  if( pCol->affinity==SQLITE_AFF_REAL
+   && sqlite3_value_type(pVal)==SQLITE_INTEGER ){
+    rc = sqlite3_bind_double(pStmt, iParam, sqlite3_value_double(pVal));
+  }else
+#endif
+  {
+    rc = sqlite3_bind_value(pStmt, iParam, pVal);
+  }
+  sqlite3ValueFree(pVal);
+  return rc;
+}
+
 static int bindIndexExprRow(
+  sqlite3 *db,
   sqlite3_stmt *pStmt,
   Table *pTab,
   const u8 *pRec, int nRec,
@@ -189,7 +299,7 @@ static int bindIndexExprRow(
         rc = sqlite3_bind_blob(pStmt, iParam, v.p, v.n, SQLITE_TRANSIENT);
       }
     }else{
-      rc = sqlite3_bind_null(pStmt, iParam);
+      rc = doltliteBindColumnDefault(db, pStmt, iParam, pTab, i);
     }
     iParam++;
   }
@@ -216,7 +326,9 @@ static int evalExprOnRecord(
   memset(pOut, 0, sizeof(*pOut));
   if( !pTab || !pExpr ) return SQLITE_ERROR;
   rc = doltlitePrepareIndexExpr(db, pTab, pExpr, iGenerated, &pStmt);
-  if( rc==SQLITE_OK ) rc = bindIndexExprRow(pStmt, pTab, pRec, nRec, iPKey, intKey);
+  if( rc==SQLITE_OK ){
+    rc = bindIndexExprRow(db, pStmt, pTab, pRec, nRec, iPKey, intKey);
+  }
   if( rc==SQLITE_OK ){
     rc = sqlite3_bind_int64(pStmt, pTab->nNVCol+1, intKey);
   }
@@ -361,7 +473,8 @@ static int doltliteBuildIndexEntryWithExpr(
         rc = doltliteSerialValueFromField(pRec, nRec, &info, iStore, &aMem[nOut]);
         if( rc!=SQLITE_OK ) goto expr_fail;
       }else{
-        aMem[nOut].eType = SQLITE_NULL;
+        rc = columnDefaultSerialValue(db, pTab, col, &aMem[nOut], &apKeep[nOut]);
+        if( rc!=SQLITE_OK ) goto expr_fail;
       }
       nOut++;
     }else if( col>=0 && col<info.nField ){
@@ -393,7 +506,8 @@ static int doltliteBuildIndexEntryWithExpr(
               pRec, nRec, &info, iStore, &aMem[nOut]);
           if( rc!=SQLITE_OK ) goto expr_fail;
         }else{
-          aMem[nOut].eType = SQLITE_NULL;
+          rc = columnDefaultSerialValue(db, pTab, col, &aMem[nOut], &apKeep[nOut]);
+          if( rc!=SQLITE_OK ) goto expr_fail;
         }
       }
       nOut++;
@@ -504,21 +618,41 @@ static int doltliteBuildIndexEntry(
 
     {
       int out = 0;
+      Table *pTab = pIdx ? pIdx->pTable : 0;
       for(i=0; i<nIdxCol; i++){
         int col = aiColumn[i];
         if( col>=0 ){
-          aFieldOrder[out++] = indexRecordField(pIdx ? pIdx->pTable : 0, col);
+          int iField = indexRecordField(pTab, col);
+          if( iField>=info.nField && col!=iPKey && pTab && col<pTab->nCol
+           && pTab->aCol[col].iDflt ){
+            sqlite3_free(aFieldOrder);
+            doltliteRecordInfoClear(&info);
+            return doltliteBuildIndexEntryWithExpr(
+                db, pIdx, pRec, nRec, aiColumn, nIdxCol, pKeyInfo,
+                iPKey, intKey, ppSortKey, pnSortKey,
+                ppIdxRec, pnIdxRec, pStorePayload);
+          }
+          aFieldOrder[out++] = iField;
         }
       }
       if( iPKey>=0 ){
         aFieldOrder[out++] = iPKey;
       }
-      if( pIdx && pIdx->pTable
-       && !HasRowid(pIdx->pTable) ){
+      if( pTab && !HasRowid(pTab) ){
         for(i=nIdxCol; i<pIdx->nColumn; i++){
           int col = pIdx->aiColumn[i];
           if( col>=0 ){
-            aFieldOrder[out++] = indexRecordField(pIdx->pTable, col);
+            int iField = indexRecordField(pTab, col);
+            if( iField>=info.nField && col<pTab->nCol
+             && pTab->aCol[col].iDflt ){
+              sqlite3_free(aFieldOrder);
+              doltliteRecordInfoClear(&info);
+              return doltliteBuildIndexEntryWithExpr(
+                  db, pIdx, pRec, nRec, aiColumn, nIdxCol, pKeyInfo,
+                  iPKey, intKey, ppSortKey, pnSortKey,
+                  ppIdxRec, pnIdxRec, pStorePayload);
+            }
+            aFieldOrder[out++] = iField;
           }
         }
       }
