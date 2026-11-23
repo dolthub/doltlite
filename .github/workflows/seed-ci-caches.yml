@@ -1,6 +1,5 @@
-# Warms the caches PR CI restores, so a cold cache costs a scheduled run
-# rather than every pull request. Each cache is warmed by its own job: the
-# work is independent, and one slow cache must not eat the budget of the
+# Warms caches for PR CI and the nightly macOS checks. Each cache gets
+# its own job so one slow cache cannot eat the budget of the
 # others. A job is given at least the time CI already budgets for the same
 # work, because a seed job only does that work when the cache is cold --- a
 # budget that fits a warm run passes every time and times out on exactly the
@@ -233,10 +232,9 @@ jobs:
         {
           echo "A scheduled CI cache seeding run did not finish."
           echo ""
-          echo "Every cache below is restored by PR CI and rebuilt from scratch"
-          echo "when it is missing. A seed run that fails or times out leaves the"
-          echo "cold cache in place, and the only symptom is that pull requests"
-          echo "get slower, which nothing else reports."
+          echo "PR CI and the nightly macOS checks use the caches below."
+          echo "If seeding fails or times out, the next build has to warm its"
+          echo "own cache, slowing it down."
           echo ""
           echo "| Cache | Result |"
           echo "| --- | --- |"

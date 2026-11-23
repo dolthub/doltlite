@@ -11,10 +11,13 @@ const OFF_PR_WORKFLOWS = new Set([
   'dolt-oracle-upgrade.yml',
   'go-driver-dev.yml',
   'inventory-issue-liveness.yml',
+  'macos-build.yml',
+  'macos-test.yml',
   'nightly-embedding-issues.yml',
   'nightly-fuzz.yml',
   'nightly-heartbeat.yml',
   'nightly-hotspots.yml',
+  'nightly-macos.yml',
   'nightly-performance.yml',
   'nightly-scale.yml',
   'nightly-stress.yml',
@@ -23,6 +26,7 @@ const OFF_PR_WORKFLOWS = new Set([
   'ruby-gems.yml',
   'seed-ci-caches.yml',
   'sqlite-upstream-drift.yml',
+  'swift-xcframework.yml',
 ]);
 
 const BENCHMARK_HARNESS = [
@@ -57,7 +61,6 @@ const DOCS_READ_BY_SUITES = new Set(['doc/doltlite/pragmas.md']);
 function jobsFor(path) {
   if (path === '.github/workflows/benchmark.yml') return new Set(['benchmarks']);
   if (path === '.github/workflows/nuget-package.yml') return new Set(['suites', 'platforms']);
-  if (path === '.github/workflows/swift-xcframework.yml') return new Set(['suites']);
   if (path.startsWith('.github/workflows/')) {
     const file = path.slice('.github/workflows/'.length);
     if (!OFF_PR_WORKFLOWS.has(file)) return ALL;
@@ -91,10 +94,6 @@ function classify(paths, labels = []) {
   const result = {
     docs_changed: paths.some(path => path.endsWith('.md')),
     light: paths.length > 0 && paths.every(path => LIGHT.has(path)),
-    swift: forceFull || paths.some(path => path.startsWith('packaging/swift/') ||
-      path === '.github/workflows/swift-xcframework.yml' ||
-      path === '.github/workflows/test-embeddings.yml' ||
-      path === '.github/workflows/release.yml'),
   };
   const jobs = new Set();
   if (forceFull) {
@@ -102,10 +101,7 @@ function classify(paths, labels = []) {
   } else {
     for (const path of paths) jobsFor(path).forEach(job => jobs.add(job));
   }
-  if (result.light) {
-    jobs.clear();
-    result.swift = false;
-  }
+  if (result.light) jobs.clear();
   for (const job of JOBS) result[job] = jobs.has(job);
   result.full = JOBS.every(job => jobs.has(job));
   return result;

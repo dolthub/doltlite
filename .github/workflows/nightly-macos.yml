@@ -1,0 +1,50 @@
+name: Nightly macOS
+
+on:
+  schedule:
+    - cron: '45 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-macos-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    uses: ./.github/workflows/macos-build.yml
+
+  test:
+    needs: build
+    uses: ./.github/workflows/macos-test.yml
+
+  swift:
+    uses: ./.github/workflows/swift-xcframework.yml
+
+  watchdog:
+    needs: [build, test, swift]
+    if: failure() || (github.event_name == 'schedule' && cancelled())
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+    - uses: actions/checkout@v4
+    - name: Record macOS results
+      run: |
+        {
+          echo "| macOS job | Result |"
+          echo "| --- | --- |"
+          echo "| Checked and sanitizer builds | ${{ needs.build.result }} |"
+          echo "| Native and sanitizer tests | ${{ needs.test.result }} |"
+          echo "| Swift XCFramework and SwiftPM | ${{ needs.swift.result }} |"
+        } > "$RUNNER_TEMP/macos-watchdog-body.md"
+    - uses: ./.github/actions/report-failure-issue
+      with:
+        label: nightly-macos
+        title: "Nightly macOS checks did not finish green"
+        body-file: ${{ runner.temp }}/macos-watchdog-body.md
+        token: ${{ secrets.GITHUB_TOKEN }}
