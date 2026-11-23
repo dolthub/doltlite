@@ -49,7 +49,7 @@ extern int doltliteRemoteSrvResolveRootForTest(
 extern int btreeReadWorkingCatalog(
   ChunkStore*, const char*, ProllyHash*, ProllyHash*
 );
-extern int sqlite3BtreeProllyRangeRank(Btree*, Pgno, i64, i64*, i64*, i64*);
+extern int sqlite3BtreeProllyRangeRank(Btree*, Pgno, i64, i64*, i64*, i64*, i64*);
 extern int sqlite3BtreeHasPendingChanges(Btree*);
 
 static int nPass = 0;
@@ -11954,9 +11954,10 @@ static void run_range_rank(void){
       root = (Pgno)queryInt64(db,
           "SELECT rootpage FROM sqlite_schema WHERE name='t_n'");
       for(i=0; i<(int)(sizeof(bounds)/sizeof(bounds[0])); i++){
-        i64 less = -1, lessEq = -1, total = -1;
+        i64 less = -1, lessEq = -1, total = -1, pending = -1;
         check("range_rank_count", sqlite3BtreeProllyRangeRank(
-            pBt, root, bounds[i], &less, &lessEq, &total)==SQLITE_OK);
+            pBt, root, bounds[i], &less, &lessEq, &total, &pending)==SQLITE_OK);
+        check("range_rank_no_pending", pending==0);
         sql = sqlite3_mprintf("SELECT sum(n<%lld) FROM t NOT INDEXED", bounds[i]);
         check("range_rank_less", less==queryInt64(db, sql));
         sqlite3_free(sql);
@@ -11966,12 +11967,18 @@ static void run_range_rank(void){
         check("range_rank_total", total==queryInt64(db,
             "SELECT sum(1) FROM t NOT INDEXED"));
       }
-      check("range_rank_begin", execSql(db,
-          "BEGIN; UPDATE t SET n=n+1 WHERE n=1")==SQLITE_OK);
       {
-        i64 less, lessEq, total;
+        i64 less, lessEq, total, pending;
+        i64 beforeLt = queryInt64(db, "SELECT count(*) FROM t WHERE n<1");
+        i64 beforeLe = queryInt64(db, "SELECT count(*) FROM t WHERE n<=1");
+        i64 beforeTotal = queryInt64(db, "SELECT count(*) FROM t");
+        check("range_rank_begin", execSql(db,
+            "BEGIN; UPDATE t SET n=n+1 WHERE n=1")==SQLITE_OK);
         check("range_rank_pending", sqlite3BtreeProllyRangeRank(
-            pBt, root, 0, &less, &lessEq, &total)==SQLITE_NOTFOUND);
+            pBt, root, 1, &less, &lessEq, &total, &pending)==SQLITE_OK);
+        check("range_rank_pending_count", pending==2*(beforeLe-beforeLt));
+        check("range_rank_pending_tree",
+              less==beforeLt && lessEq==beforeLe && total==beforeTotal);
         check("range_rank_still_pending", sqlite3BtreeHasPendingChanges(pBt));
       }
       check("range_rank_rollback", execSql(db, "ROLLBACK")==SQLITE_OK);

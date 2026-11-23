@@ -304,14 +304,15 @@ done:
   return rc;
 }
 
-/* Ascending numeric prefixes only; planning must never flush pending edits. */
+/* Ascending numeric prefix ranks in the tree before applying pending edits. */
 int sqlite3BtreeProllyRangeRank(
   Btree *pBtree,
   Pgno iTable,
   i64 value,
   i64 *pLess,
   i64 *pLessEq,
-  i64 *pTotal
+  i64 *pTotal,
+  i64 *pPending
 ){
   struct TableEntry *pTE;
   u8 key[18];
@@ -322,9 +323,8 @@ int sqlite3BtreeProllyRangeRank(
   if( !pBtree || sqlite3BtreeUsesOrig(pBtree) ) return SQLITE_NOTFOUND;
   pTE = findTable(pBtree, iTable);
   if( !pTE || (pTE->flags & BTREE_INTKEY)!=0 ) return SQLITE_NOTFOUND;
-  if( pTE->pPending && !prollyMutMapIsEmpty((ProllyMutMap*)pTE->pPending) ){
-    return SQLITE_NOTFOUND;
-  }
+  *pPending = pTE->pPending
+      ? prollyMutMapCount((ProllyMutMap*)pTE->pPending) : 0;
   if( prollyHashIsEmpty(&pTE->root) ){
     *pLess = *pLessEq = *pTotal = 0;
     return SQLITE_OK;

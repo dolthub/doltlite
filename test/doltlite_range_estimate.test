@@ -62,16 +62,37 @@ foreach {name type pk key suffix} {
   do_test $name-likelihood {
     range_estimate_plan db {SELECT sum(v) FROM t WHERE likelihood(grp<1,0.01)}
   } {{SEARCH t USING INDEX t_g (grp<?)}}
+  set update {UPDATE t SET v=v+1 WHERE grp BETWEEN 0 AND 0}
+  set cleanUpdatePlan [range_estimate_plan db $update]
   foreach conn {db oracle} {
     $conn eval "BEGIN; WITH c(i) AS (VALUES(8193))
       INSERT INTO t SELECT $key,i,0,7 FROM c"
   }
   do_test $name-pending {
     range_estimate_plan db {SELECT sum(v) FROM t WHERE grp<1}
-  } {{SEARCH t USING INDEX t_g (grp<?)}}
+  } {{SCAN t}}
   do_test $name-pending-rows {
     db eval {SELECT sum(v) FROM t WHERE grp<1}
   } [oracle eval {SELECT sum(v) FROM t WHERE grp<1}]
+  foreach conn {db oracle} {
+    $conn eval {DELETE FROM t WHERE seq%32=8}
+  }
+  do_test $name-pending-delete-broad-update-plan {
+    range_estimate_plan db $update
+  } $cleanUpdatePlan
+  do_test $name-pending-delete-selective-update-plan {
+    range_estimate_plan db {UPDATE t SET v=v+1 WHERE grp>=1}
+  } {{SEARCH t USING INDEX t_g (grp>?)}}
+  set verify {SELECT changes(),count(*),sum(v*seq) FROM t}
+  do_test $name-pending-delete-update-rows {
+    db eval "$update; $verify"
+  } [oracle eval "$update; $verify"]
+  foreach conn {db oracle} {
+    $conn eval {DELETE FROM t WHERE grp=0}
+  }
+  do_test $name-pending-delete-fallback {
+    range_estimate_plan db $update
+  } {{SEARCH t USING INDEX t_g (grp>? AND grp<?)}}
   foreach conn {db oracle} {$conn eval {ROLLBACK}}
   db cache flush
   do_test $name-after-rollback {

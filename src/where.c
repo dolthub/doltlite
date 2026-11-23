@@ -2099,7 +2099,7 @@ static int doltliteRangeScanEst(
   sqlite3 *db = pParse->db;
   Btree *pBt;
   WhereTerm *bounds[2];
-  i64 lower = 0, upper = 0, total = 0;
+  i64 lower = 0, upper = 0, total = 0, pending = 0, matches;
   int iDb, iCol, i;
   char aff;
 
@@ -2132,7 +2132,7 @@ static int doltliteRangeScanEst(
       return SQLITE_NOTFOUND;
     }
     rc = sqlite3BtreeProllyRangeRank(pBt, pIdx->tnum, value,
-                                    &less, &lessEq, &total);
+                                    &less, &lessEq, &total, &pending);
     if( rc!=SQLITE_OK ) return rc;
     if( i==0 ){
       lower = (pTerm->eOperator & WO_GT)!=0 ? lessEq : less;
@@ -2141,8 +2141,16 @@ static int doltliteRangeScanEst(
     }
   }
   if( pUpper==0 ) upper = total;
+  matches = upper - lower;
+  if( pending!=0 ){
+    /* Each pending key can change either count by at most one, so use
+    ** the rank only if the range still covers a majority of the index. */
+    i64 half = total/2 + (pending + total%2)/2;
+    if( matches <= half + pending ) return SQLITE_NOTFOUND;
+    matches -= pending;
+  }
   pLoop->nOut = MIN(pLoop->nOut,
-      sqlite3LogEst((u64)MAX((i64)2, upper-lower)));
+      sqlite3LogEst((u64)MAX((i64)2, matches)));
   return SQLITE_OK;
 }
 #endif
