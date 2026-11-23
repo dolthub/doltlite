@@ -542,53 +542,81 @@ static int schemaTokenTextIs(const char *z, int n, const char *zText){
   return n==nText && sqlite3_strnicmp(z, zText, n)==0;
 }
 
-static const char *schemaGeneratedTailStart(const char *zDef, int *pbVirtual){
-  const char *zEnd = zDef + strlen(zDef);
-  const char *zGenerated;
-  const char *zAs;
-  const char *p;
-  int type, n;
-  int bVirtual = 1;
-
-  zGenerated = schemaFindToken(zDef, zEnd, "GENERATED", 9);
-  if( zGenerated ){
-    if( schemaGetToken(zGenerated, zEnd, &type, &n)!=SQLITE_OK ) return 0;
-    p = schemaSkipTrivia(zGenerated + n, zEnd);
-    if( p<zEnd && schemaGetToken(p, zEnd, &type, &n)==SQLITE_OK
-     && type==TK_ALWAYS ){
-      p = schemaSkipTrivia(p + n, zEnd);
+static int schemaParseGeneratedClause(
+  const char *zDef,
+  const char **pzStart,
+  const char **pzExpr,
+  const char **pzExprEnd,
+  const char **pzEnd,
+  int *pbVirtual
+){
+  const char *zDefEnd = zDef + strlen(zDef);
+  const char *p = schemaColumnDefinitionTail(zDef);
+  while( p<zDefEnd ){
+    const char *zStart = 0;
+    const char *zAs = 0;
+    const char *q = 0;
+    int type, n;
+    p = schemaSkipTrivia(p, zDefEnd);
+    if( p>=zDefEnd ) break;
+    if( schemaGetToken(p, zDefEnd, &type, &n)!=SQLITE_OK ) return 0;
+    if( type==TK_LP ){
+      if( schemaSkipParenthesized(p, zDefEnd, &p)!=SQLITE_OK ) return 0;
+      continue;
     }
-    if( p>=zEnd || schemaGetToken(p, zEnd, &type, &n)!=SQLITE_OK
-     || type!=TK_AS ) return 0;
-    zAs = p;
-  }else{
-    zAs = schemaFindToken(zDef, zEnd, "AS", 2);
-    if( !zAs ) return 0;
-  }
-
-  if( schemaGetToken(zAs, zEnd, &type, &n)!=SQLITE_OK ) return 0;
-  p = schemaSkipTrivia(zAs + n, zEnd);
-  if( p>=zEnd || schemaGetToken(p, zEnd, &type, &n)!=SQLITE_OK
-   || type!=TK_LP ) return 0;
-  if( schemaSkipParenthesized(p, zEnd, &p)!=SQLITE_OK ) return 0;
-  p = schemaSkipTrivia(p, zEnd);
-  if( p<zEnd ){
-    if( schemaGetToken(p, zEnd, &type, &n)!=SQLITE_OK ) return 0;
-    if( type==TK_VIRTUAL || schemaTokenTextIs(p, n, "STORED") ){
-      if( schemaTokenTextIs(p, n, "STORED") ) bVirtual = 0;
-      p += n;
+    if( type!=TK_STRING && type!=TK_BLOB
+     && schemaTokenTextIs(p, n, "GENERATED") ){
+      int t2, n2;
+      q = schemaSkipTrivia(p + n, zDefEnd);
+      if( q<zDefEnd && schemaGetToken(q, zDefEnd, &t2, &n2)==SQLITE_OK
+       && t2==TK_ALWAYS ){
+        q = schemaSkipTrivia(q + n2, zDefEnd);
+      }
+      if( q<zDefEnd && schemaGetToken(q, zDefEnd, &t2, &n2)==SQLITE_OK
+       && t2==TK_AS ){
+        zStart = p;
+        zAs = q;
+        q = schemaSkipTrivia(q + n2, zDefEnd);
+      }
+    }else if( type==TK_AS ){
+      zStart = p;
+      zAs = p;
+      q = schemaSkipTrivia(p + n, zDefEnd);
     }
+    if( zAs ){
+      int t2, n2;
+      if( q<zDefEnd && schemaGetToken(q, zDefEnd, &t2, &n2)==SQLITE_OK
+       && t2==TK_LP ){
+        const char *zExpr = q;
+        const char *zExprEnd;
+        int bVirtual = 1;
+        if( schemaSkipParenthesized(zExpr, zDefEnd, &zExprEnd)!=SQLITE_OK ){
+          return 0;
+        }
+        q = schemaSkipTrivia(zExprEnd, zDefEnd);
+        if( q<zDefEnd && schemaGetToken(q, zDefEnd, &t2, &n2)==SQLITE_OK
+         && (t2==TK_VIRTUAL || schemaTokenTextIs(q, n2, "STORED")) ){
+          if( schemaTokenTextIs(q, n2, "STORED") ) bVirtual = 0;
+          q += n2;
+        }
+        if( pzStart ) *pzStart = zStart;
+        if( pzExpr ) *pzExpr = zExpr;
+        if( pzExprEnd ) *pzExprEnd = zExprEnd;
+        if( pzEnd ) *pzEnd = q;
+        if( pbVirtual ) *pbVirtual = bVirtual;
+        return 1;
+      }
+    }
+    p += n;
   }
-  p = schemaSkipTrivia(p, zEnd);
-  if( p!=zEnd ) return 0;
-  if( pbVirtual ) *pbVirtual = bVirtual;
-  return zGenerated ? zGenerated : zAs;
+  return 0;
 }
 
 int parsedColumnIsVirtual(const ParsedColumn *pCol){
   int bVirtual = 0;
   if( !pCol || !pCol->zDef ) return 0;
-  return schemaGeneratedTailStart(pCol->zDef, &bVirtual) && bVirtual;
+  return schemaParseGeneratedClause(pCol->zDef, 0, 0, 0, 0, &bVirtual)
+      && bVirtual;
 }
 
 int parsedColumnAddsAsNull(const ParsedColumn *pCol){
@@ -596,22 +624,7 @@ int parsedColumnAddsAsNull(const ParsedColumn *pCol){
   if( !pCol || !pCol->zDef ) return 1;
   zEnd = pCol->zDef + strlen(pCol->zDef);
   return schemaFindToken(pCol->zDef, zEnd, "DEFAULT", 7)==0
-      && schemaGeneratedTailStart(pCol->zDef, 0)==0;
-}
-
-static int schemaGeneratedExpr(
-  const char *zTail,
-  const char **pzExpr,
-  const char **pzExprEnd
-){
-  const char *zEnd = zTail + strlen(zTail);
-  const char *zAs = schemaFindToken(zTail, zEnd, "AS", 2);
-  const char *p;
-  int type, n;
-  if( !zAs || schemaGetToken(zAs, zEnd, &type, &n)!=SQLITE_OK ) return 0;
-  p = schemaSkipTrivia(zAs + n, zEnd);
-  *pzExpr = p;
-  return schemaSkipParenthesized(p, zEnd, pzExprEnd)==SQLITE_OK;
+      && !schemaParseGeneratedClause(pCol->zDef, 0, 0, 0, 0, 0);
 }
 
 /* Both branches added the column. As Dolt, a generated column merges only
@@ -620,21 +633,23 @@ static int schemaColumnsMergeEquivalent(
   const char *zOurs,
   const char *zTheirs
 ){
-  const char *zOurTail, *zTheirTail;
-  const char *zOurExpr, *zOurExprEnd, *zTheirExpr, *zTheirExprEnd;
+  const char *zOurStart, *zOurExpr, *zOurExprEnd, *zOurEnd;
+  const char *zTheirStart, *zTheirExpr, *zTheirExprEnd, *zTheirEnd;
   int bOurVirtual = 1, bTheirVirtual = 1;
 
   if( schemaDefinitionsEquivalent(zOurs, zTheirs) ) return 1;
-  zOurTail = schemaGeneratedTailStart(zOurs, &bOurVirtual);
-  zTheirTail = schemaGeneratedTailStart(zTheirs, &bTheirVirtual);
-  if( !zOurTail || !zTheirTail || bOurVirtual!=bTheirVirtual ) return 0;
-  if( !schemaTokensEquivalent(zOurs, zOurTail, zTheirs, zTheirTail) ) return 0;
-  if( !schemaGeneratedExpr(zOurTail, &zOurExpr, &zOurExprEnd)
-   || !schemaGeneratedExpr(zTheirTail, &zTheirExpr, &zTheirExprEnd) ){
+  if( !schemaParseGeneratedClause(zOurs, &zOurStart, &zOurExpr,
+                                  &zOurExprEnd, &zOurEnd, &bOurVirtual)
+   || !schemaParseGeneratedClause(zTheirs, &zTheirStart, &zTheirExpr,
+                                  &zTheirExprEnd, &zTheirEnd, &bTheirVirtual) ){
     return 0;
   }
-  return schemaTokensEquivalent(zOurExpr, zOurExprEnd,
-                                zTheirExpr, zTheirExprEnd);
+  if( bOurVirtual!=bTheirVirtual ) return 0;
+  if( !schemaTokensEquivalent(zOurs, zOurStart, zTheirs, zTheirStart) ) return 0;
+  if( !schemaTokensEquivalent(zOurExpr, zOurExprEnd,
+                              zTheirExpr, zTheirExprEnd) ) return 0;
+  return schemaTokensEquivalent(zOurEnd, zOurs + strlen(zOurs),
+                                zTheirEnd, zTheirs + strlen(zTheirs));
 }
 
 static const char *schemaFindToken(
