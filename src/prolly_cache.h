@@ -24,7 +24,6 @@ struct ProllyCacheEntry {
   ProllyNode node;
   int nRef;
   u8 bTransient;
-  u8 nEvictChance;
   u8 bScanOnly;
   u8 bAllowPrefix;
   u8 bReadAheadUnused;
@@ -45,6 +44,7 @@ struct ProllyCache {
   int nBucket;
   u64 iClock;
   i64 nWideFull;
+  i64 nInternal;
   u32 nReadAheadStarved;
   ProllyCacheEntry **aBucket;
   ProllyCacheEntry lruHead;
@@ -55,6 +55,8 @@ struct ProllyCache {
   ProllyCacheEntry wideTail;
   ProllyCacheEntry rowHead;
   ProllyCacheEntry rowTail;
+  ProllyCacheEntry internalHead;
+  ProllyCacheEntry internalTail;
   ProllyStats *pStats;
 };
 

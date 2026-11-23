@@ -17,7 +17,10 @@
 
 static void cacheTrim(ProllyCache*, i64);
 
-#define PROLLY_CACHE_INTERNAL_CHANCES 8
+/* Internal nodes outlive leaves and leaf prefixes while they hold less than
+** this share of the budget: a point read that misses one re-reads and
+** re-verifies a chunk a leaf prefix cannot stand in for. */
+#define PROLLY_CACHE_INTERNAL_DIV 4
 
 static int cacheHashBucket(const ProllyCache *cache, const ProllyHash *hash){
   u32 h;
@@ -35,7 +38,8 @@ static void lruRemove(ProllyCacheEntry *pEntry){
 /* Packed prefixes share the prefix LRU; decoded buffers can be discarded
 ** without losing the packed copy. */
 static ProllyCacheEntry *lruHeadFor(ProllyCache *cache, ProllyCacheEntry *p){
-  return p->pPacked ? (p->pData ? &cache->lruHead : &cache->prefixHead)
+  return p->node.level>0 ? &cache->internalHead
+       : p->pPacked ? (p->pData ? &cache->lruHead : &cache->prefixHead)
        : p->node.nValuePrefix ? (p->bWideRow ? &cache->rowHead : &cache->prefixHead)
        : p->bWideFull ? &cache->wideHead : &cache->lruHead;
 }
@@ -70,6 +74,7 @@ static void cacheEntryFreeData(ProllyCacheEntry *p){
 ** keep it ahead of cached prefixes. */
 static void cacheNoteEvicted(ProllyCache *cache, ProllyCacheEntry *p){
   if( p->bReadAheadUnused ) cache->nReadAheadStarved = 64;
+  if( p->node.level>0 ) cache->nInternal -= cacheEntryBytes(p);
 }
 
 static void cacheWideForget(ProllyCache *cache, ProllyCacheEntry *p){
@@ -181,6 +186,10 @@ int prollyCacheInit(ProllyCache *cache, i64 nMaxByte){
   cache->rowHead.pLruPrev = 0;
   cache->rowTail.pLruPrev = &cache->rowHead;
   cache->rowTail.pLruNext = 0;
+  cache->internalHead.pLruNext = &cache->internalTail;
+  cache->internalHead.pLruPrev = 0;
+  cache->internalTail.pLruPrev = &cache->internalHead;
+  cache->internalTail.pLruNext = 0;
 
   return SQLITE_OK;
 }
@@ -245,8 +254,6 @@ static ProllyCacheEntry *cacheGet(
   if( !bScan ){
     pEntry->bScanOnly &= (u8)~(PROLLY_CACHE_SCAN_ONLY|PROLLY_CACHE_SCAN_DROP);
   }
-  pEntry->nEvictChance = pEntry->node.level>0
-                      ? PROLLY_CACHE_INTERNAL_CHANCES : 0;
   pEntry->nRef++;
   pEntry->iTouch = ++cache->iClock;
   if( pEntry->bReadAheadUnused && cache->nReadAheadStarved ){
@@ -596,7 +603,6 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
   pNode->nValuePrefix = nPrefix;
   if( bElide ) pNode->flags |= PROLLY_NODE_PREFIX_ELIDE;
   else pNode->flags = (u8)(pNode->flags & (u8)~PROLLY_NODE_PREFIX_ELIDE);
-  pEntry->nEvictChance = 0;
   cache->nByte += (i64)sqlite3_msize(pData)-(i64)sqlite3_msize(pEntry->pData);
   sqlite3_free(pEntry->pData);
   pEntry->pData = pData;
@@ -648,27 +654,11 @@ void prollyCacheReleaseScan(ProllyCache *cache, ProllyCacheEntry *entry){
   prollyCacheRelease(cache, entry);
 }
 
-static ProllyCacheEntry *cacheEvictionCandidate(ProllyCache *cache){
-  ProllyCacheEntry *pEntry = cache->lruTail.pLruPrev;
-  ProllyCacheEntry *pFallback = 0;
-  int nVisit = cache->nUsed;
-  while( nVisit-- && pEntry!=&cache->lruHead ){
-    ProllyCacheEntry *pPrev = pEntry->pLruPrev;
-    if( pEntry->nRef==0 ){
-      if( pEntry->nEvictChance==0 ) return pEntry;
-      if( !pFallback ) pFallback = pEntry;
-      pEntry->nEvictChance--;
-      lruRemove(pEntry);
-      lruInsertHead(cache, pEntry);
-    }
-    pEntry = pPrev;
-  }
-  return pFallback;
-}
-
-static ProllyCacheEntry *cachePrefixCandidate(ProllyCache *cache){
-  ProllyCacheEntry *pEntry = cache->prefixTail.pLruPrev;
-  while( pEntry!=&cache->prefixHead ){
+static ProllyCacheEntry *cacheOldestUnpinned(
+  ProllyCacheEntry *pHead, ProllyCacheEntry *pTail
+){
+  ProllyCacheEntry *pEntry = pTail->pLruPrev;
+  while( pEntry!=pHead ){
     if( pEntry->nRef==0 ) return pEntry;
     pEntry = pEntry->pLruPrev;
   }
@@ -690,23 +680,27 @@ static ProllyCacheEntry *cacheWriteLeftoverCandidate(ProllyCache *cache){
 }
 
 static ProllyCacheEntry *cacheRowCandidate(ProllyCache *cache){
-  ProllyCacheEntry *pEntry = cache->rowTail.pLruPrev;
-  while( pEntry!=&cache->rowHead ){
-    if( pEntry->nRef==0 ) return pEntry;
-    pEntry = pEntry->pLruPrev;
-  }
-  return 0;
+  return cacheOldestUnpinned(&cache->rowHead, &cache->rowTail);
+}
+
+static ProllyCacheEntry *cacheInternalCandidate(ProllyCache *cache){
+  return cacheOldestUnpinned(&cache->internalHead, &cache->internalTail);
 }
 
 static ProllyCacheEntry *cacheEvictOne(ProllyCache *cache){
-  ProllyCacheEntry *pEntry = cacheEvictionCandidate(cache);
-  ProllyCacheEntry *pRow = cacheRowCandidate(cache);
-  if( pRow && (!pEntry || pEntry->nEvictChance>0
-               || pRow->iTouch<pEntry->iTouch) ){
-    pEntry = pRow;
-  }else if( !pEntry || pEntry->nEvictChance>0 ){
-    ProllyCacheEntry *pPrefix = cachePrefixCandidate(cache);
-    if( pPrefix ) pEntry = pPrefix;
+  ProllyCacheEntry *pEntry = 0;
+  if( cache->nInternal>cache->nMaxByte/PROLLY_CACHE_INTERNAL_DIV ){
+    pEntry = cacheInternalCandidate(cache);
+  }
+  if( !pEntry ){
+    ProllyCacheEntry *pRow = cacheRowCandidate(cache);
+    pEntry = cacheOldestUnpinned(&cache->lruHead, &cache->lruTail);
+    if( pRow && (!pEntry || pRow->iTouch<pEntry->iTouch) ){
+      pEntry = pRow;
+    }else if( !pEntry ){
+      pEntry = cacheOldestUnpinned(&cache->prefixHead, &cache->prefixTail);
+    }
+    if( !pEntry ) pEntry = cacheInternalCandidate(cache);
   }
   if( pEntry && pEntry->bReadAheadUnused && cache->nReadAheadStarved ){
     ProllyCacheEntry *pPrefix = cacheWriteLeftoverCandidate(cache);
@@ -778,12 +772,20 @@ static void cacheTrim(ProllyCache *cache, i64 nMaxByte){
   if( cache->nByte>nMaxByte && cache->nWideFull>0 ){
     cacheDrainWide(cache, 0, nMaxByte);
   }
+  while( cache->nByte>nMaxByte
+      && cache->nInternal>nMaxByte/PROLLY_CACHE_INTERNAL_DIV ){
+    ProllyCacheEntry *pOld = cacheInternalCandidate(cache);
+    if( !pOld ) break;
+    cacheEvictEntry(cache, pOld);
+  }
   for(pass=0; pass<2 && cache->nByte>nMaxByte; pass++){
     ProllyCacheEntry *pEntry = cache->lruTail.pLruPrev;
     int nVisit = cache->nUsed;
     if( pass==1 ){
       cacheTrimList(cache, &cache->rowHead, &cache->rowTail, nMaxByte);
       cacheTrimList(cache, &cache->prefixHead, &cache->prefixTail, nMaxByte);
+      cacheTrimList(cache, &cache->internalHead, &cache->internalTail,
+                    nMaxByte);
       if( cache->nByte<=nMaxByte ) break;
     }
     while( nVisit-- && cache->nByte>nMaxByte && pEntry!=&cache->lruHead ){
@@ -808,14 +810,9 @@ static void cacheTrim(ProllyCache *cache, i64 nMaxByte){
           continue;
         }
       }
-      if( pEntry->nRef==0 ){
-        if( pEntry->nEvictChance>0 && pass==0 ){
-          pEntry->nEvictChance--;
-          lruRemove(pEntry);
-          lruInsertHead(cache, pEntry);
-        }else if( nMaxByte==0 || !cacheKeepPrefixes(cache, pEntry) ){
-          cacheEvictEntry(cache, pEntry);
-        }
+      if( pEntry->nRef==0
+       && (nMaxByte==0 || !cacheKeepPrefixes(cache, pEntry)) ){
+        cacheEvictEntry(cache, pEntry);
       }
       pEntry = pPrev;
     }
@@ -842,6 +839,12 @@ static void cacheRehash(ProllyCache *cache, int nBucket){
     cache->aBucket[iBucket] = pEntry;
   }
   for(pEntry=cache->rowHead.pLruNext; pEntry!=&cache->rowTail;
+      pEntry=pEntry->pLruNext){
+    int iBucket = cacheHashBucket(cache, &pEntry->hash);
+    pEntry->pHashNext = cache->aBucket[iBucket];
+    cache->aBucket[iBucket] = pEntry;
+  }
+  for(pEntry=cache->internalHead.pLruNext; pEntry!=&cache->internalTail;
       pEntry=pEntry->pLruNext){
     int iBucket = cacheHashBucket(cache, &pEntry->hash);
     pEntry->pHashNext = cache->aBucket[iBucket];
@@ -964,8 +967,6 @@ static ProllyCacheEntry *cacheInsert(
     }
   }
 
-  pEntry->nEvictChance = pEntry->node.level>0
-                      ? PROLLY_CACHE_INTERNAL_CHANCES : 0;
   if( cache->nUsed/2>=cache->nBucket && cache->nBucket<0x40000000
       && (i64)cache->nBucket*2*sizeof(*cache->aBucket)<=cache->nMaxByte/16 ){
     cacheRehash(cache, cache->nBucket*2);
@@ -979,6 +980,7 @@ static ProllyCacheEntry *cacheInsert(
 
   cache->nUsed++;
   cache->nByte += cacheEntryBytes(pEntry);
+  if( pEntry->node.level>0 ) cache->nInternal += cacheEntryBytes(pEntry);
   cacheTrim(cache, cache->nMaxByte);
   return pEntry;
 }
@@ -1058,6 +1060,13 @@ void prollyCacheFree(ProllyCache *cache){
   }
   pEntry = cache->rowHead.pLruNext;
   while( pEntry!=&cache->rowTail ){
+    pNext = pEntry->pLruNext;
+    assert( pEntry->nRef==0 );
+    cacheEntryFree(pEntry);
+    pEntry = pNext;
+  }
+  pEntry = cache->internalHead.pLruNext;
+  while( pEntry!=&cache->internalTail ){
     pNext = pEntry->pLruNext;
     assert( pEntry->nRef==0 );
     cacheEntryFree(pEntry);

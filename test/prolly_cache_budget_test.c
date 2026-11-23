@@ -132,6 +132,7 @@ static i64 indexCacheBytes(const ChunkStore *cs){
 static sqlite3_int64 cacheBytes(ProllyCache *pCache){
   ProllyCacheEntry *p;
   int nShared = 0;
+  sqlite3_int64 nInternal = 0;
   sqlite3_int64 n = sqlite3_msize(pCache->aBucket);
   for(p=pCache->lruHead.pLruNext; p!=&pCache->lruTail; p=p->pLruNext){
     if( p->pPacked ) nShared++;
@@ -153,7 +154,13 @@ static sqlite3_int64 cacheBytes(ProllyCache *pCache){
     n += sqlite3_msize(p) + sqlite3_msize(p->pData)
        + sqlite3_msize(p->pPacked);
   }
+  for(p=pCache->internalHead.pLruNext; p!=&pCache->internalTail;
+      p=p->pLruNext){
+    nInternal += sqlite3_msize(p) + sqlite3_msize(p->pData);
+  }
+  n += nInternal;
   check("shared-prefix entry count", nShared==pCache->nSharedPrefix);
+  check("internal node byte count", nInternal==pCache->nInternal);
   return n;
 }
 
@@ -352,7 +359,7 @@ static void testCachedReadAhead(sqlite3 *db){
   int i;
 
   scan(db);
-  for(pEntry=pCache->lruHead.pLruNext; pEntry!=&pCache->lruTail;
+  for(pEntry=pCache->internalHead.pLruNext; pEntry!=&pCache->internalTail;
       pEntry=pEntry->pLruNext){
     if( pEntry->node.level!=1 || pEntry->node.nItems<4 ) continue;
     for(i=0; i<4; i++){
@@ -1188,6 +1195,43 @@ static void testLargeScanKeepsWorkingSet(sqlite3 *db){
   execSql(db, "DROP TABLE scan_ws; PRAGMA cache_size=-65536");
 }
 
+static int pointLookupReads(sqlite3 *db){
+  sqlite3_stmt *p = 0;
+  nRead = 0;
+  check("prepare point lookups", sqlite3_prepare_v2(db,
+      "WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<8192)"
+      " SELECT count((SELECT v FROM point_ws WHERE id=1+(c.i*2654435761)%32768))"
+      " FROM c", -1, &p, 0)==SQLITE_OK);
+  check("point lookup result", sqlite3_step(p)==SQLITE_ROW
+      && sqlite3_column_int(p, 0)==8192);
+  check("finish point lookups", sqlite3_finalize(p)==SQLITE_OK);
+  return nRead;
+}
+
+static void testPointReadsKeepInternalNodes(sqlite3 *db){
+  ProllyCache *pCache = doltliteGetCache(db);
+  ChunkStore *pStore = doltliteGetChunkStore(db);
+  sqlite3_io_methods methods;
+  int nReads;
+  execSql(db, "CREATE TABLE point_ws(id INTEGER PRIMARY KEY, v INT, payload BLOB);"
+      "WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<32768)"
+      " INSERT INTO point_ws SELECT i,(i*7919)%1000000,"
+      " CAST(printf('%01024d',i) AS BLOB) FROM c;"
+      "PRAGMA cache_size=-2048");
+  pReadMethods = pStore->file.pFile->pMethods;
+  methods = *pReadMethods;
+  methods.xRead = countedRead;
+  pStore->file.pFile->pMethods = &methods;
+  clearNodes(pCache);
+  pointLookupReads(db);
+  nReads = pointLookupReads(db);
+  check("point reads past the cache read at most the leaf", nReads<=8192+512);
+  check("point read accounting", cacheBytes(pCache)==pCache->nByte
+      && budgetMatches(db, 2048*1024));
+  pStore->file.pFile->pMethods = pReadMethods;
+  execSql(db, "DROP TABLE point_ws; PRAGMA cache_size=-65536");
+}
+
 static sqlite3_int64 fullWideLeafBytes(ProllyCache *pCache){
   ProllyCacheEntry *heads[2] = {&pCache->lruHead, &pCache->wideHead};
   ProllyCacheEntry *tails[2] = {&pCache->lruTail, &pCache->wideTail};
@@ -1309,24 +1353,36 @@ static void testInternalNodes(void){
   ProllyCacheEntry *p;
   ProllyCacheEntry *aPinned[4];
   int i;
-  check("init internal node cache", prollyCacheInit(&cache, 4096)==SQLITE_OK);
+  check("init internal node cache", prollyCacheInit(&cache, 16384)==SQLITE_OK);
   p = putInternalNode(&cache, 1);
   check("cache internal node", p!=0);
   if( !p ){ prollyCacheFree(&cache); return; }
   prollyCacheRelease(&cache, p);
-  for(i=2; i<=6; i++){
+  check("one internal node is within its share",
+      cache.nInternal>0 && cache.nInternal<=16384/4);
+  for(i=2; i<200; i++){
     p = putNode(&cache, i, 1200);
     check("insert leaf under pressure", p!=0);
     if( p ) prollyCacheRelease(&cache, p);
   }
   check("internal node survives leaf churn", hasNode(&cache, 1));
-  check("internal preference stays within budget", cache.nByte<=4096
+  check("internal preference stays within budget", cache.nByte<=16384
       && cache.nByte==cacheBytes(&cache));
-  for(i=7; i<80; i++){
-    p = putNode(&cache, i, 1200);
+  for(i=200; i<206; i++){
+    p = putInternalNode(&cache, i);
+    check("insert internal node under pressure", p!=0);
     if( p ) prollyCacheRelease(&cache, p);
   }
-  check("unused internal node eventually evicted", !hasNode(&cache, 1));
+  p = putNode(&cache, 206, 1200);
+  if( p ) prollyCacheRelease(&cache, p);
+  check("internal nodes past their share go oldest first",
+      !hasNode(&cache, 1) && hasNode(&cache, 205)
+      && cache.nInternal<=16384/4);
+  check("internal share stays within budget", cache.nByte<=16384
+      && cache.nByte==cacheBytes(&cache));
+  prollyCacheFree(&cache);
+
+  check("init all-internal cache", prollyCacheInit(&cache, 4096)==SQLITE_OK);
   for(i=80; i<100; i++){
     p = putInternalNode(&cache, i);
     check("all-internal cache admits nodes", p!=0);
@@ -1581,6 +1637,7 @@ int main(void){
   testBulkDeleteReadsOnce(db);
   testWideValuesStayOnDisk(db);
   testLargeScanKeepsWorkingSet(db);
+  testPointReadsKeepInternalNodes(db);
   testBulkUpdateReadsOnce(db);
   testIndexCacheSizedByIndex();
   testReload(db);
