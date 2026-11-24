@@ -14568,6 +14568,56 @@ static int workspaceSchemaScans(sqlite3 *db, const char *zSql){
 
 /* A workspace write refuses a table whose schema changed. Rows cannot change
 ** it, so the schema is read once per statement, not once per row. */
+/* Tables with a unique index queue their workspace changes and apply them
+** when the statement halts. A row the statement touches twice is queued
+** once, for integer and blob keys alike. */
+static void run_workspace_queue_dedupes_rows(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+
+  printf("=== Workspace Queue Dedupes Rows Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_workspace_queue_dedupe");
+  removeDbFiles(dbpath);
+  check("wqd_open", open_db(dbpath, &db)==SQLITE_OK);
+  check("wqd_seed", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, u INTEGER UNIQUE);"
+    "CREATE TABLE w(a TEXT PRIMARY KEY, u INTEGER UNIQUE) WITHOUT ROWID;"
+    "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<3000)"
+    " INSERT INTO t SELECT x, 'b'||x, x FROM c;"
+    "INSERT INTO w SELECT 'k'||id, id FROM t;"
+    "SELECT dolt_commit('-Am','base');"
+    "UPDATE t SET v='n'||id, u=u+10000 WHERE id%3=0;"
+    "UPDATE w SET u=u+10000 WHERE u%3=0;")==SQLITE_OK);
+  check("wqd_stage_twice", execSql(db,
+      "UPDATE dolt_workspace_t SET staged=1"
+      " FROM (SELECT 1 UNION ALL SELECT 2) AS d")==SQLITE_OK);
+  check("wqd_t_staged", strcmp(queryScalarText(db,
+      "SELECT count(*)||','||sum(staged) FROM dolt_workspace_t"),
+      "1000,1000")==0);
+  check("wqd_stage_blob_keys", execSql(db,
+      "UPDATE dolt_workspace_w SET staged=1")==SQLITE_OK);
+  check("wqd_w_staged", strcmp(queryScalarText(db,
+      "SELECT count(*)||','||sum(staged) FROM dolt_workspace_w"),
+      "1000,1000")==0);
+  check("wqd_unstage_half", execSql(db,
+      "UPDATE dolt_workspace_t SET staged=0 WHERE to_id%2=0")==SQLITE_OK);
+  check("wqd_t_half", strcmp(queryScalarText(db,
+      "SELECT count(*)||','||sum(staged) FROM dolt_workspace_t"),
+      "1000,500")==0);
+  check("wqd_commit", execSql(db,
+      "SELECT dolt_commit('-m','staged')")==SQLITE_OK);
+  check("wqd_committed", strcmp(queryScalarText(db,
+      "WITH h(c) AS (SELECT commit_hash FROM dolt_log LIMIT 1)"
+      " SELECT (SELECT count(*) FROM dolt_diff_t, h WHERE to_commit=c)"
+      "||','||(SELECT count(*) FROM dolt_diff_w, h WHERE to_commit=c)"),
+      "500,1000")==0);
+  check("wqd_left_unstaged", strcmp(queryScalarText(db,
+      "SELECT count(*)||','||sum(staged) FROM dolt_workspace_t"),
+      "500,0")==0);
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_workspace_schema_check_once(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -21660,6 +21710,7 @@ static const RegressionCase aCases[] = {
   { "rebase_continue_keeps_peer_branch", "Rebase Continue Keeps Peer Branch Test", run_rebase_continue_keeps_peer_branch },
   { "rebase_deep_history_ordering", "Rebase Deep History Ordering Test", run_rebase_deep_history_ordering },
   { "workspace_schema_check_once", "Workspace Schema Check Once Test", run_workspace_schema_check_once },
+  { "workspace_queue_dedupes_rows", "Workspace Queue Dedupes Rows Test", run_workspace_queue_dedupes_rows },
   { "rebase_main_table_schema_guard", "Rebase Main Table Schema Guard Test", run_rebase_main_table_schema_guard },
   { "rebase_temp_shadow_ignored", "Rebase Temp Shadow Ignored Test", run_rebase_temp_shadow_ignored },
   { "stage_all_reads_ignore_once", "Stage All Reads Ignore Once Test", run_stage_all_reads_ignore_once },

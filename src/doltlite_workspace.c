@@ -65,6 +65,8 @@ struct WorkspaceChanges {
   int n;
   int nAlloc;
   WorkspaceVtab *pSchemaChecked;
+  int *aSlot;
+  int nSlot;
 };
 
 typedef struct WorkspaceCursor WorkspaceCursor;
@@ -1046,26 +1048,62 @@ static int wsRefuseSchemaChange(WorkspaceVtab *p){
   return SQLITE_OK;
 }
 
+static u32 wsRowSlot(const WorkspaceRow *r, int nSlot){
+  u32 h = 2166136261u;
+  int i;
+  if( r->keyIsIntKey ){
+    u64 k = (u64)r->intKey;
+    h = (u32)(k ^ (k>>32)) * 2654435761u;
+  }else{
+    for(i=0; i<r->nKey; i++) h = (h ^ r->pKey[i]) * 16777619u;
+  }
+  return h & (u32)(nSlot-1);
+}
+
+static int wsChangesGrowSlots(WorkspaceChanges *pChanges){
+  int nSlot = pChanges->nSlot ? pChanges->nSlot*2 : 64;
+  int *aSlot = sqlite3_malloc64((sqlite3_uint64)nSlot*sizeof(int));
+  int i;
+  if( !aSlot ) return SQLITE_NOMEM;
+  memset(aSlot, 0, (size_t)nSlot*sizeof(int));
+  for(i=0; i<pChanges->n; i++){
+    WorkspaceChange *pChange = &pChanges->a[i];
+    u32 iSlot = wsRowSlot(&pChange->pRows->a[pChange->iRow], nSlot);
+    while( aSlot[iSlot] ) iSlot = (iSlot+1) & (u32)(nSlot-1);
+    aSlot[iSlot] = i+1;
+  }
+  sqlite3_free(pChanges->aSlot);
+  pChanges->aSlot = aSlot;
+  pChanges->nSlot = nSlot;
+  return SQLITE_OK;
+}
+
 static int wsQueueChange(
   WorkspaceVtab *p, WorkspaceRows *pRows, WorkspaceRow *r, int staged
 ){
   WorkspaceChanges *pChanges = wsStatementChanges(p->db);
   WorkspaceChange *pChange;
+  u32 iSlot;
   int i;
   if( !pChanges ) return SQLITE_NOMEM;
-  for(i=0; i<pChanges->n; i++){
+  if( (pChanges->n+1)*2>pChanges->nSlot ){
+    int rc = wsChangesGrowSlots(pChanges);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  iSlot = wsRowSlot(r, pChanges->nSlot);
+  for(; pChanges->aSlot[iSlot]; iSlot = (iSlot+1) & (u32)(pChanges->nSlot-1)){
     WorkspaceRow *pOld;
-    pChange = &pChanges->a[i];
-    if( sqlite3_stricmp(pChange->pVtab->zTableName,p->zTableName)!=0 ) continue;
+    pChange = &pChanges->a[pChanges->aSlot[iSlot]-1];
     pOld = &pChange->pRows->a[pChange->iRow];
     if( r->keyIsIntKey!=pOld->keyIsIntKey ) continue;
     if( r->keyIsIntKey ? r->intKey!=pOld->intKey
         : r->nKey!=pOld->nKey || memcmp(r->pKey,pOld->pKey,r->nKey)!=0 ){
       continue;
     }
+    if( sqlite3_stricmp(pChange->pVtab->zTableName,p->zTableName)!=0 ) continue;
     break;
   }
-  if( i==pChanges->n ){
+  if( pChanges->aSlot[iSlot]==0 ){
     if( pChanges->n==pChanges->nAlloc ){
       int nAlloc = pChanges->nAlloc ? pChanges->nAlloc*2 : 8;
       WorkspaceChange *a = sqlite3_realloc64(pChanges->a,
@@ -1074,8 +1112,10 @@ static int wsQueueChange(
       pChanges->a = a;
       pChanges->nAlloc = nAlloc;
     }
-    pChanges->n++;
+    i = pChanges->n++;
+    pChanges->aSlot[iSlot] = i+1;
   }else{
+    i = pChanges->aSlot[iSlot]-1;
     wsRowsRelease(pChanges->a[i].pRows);
   }
   pChange = &pChanges->a[i];
@@ -1109,6 +1149,7 @@ void doltliteWorkspaceFinishStatement(Vdbe *pStmt){
   }
   for(i=0; i<pChanges->n; i++) wsRowsRelease(pChanges->a[i].pRows);
   sqlite3_free(pChanges->a);
+  sqlite3_free(pChanges->aSlot);
   sqlite3_free(pChanges);
   pStmt->pWorkspaceChanges = 0;
 }
