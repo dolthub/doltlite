@@ -35,6 +35,11 @@ struct CsReadLock {
 int csFileLock(sqlite3_vfs *pVfs, const char *path, int openFlags,
                CsFileLock *ppFile, char **pzName);
 int csReadLock(ChunkStore *cs, CsReadLock *pLock);
+#if defined(SQLITE_WASM) || defined(__EMSCRIPTEN__)
+int csWasmReplaceLockedFile(ChunkStore *cs, const char *zTmp, int *pRetainTmp);
+int csWasmReplacementPending(ChunkStore *cs, int *pPending);
+int csWasmRecoverReplacement(ChunkStore *cs);
+#endif
 int csReadUnlock(ChunkStore *cs, CsReadLock *pLock);
 int csReclaimTail(ChunkStore *cs);
 int csFileLockPromote(sqlite3_file *pFile);

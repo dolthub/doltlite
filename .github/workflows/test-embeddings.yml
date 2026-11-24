@@ -131,6 +131,9 @@ jobs:
     - name: Test OPFS SAH pool imports in Chromium
       run: node ext/wasm/test-doltlite-opfs-import.mjs
 
+    - name: Test recovery from interrupted OPFS compaction
+      run: node ext/wasm/test-doltlite-opfs-gc-recovery.mjs
+
     - name: Test DoltLite wasm file:// remotes
       run: |
         node ext/wasm/test-doltlite-remote.mjs

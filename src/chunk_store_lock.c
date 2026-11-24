@@ -376,6 +376,9 @@ void csFileUnlock(CsFileLock pLock, char **pzName){
 }
 
 int chunkStoreReplaceLockedFile(ChunkStore *cs, const char *zTmp, int *pRetainTmp){
+#if defined(SQLITE_WASM) || defined(__EMSCRIPTEN__)
+  return csWasmReplaceLockedFile(cs, zTmp, pRetainTmp);
+#else
   int rc;
 #if SQLITE_OS_UNIX
   sqlite3_file *pGuard = 0;
@@ -400,6 +403,7 @@ int chunkStoreReplaceLockedFile(ChunkStore *cs, const char *zTmp, int *pRetainTm
   }
 #endif
   return rc;
+#endif
 }
 
 #define CS_REPLACEMENT_PROOF_MAGIC 0x32504c44
@@ -987,6 +991,12 @@ static int csFileSnapshotUnchanged(ChunkStore *cs){
   state.bMoved = 0;
   rc = sqlite3OsDoltliteFileState(cs->file.pFile, &state);
   if( rc!=SQLITE_OK || state.bMoved || state.iFileSize<0 ) return 0;
+#if defined(SQLITE_WASM) || defined(__EMSCRIPTEN__)
+  {
+    int pending = 0;
+    if( csWasmReplacementPending(cs, &pending)!=SQLITE_OK || pending ) return 0;
+  }
+#endif
   if( state.iFileSize>cs->file.iFileSize ){
     int bRecord = 1;
     if( csTailHasRecord(cs, state.iFileSize, &bRecord)!=SQLITE_OK || bRecord ){
@@ -1189,6 +1199,14 @@ static int csRefreshIfChangedReadLocked(
              ? SQLITE_OK : rc;
     }
   }
+#if defined(SQLITE_WASM) || defined(__EMSCRIPTEN__)
+  {
+    int pending = 0;
+    rc = csWasmReplacementPending(cs, &pending);
+    if( rc==SQLITE_OK && pending ) rc = SQLITE_BUSY_RECOVERY;
+  }
+  if( rc==SQLITE_OK )
+#endif
   rc = csRefreshIfChanged(cs, pChanged);
   /* As at open: an unlocked reader raced a writer's tail trim. */
   for(nTry=1; rc==SQLITE_IOERR_SHORT_READ && cs->noReadLock
