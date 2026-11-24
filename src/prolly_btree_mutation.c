@@ -1860,7 +1860,10 @@ int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
      && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
       ProllyMutMapEntry *pEntry;
       int rcEntry = currentMutMapEntry(pCur, &pEntry);
-      if( rcEntry!=SQLITE_OK ) return rcEntry;
+      if( rcEntry!=SQLITE_OK ){
+        rc = rcEntry;
+        goto delete_cleanup;
+      }
       if( pEntry->op==PROLLY_EDIT_INSERT
        && prollyMutMapEntryIntKey(pEntry)==iKey ){
         rc = prollyMutMapDeleteEntry(pCur->pMutMap, pEntry);
@@ -1888,7 +1891,10 @@ int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
      && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
       ProllyMutMapEntry *pEntry;
       int rcEntry = currentMutMapEntry(pCur, &pEntry);
-      if( rcEntry!=SQLITE_OK ) return rcEntry;
+      if( rcEntry!=SQLITE_OK ){
+        rc = rcEntry;
+        goto delete_cleanup;
+      }
       if( pEntry->op==PROLLY_EDIT_INSERT
        && pEntry->nKey==nKey
        && nKey>0
@@ -1988,9 +1994,8 @@ int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
     }
   } else {
     pCur->eState = CURSOR_INVALID;
+    rc = SQLITE_OK;
   }
-
-  rc = SQLITE_OK;
 
 delete_cleanup:
   if( savedDelKeyOwned ) sqlite3_free(pSavedDelKey);
