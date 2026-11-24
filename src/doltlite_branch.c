@@ -519,6 +519,7 @@ static void doltBranchParsedFunc(
         }
       }
       if( hadExplicitTxn && doltliteVcSealPrecheck(ctx, &bHookApproved) ){
+        sqlite3_free(zPreparedBranch);
         branchSealSavepointsOnError(ctx, hadSavepoint);
         return;
       }

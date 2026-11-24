@@ -98,4 +98,43 @@ foreach command {commit branch} {
   } {1 ok}
 }
 
+reset_db
+execsql {
+  PRAGMA foreign_keys=ON;
+  CREATE TABLE parent(id INTEGER PRIMARY KEY);
+  CREATE TABLE child(
+    id INTEGER PRIMARY KEY,
+    pid INTEGER REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED
+  );
+  INSERT INTO parent VALUES(1);
+  SELECT dolt_commit('-Am','init');
+  BEGIN;
+  INSERT INTO child VALUES(1, 999);
+}
+do_catchsql_test vc-branch-move-precheck-fk {
+  SELECT dolt_branch('-m','main','renamed');
+} {1 {FOREIGN KEY constraint failed}}
+do_execsql_test vc-branch-move-precheck-fk-state {
+  ROLLBACK;
+  SELECT active_branch();
+  SELECT name FROM dolt_branches ORDER BY name;
+} {main main}
+
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY);
+  SELECT dolt_commit('-Am','init');
+  BEGIN;
+  INSERT INTO t VALUES(1);
+}
+db commit_hook {return 1}
+do_catchsql_test vc-branch-move-precheck-hook {
+  SELECT dolt_branch('-m','main','renamed');
+} {1 {constraint failed}}
+db commit_hook {}
+do_execsql_test vc-branch-move-precheck-hook-state {
+  SELECT active_branch();
+  SELECT name FROM dolt_branches ORDER BY name;
+} {main main}
+
 finish_test
