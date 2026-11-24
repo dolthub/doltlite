@@ -3181,13 +3181,14 @@ static void doltliteRebaseInteractiveContinue(
     }
   }
 
-  /* Squash and fixup amend the commit before them, so a pick or reword
-  ** has to come first. edit applies its own commit and may lead the plan. */
+  /* Squash and fixup amend the commit before them, so a pick, reword,
+  ** or edit has to come first. */
   {
     int seenAnchor = (doltliteGetSessionRebaseFlags(db) & WS_REBASE_FLAG_EDIT)!=0;
     for(i=0; i<nPlan; i++){
       const char *zAct = aPlan[i].zAction;
-      if( strcmp(zAct, "pick")==0 || strcmp(zAct, "reword")==0 ){
+      if( strcmp(zAct, "pick")==0 || strcmp(zAct, "reword")==0
+       || strcmp(zAct, "edit")==0 ){
         seenAnchor = 1;
       }else if( (strcmp(zAct, "squash")==0 || strcmp(zAct, "fixup")==0)
              && !seenAnchor ){

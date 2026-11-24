@@ -96,7 +96,7 @@ foreach key {INTEGER INT} {
 }
 
 foreach action {fixup squash} {
-  foreach first {fold drop edit} {
+  foreach first {fold drop} {
     reset_db
     execsql {
       CREATE TABLE t(id INTEGER PRIMARY KEY);
@@ -120,6 +120,56 @@ foreach action {fixup squash} {
       SELECT active_branch();
     } {2 dolt_rebase_f}
     execsql {SELECT dolt_rebase('--abort')}
+  }
+}
+
+foreach action {fixup squash} {
+  foreach changes {clean amend} {
+    reset_db
+    execsql {
+      CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+      INSERT INTO t VALUES(1,1);
+      SELECT dolt_commit('-Am','base');
+      SELECT dolt_checkout('-b','f');
+      INSERT INTO t VALUES(2,2);
+      SELECT dolt_commit('-am','f1');
+      INSERT INTO t VALUES(3,3);
+      SELECT dolt_commit('-am','f2');
+      SELECT dolt_rebase('-i','main');
+      UPDATE dolt_rebase SET action='edit' WHERE rebase_order=1;
+      UPDATE dolt_rebase SET action=$action WHERE rebase_order=2;
+    }
+    set prefix rebase-edit-fold-leading-$action-$changes
+    do_test $prefix.pause {
+      string match {*edit action paused*} [execsql {SELECT dolt_rebase('--continue')}]
+    } 1
+    set val 2
+    set msg f1
+    if {$changes eq "amend"} {
+      execsql {
+        UPDATE t SET a=20 WHERE id=2;
+        SELECT dolt_commit('--amend','-am','f1 edited');
+      }
+      set val 20
+      set msg {f1 edited}
+    }
+    do_test $prefix.continue {
+      lindex [catchsql {SELECT dolt_rebase('--continue')}] 0
+    } 0
+    do_execsql_test $prefix.rows {
+      SELECT id,a FROM t ORDER BY id;
+    } [list 1 1 2 $val 3 3]
+    if {$action eq "squash"} {append msg "\n\nf2"}
+    do_execsql_test $prefix.log {
+      SELECT message FROM dolt_log WHERE message NOT LIKE 'Initialize%';
+    } [list $msg base]
+    do_execsql_test $prefix.cleaned {
+      SELECT active_branch();
+      SELECT count(*) FROM dolt_status;
+      SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_f';
+      SELECT count(*) FROM sqlite_schema WHERE name='dolt_rebase';
+      PRAGMA integrity_check;
+    } {f 0 0 0 ok}
   }
 }
 finish_test
