@@ -342,13 +342,26 @@ static int remoteValidateFetchedGraph(
   const char *zBranch
 ){
   const BranchRef *aBranch;
+  const TrackingBranch *aTracking;
   ProllyHash *aAnchors;
   int nBranch;
+  int nTracking;
   int nAnchors = 0;
   int rc;
   int i;
 
   refsTableGetBranches(&pStore->refs, &nBranch, &aBranch);
+  refsTableGetTracking(&pStore->refs, &nTracking, &aTracking);
+  /* A commit an installed ref names was validated when that ref landed, and
+  ** gc has kept it whole since. */
+  for(i=0; i<nBranch; i++){
+    if( prollyHashCompare(&aBranch[i].commitHash, pCommit)==0 ) return SQLITE_OK;
+  }
+  for(i=0; i<nTracking; i++){
+    if( prollyHashCompare(&aTracking[i].commitHash, pCommit)==0 ){
+      return SQLITE_OK;
+    }
+  }
   aAnchors = sqlite3_malloc64(((sqlite3_uint64)nBranch+1)*sizeof(*aAnchors));
   if( !aAnchors ) return SQLITE_NOMEM;
   for(i=0; i<nBranch; i++) aAnchors[nAnchors++] = aBranch[i].commitHash;

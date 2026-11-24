@@ -4439,6 +4439,58 @@ static void run_push_validation_reads_new_chunks(void){
   removeDbFiles(dbpath);
 }
 
+static long long fetchAllChunkReads(const char *zLocal, const char *zRemote){
+  sqlite3 *db = 0;
+  char sql[1024];
+  long long before, after;
+  removeDbFiles(zLocal);
+  check("fsb_open_local", open_db(zLocal, &db)==SQLITE_OK);
+  snprintf(sql, sizeof(sql),
+    "CREATE TABLE seed(x INTEGER);"
+    "SELECT dolt_commit('-A', '-m', 'seed');"
+    "SELECT dolt_remote('add','origin','file://%s');", zRemote);
+  check("fsb_setup_local", execSql(db, sql)==SQLITE_OK);
+  before = atoll(queryScalarText(db,
+      "SELECT value FROM dolt_engine_stats WHERE name='chunk_read'"));
+  check("fsb_fetch", execSql(db, "SELECT dolt_fetch('origin')")==SQLITE_OK);
+  after = atoll(queryScalarText(db,
+      "SELECT value FROM dolt_engine_stats WHERE name='chunk_read'"));
+  sqlite3_close(db);
+  removeDbFiles(zLocal);
+  return after-before;
+}
+
+/* Branches that share a commit are validated once, not once per branch. */
+static void run_fetch_shared_commit_validates_once(void){
+  sqlite3 *db = 0;
+  char remotePath[512];
+  char localPath[512];
+  long long nOne, nFour;
+
+  printf("=== Fetch Shared Commit Validates Once Test ===\n\n");
+  make_dbpath(remotePath, sizeof(remotePath), "test_fetch_shared_remote");
+  make_dbpath(localPath, sizeof(localPath), "test_fetch_shared_local");
+  removeDbFiles(remotePath);
+  check("fsb_open_remote", open_db(remotePath, &db)==SQLITE_OK);
+  check("fsb_seed_remote", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<20000)"
+    " INSERT INTO t SELECT x, printf('%0100d', x) FROM c;"
+    "SELECT dolt_commit('-Am','big');")==SQLITE_OK);
+  nOne = fetchAllChunkReads(localPath, remotePath);
+  check("fsb_add_branches", execSql(db,
+    "SELECT dolt_branch('b1');"
+    "SELECT dolt_branch('b2');"
+    "SELECT dolt_branch('b3');")==SQLITE_OK);
+  sqlite3_close(db);
+  nFour = fetchAllChunkReads(localPath, remotePath);
+  printf("  fetch chunk reads: one branch %lld, four branches %lld\n",
+         nOne, nFour);
+  check("fsb_one_branch_reads", nOne>100);
+  check("fsb_reads_do_not_grow_with_branches", nFour<nOne+nOne/2);
+  removeDbFiles(remotePath);
+}
+
 typedef struct FetchValidationReads FetchValidationReads;
 struct FetchValidationReads {
   ChunkStore *pStore;
@@ -20990,6 +21042,7 @@ static const RegressionCase aCases[] = {
   { "fetch_opens_remote_once", "Fetch Opens Remote Once Test", run_fetch_opens_remote_once },
   { "fetch_ref_install_survives_window_gc", "Fetch Ref Install Survives Window GC Test", run_fetch_ref_install_survives_window_gc },
   { "push_validation_reads_new_chunks", "Push Validation Reads New Chunks Test", run_push_validation_reads_new_chunks },
+  { "fetch_shared_commit_validates_once", "Fetch Shared Commit Validates Once Test", run_fetch_shared_commit_validates_once },
   { "fetch_validation_reads_new_chunks", "Fetch Validation Reads New Chunks Test", run_fetch_validation_reads_new_chunks },
   { "fetch_window_gc_named_remote", "Fetch Window GC Named Remote Test", run_fetch_window_gc_named_remote },
   { "clone_ref_install_survives_window_gc", "Clone Ref Install Survives Window GC Test", run_clone_ref_install_survives_window_gc },
