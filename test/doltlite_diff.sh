@@ -504,4 +504,42 @@ run_test "negzero_insert_replay_keeps_sign" \
 rm -f "$NEG" "$PLAY" "$INS" "$REPLAY"
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20"
 
+RDB=/tmp/test_diff_reachability_$$.db; rm -f "$RDB"
+dltest_require "diff_reachability_setup" "$RDB" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','c1');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_commit('-A','-m','c2');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(3,'c');
+SELECT dolt_commit('-A','-m','c3');
+INSERT INTO t VALUES(4,'staged');
+SELECT dolt_add('t');
+INSERT INTO t VALUES(5,'working');
+"
+RC1=$(dltest_run_sql "SELECT dolt_hashof('HEAD~1');" "$RDB" bail)
+RC2=$(dltest_run_sql "SELECT hash FROM dolt_branches WHERE name='feat';" "$RDB" bail)
+RC3=$(dltest_run_sql "SELECT dolt_hashof('HEAD');" "$RDB" bail)
+
+run_test "diff_commit_eq_unreachable" \
+  "SELECT count(*) FROM dolt_diff WHERE commit_hash='$RC2';" "0" "$RDB"
+run_test "diff_commit_eq_head" \
+  "SELECT table_name FROM dolt_diff WHERE commit_hash='$RC3';" "t" "$RDB"
+run_test "diff_commit_eq_ancestor" \
+  "SELECT table_name FROM dolt_diff WHERE commit_hash='$RC1';" "t" "$RDB"
+run_test "diff_commit_eq_working" \
+  "SELECT table_name FROM dolt_diff WHERE commit_hash='WORKING';" "t" "$RDB"
+run_test "diff_commit_eq_staged" \
+  "SELECT table_name FROM dolt_diff WHERE commit_hash='STAGED';" "t" "$RDB"
+
+dltest_require "diff_reachability_merge" "$RDB" "
+SELECT dolt_reset('--hard');
+SELECT dolt_merge('feat');
+"
+run_test "diff_commit_eq_merge_second_parent" \
+  "SELECT table_name FROM dolt_diff WHERE commit_hash='$RC2';" "t" "$RDB"
+rm -f "$RDB"
+
 dltest_finish

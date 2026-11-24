@@ -7,6 +7,7 @@
 #include "prolly_cursor.h"
 #include "prolly_cache.h"
 #include "chunk_store.h"
+#include "doltlite_ancestor.h"
 #include "doltlite_commit.h"
 
 #include "doltlite_record.h"
@@ -1063,6 +1064,12 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
   if( !cs ) return SQLITE_OK;
 
   if( useStart ){
+    int reachable = 0;
+    doltliteGetSessionHead(db, &head);
+    if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
+    rc = doltliteCommitIsReachable(db, &head, &startHash, &reachable);
+    if( rc!=SQLITE_OK ) return rc;
+    if( !reachable ) return SQLITE_OK;
     head = startHash;
     pCur->singleCommit = 1;
   }else if( workingOnly ){

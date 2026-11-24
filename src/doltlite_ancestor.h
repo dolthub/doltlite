@@ -20,4 +20,11 @@ int doltliteFindAncestors(
   int *pnAncestors
 );
 
+int doltliteCommitIsReachable(
+  sqlite3 *db,
+  const ProllyHash *pHead,
+  const ProllyHash *pTarget,
+  int *pReachable
+);
+
 #endif

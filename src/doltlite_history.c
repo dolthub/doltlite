@@ -2,6 +2,7 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "doltlite_vtab_util.h"
+#include "doltlite_ancestor.h"
 #include "doltlite_commit.h"
 #include "doltlite_internal.h"
 #include <string.h>
@@ -348,6 +349,7 @@ static int htFilter(sqlite3_vtab_cursor *cur,
   ChunkStore *cs;
   int rc;
   int iArg = 0;
+  int invalidCommit = 0;
   (void)idxStr;
 
   htCursorReset(c);
@@ -385,18 +387,17 @@ static int htFilter(sqlite3_vtab_cursor *cur,
     if( !zHash || doltliteValueHasNul(argv[iArg])
      || doltliteHexToHash(zHash, &startHash)!=SQLITE_OK
      || prollyHashIsEmpty(&startHash) ){
-      return SQLITE_OK;
+      invalidCommit = 1;
+    }else{
+      c->singleCommit = 1;
     }
-    c->singleCommit = 1;
     iArg++;
   }
 
   cs = doltliteGetChunkStore(v->db);
   if( !cs ) return SQLITE_OK;
 
-  if( c->singleCommit ){
-    head = startHash;
-  }else if( idxNum & HIST_IDX_START_REF ){
+  if( idxNum & HIST_IDX_START_REF ){
     const char *zRef;
     if( iArg>=argc ) return SQLITE_OK;
     if( sqlite3_value_type(argv[iArg])==SQLITE_NULL ){
@@ -424,6 +425,15 @@ static int htFilter(sqlite3_vtab_cursor *cur,
   }else{
     doltliteGetSessionHead(v->db, &head);
     if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
+  }
+
+  if( invalidCommit ) return SQLITE_OK;
+  if( c->singleCommit ){
+    int reachable = 0;
+    rc = doltliteCommitIsReachable(v->db, &head, &startHash, &reachable);
+    if( rc!=SQLITE_OK ) return rc;
+    if( !reachable ) return SQLITE_OK;
+    head = startHash;
   }
 
   rc = doltliteCommitQueueInit(&c->queue, &head);
