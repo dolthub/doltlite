@@ -541,4 +541,49 @@ run_test_error_match "history_commit_eq_nul_start_ref" \
   "contains a NUL byte" "$DB"
 rm -f "$DB"
 
+DB=/tmp/test_hist_lateral_start_ref_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','c1');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_commit('-A','-m','c2');
+SELECT dolt_checkout('main');
+CREATE TABLE refs(r TEXT);
+INSERT INTO refs VALUES('main'),('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+C2=$(echo "SELECT hash FROM dolt_branches WHERE name='feat';" | $DOLTLITE "$DB" 2>&1)
+
+run_test "history_lateral_join" \
+  "SELECT r.r, h.id FROM refs r JOIN dolt_history_t(r.r) h ORDER BY r.r, h.id;" \
+  "feat|1
+feat|1
+feat|2
+main|1" "$DB"
+run_test "history_lateral_reordered_join" \
+  "SELECT r.r, h.id FROM dolt_history_t(r.r) h JOIN refs r ORDER BY r.r, h.id;" \
+  "feat|1
+feat|1
+feat|2
+main|1" "$DB"
+run_test "history_lateral_pk_eq" \
+  "SELECT r.r, h.id FROM refs r JOIN dolt_history_t(r.r) h WHERE h.id=1 ORDER BY r.r;" \
+  "feat|1
+feat|1
+main|1" "$DB"
+run_test "history_lateral_reordered_pk_eq" \
+  "SELECT r.r, h.id FROM dolt_history_t(r.r) h JOIN refs r WHERE h.id=1 ORDER BY r.r;" \
+  "feat|1
+feat|1
+main|1" "$DB"
+run_test "history_lateral_commit_eq" \
+  "SELECT r.r, h.id FROM dolt_history_t(r.r) h JOIN refs r WHERE h.commit_hash='$C2' ORDER BY r.r, h.id;" \
+  "feat|1
+feat|2" "$DB"
+run_test "history_lateral_correlated_subquery" \
+  "SELECT r.r, (SELECT count(*) FROM dolt_history_t(r.r)) FROM refs r ORDER BY r.r;" \
+  "feat|3
+main|1" "$DB"
+rm -f "$DB"
+
 dltest_finish
