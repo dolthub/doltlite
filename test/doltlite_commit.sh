@@ -956,6 +956,38 @@ run_test "commit_all_sibling_amend_without_message_logged" \
   "SELECT committer || '|' || email || '|' || date || '|' || message FROM dolt_log('feat') LIMIT 1;" \
   "Alice|alice@example.com|2025-01-02 03:04:05|both-date" "$DB32"
 
+run_test_error_match "commit_empty_long_message_does_not_steal_flag" \
+  "SELECT dolt_commit('--message=','--allow-empty');" \
+  "dolt_commit requires a message" "$DB3"
+
+run_test_error_match "commit_empty_long_message_staged_does_not_steal_flag" \
+  "INSERT INTO t VALUES(2); SELECT dolt_commit('-A','--message=','--allow-empty');" \
+  "dolt_commit requires a message" "$DB3"
+
+run_test "commit_empty_long_message_did_not_commit_flag" \
+  "SELECT count(*) FROM dolt_log WHERE message='--allow-empty';" \
+  "0" "$DB3"
+
+run_test_error_match "commit_empty_long_author_does_not_steal_flag" \
+  "SELECT dolt_commit('-A','--author=','-m','msg');" \
+  "Option 'author' requires a value" "$DB3"
+
+run_test_match "commit_long_message_equals_value" \
+  "SELECT dolt_commit('-A','--message=equals msg');" \
+  "^[0-9a-f]{40}$" "$DB3"
+
+run_test "commit_long_message_equals_value_logged" \
+  "SELECT message FROM dolt_log LIMIT 1;" \
+  "equals msg" "$DB3"
+
+run_test_match "commit_short_group_attached_value" \
+  "INSERT INTO t VALUES(3); SELECT dolt_commit('-amattached msg');" \
+  "^[0-9a-f]{40}$" "$DB3"
+
+run_test "commit_short_group_attached_value_logged" \
+  "SELECT message FROM dolt_log LIMIT 1;" \
+  "attached msg" "$DB3"
+
 rm -f "$DB" "$DB_DUP" "$DB2" "$DB3" "$DB_BOTH" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB26" "$DB27" "$DB28" "$DB29" "$DB30" "$DB31" "$DB32"
 
 dltest_finish
