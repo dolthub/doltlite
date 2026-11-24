@@ -2085,5 +2085,61 @@ else
   ERRORS="$ERRORS\nFAIL: cherry_pick_conflict_clean_table_staged\n  stats: $CP_ROWS\n  full: $CP_OUT"
 fi
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DBE" "$DBE2" "$DBE3" "$DBU" "$DBP" "$DBEK" "$DBED" "$DBEI" "$DBCV" "$DBEDIT" "$DBEDIT2" "$DBEDIT3" "$DBEDIT4" "$DBEDIT5" "$DBEDIT6" "$DBADD1" "$DBADD2" "$DBADD3" "$DBADD4" "$DBADD5" "$DBADDE" "$DBEDITST" "$DBEDITUS" "$DBEDITMAN" "$DBEDITAM" "$DBEDITRO" "$DBST" "$DBST3" "$DBSTD" "$DBSTC" "$DBCP"
+DBEDIT_FOLD=/tmp/test_rebase_edit_leading_fold_$$.db
+for fold_act in squash fixup; do
+  for edit_mode in clean amend; do
+    rm -f "$DBEDIT_FOLD"
+    cat <<'SQL' | "$DOLTLITE" "$DBEDIT_FOLD" >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feat');
+INSERT INTO t VALUES (2, 2);
+SELECT dolt_commit('-am', 'f1');
+INSERT INTO t VALUES (3, 3);
+SELECT dolt_commit('-am', 'f2');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (10, 10);
+SELECT dolt_commit('-am', 'm1');
+SELECT dolt_checkout('feat');
+SQL
+    EDIT_SQL=""
+    EXP_V2=2
+    EXP_MSG="f1"
+    if [ "$edit_mode" = "amend" ]; then
+      EDIT_SQL="UPDATE t SET v=20 WHERE id=2; SELECT dolt_commit('--amend', '-am', 'f1 edited');"
+      EXP_V2=20
+      EXP_MSG="f1 edited"
+    fi
+    if [ "$fold_act" = "squash" ]; then
+      EXP_LOG="${EXP_MSG}
+
+f2|m1|base"
+    else
+      EXP_LOG="${EXP_MSG}|m1|base"
+    fi
+    EF_OUT=$(echo "SELECT dolt_checkout('feat');
+SELECT dolt_rebase('-i', 'main');
+UPDATE dolt_rebase SET action='edit' WHERE commit_message='f1';
+UPDATE dolt_rebase SET action='$fold_act' WHERE commit_message='f2';
+SELECT dolt_rebase('--continue');
+$EDIT_SQL
+SELECT dolt_rebase('--continue');
+SELECT 'ROWS|' || group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id);
+SELECT 'BR|' || active_branch() || '|' || (SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat');
+SELECT 'LOG|' || group_concat(message, '|') FROM dolt_log WHERE message NOT LIKE 'Initialize%';" | "$DOLTLITE" "$DBEDIT_FOLD" 2>&1)
+    if echo "$EF_OUT" | grep -q 'edit action paused' \
+       && echo "$EF_OUT" | grep -q 'Successfully rebased and updated refs/heads/feat' \
+       && echo "$EF_OUT" | grep -q "^ROWS|1:1,2:${EXP_V2},3:3,10:10$" \
+       && echo "$EF_OUT" | grep -q '^BR|feat|0$' \
+       && [ "$(echo "$EF_OUT" | sed -n '/^LOG|/,$p')" = "LOG|$EXP_LOG" ]; then
+      PASS=$((PASS+1))
+    else
+      FAIL=$((FAIL+1))
+      ERRORS="$ERRORS\nFAIL: rebase_edit_leading_${fold_act}_${edit_mode}\n  full: $EF_OUT"
+    fi
+  done
+done
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DBE" "$DBE2" "$DBE3" "$DBU" "$DBP" "$DBEK" "$DBED" "$DBEI" "$DBCV" "$DBEDIT" "$DBEDIT2" "$DBEDIT3" "$DBEDIT4" "$DBEDIT5" "$DBEDIT6" "$DBADD1" "$DBADD2" "$DBADD3" "$DBADD4" "$DBADD5" "$DBADDE" "$DBEDITST" "$DBEDITUS" "$DBEDITMAN" "$DBEDITAM" "$DBEDITRO" "$DBST" "$DBST3" "$DBSTD" "$DBSTC" "$DBCP" "$DBEDIT_FOLD"
 dltest_finish
