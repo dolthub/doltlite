@@ -1482,21 +1482,37 @@ static void doltliteCommitFuncImpl(
 }
 
 
+static void commitRestoreStagedOnError(
+  sqlite3_context *context,
+  const ProllyHash *pSavedStaged,
+  int didStage
+){
+  sqlite3 *db = sqlite3_context_db_handle(context);
+  int isInterrupted;
+  if( !didStage ) return;
+  isInterrupted = !doltliteVcInterruptDeferred(db, 0)
+               && (context->isError==SQLITE_INTERRUPT
+                   || AtomicLoad(&db->u1.isInterrupted));
+  if( !context->isError && !isInterrupted ) return;
+  {
+    int rc = doltliteSetSessionStaged(db, pSavedStaged);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+    }else if( isInterrupted ){
+      sqlite3_result_error_code(context, SQLITE_INTERRUPT);
+    }
+  }
+}
+
 static void doltliteCommitFunc(
   sqlite3_context *context,
   int argc,
   sqlite3_value **argv
 ){
-  sqlite3 *db = sqlite3_context_db_handle(context);
   ProllyHash savedStaged;
   int didStage = 0;
   doltliteCommitFuncImpl(context, argc, argv, &savedStaged, &didStage);
-  if( didStage && !doltliteVcInterruptDeferred(db, 0)
-   && (context->isError==SQLITE_INTERRUPT
-       || AtomicLoad(&db->u1.isInterrupted)) ){
-    int rc = doltliteSetSessionStaged(db, &savedStaged);
-    sqlite3_result_error_code(context, rc==SQLITE_OK ? SQLITE_INTERRUPT : rc);
-  }
+  commitRestoreStagedOnError(context, &savedStaged, didStage);
 }
 
 typedef struct CommitAllBranch CommitAllBranch;
@@ -1731,6 +1747,7 @@ static void doltliteCommitAllFunc(
     ProllyHash savedStaged;
     int didStage = 0;
     doltliteCommitFuncImpl(context, argc, argv, &savedStaged, &didStage);
+    commitRestoreStagedOnError(context, &savedStaged, didStage);
     if( context->isError ){
       const char *zErr = (const char*)sqlite3_value_text(context->pOut);
       if( zErr && strncmp(zErr, "nothing to commit", 17)==0 ){

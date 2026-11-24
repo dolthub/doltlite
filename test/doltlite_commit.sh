@@ -797,6 +797,81 @@ run_test "amend_during_merge_then_finish_msg" \
   "SELECT message FROM dolt_log LIMIT 1;" \
   "merged" "$DB26"
 
-rm -f "$DB" "$DB_DUP" "$DB2" "$DB3" "$DB_BOTH" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB26"
+DB27=/tmp/test_dolt_commit_begin_error_staged_$$.db; rm -f "$DB27"
+run_test "begin_failed_commit_A_fk_does_not_leak_staged" \
+  "BEGIN;
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES nonexistent(id));
+SELECT dolt_commit('-A', '-m', 'bad');
+SELECT table_name || '|' || staged || '|' || status FROM dolt_status;" \
+  "Error near line 3: foreign key on table \`child\` requires the referenced table \`nonexistent\`
+child|0|new table" "$DB27"
+
+run_test "begin_failed_commit_A_fk_reopen_unstaged" \
+  "SELECT table_name || '|' || staged || '|' || status FROM dolt_status;" \
+  "child|0|new table" "$DB27"
+
+DB28=/tmp/test_dolt_commit_begin_ws_staged_$$.db; rm -f "$DB28"
+run_test "begin_failed_commit_A_whitespace_msg_does_not_leak_staged" \
+  "BEGIN;
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-A', '-m', '   ');
+SELECT table_name || '|' || staged || '|' || status FROM dolt_status;" \
+  "Error near line 3: dolt_commit requires a non-empty message
+t|0|new table" "$DB28"
+
+run_test "begin_failed_commit_A_whitespace_msg_reopen_unstaged" \
+  "SELECT table_name || '|' || staged || '|' || status FROM dolt_status;" \
+  "t|0|new table" "$DB28"
+
+DB29=/tmp/test_dolt_commit_begin_a_preserve_staged_$$.db; rm -f "$DB29"
+echo "CREATE TABLE a(id INTEGER PRIMARY KEY);
+CREATE TABLE b(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-A', '-m', 'init');
+INSERT INTO a VALUES(1);
+SELECT dolt_add('a');" | $DOLTLITE "$DB29" > /dev/null 2>&1
+
+run_test "begin_failed_commit_a_restores_prior_staged" \
+  "BEGIN;
+INSERT INTO b VALUES(2);
+SELECT dolt_commit('-a', '-m', '   ');
+SELECT table_name || '|' || staged || '|' || status
+  FROM dolt_status ORDER BY table_name, staged;" \
+  "Error near line 3: dolt_commit requires a non-empty message
+a|1|modified
+b|0|modified" "$DB29"
+
+run_test "begin_failed_commit_a_reopen_preserves_prior_staged" \
+  "SELECT table_name || '|' || staged || '|' || status
+  FROM dolt_status ORDER BY table_name, staged;" \
+  "a|1|modified
+b|0|modified" "$DB29"
+
+DB30=/tmp/test_dolt_commit_savepoint_error_staged_$$.db; rm -f "$DB30"
+run_test "savepoint_failed_commit_A_fk_does_not_leak_staged" \
+  "SAVEPOINT sp;
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES nonexistent(id));
+SELECT dolt_commit('-A', '-m', 'bad');
+SELECT table_name || '|' || staged || '|' || status FROM dolt_status;" \
+  "Error near line 3: foreign key on table \`child\` requires the referenced table \`nonexistent\`
+child|0|new table" "$DB30"
+
+run_test "savepoint_failed_commit_A_fk_reopen_unstaged" \
+  "SELECT table_name || '|' || staged || '|' || status FROM dolt_status;" \
+  "child|0|new table" "$DB30"
+
+DB31=/tmp/test_dolt_commit_all_begin_error_staged_$$.db; rm -f "$DB31"
+run_test "begin_failed_commit_all_A_does_not_leak_staged" \
+  "BEGIN;
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+SELECT dolt_commit_all('-A', '-m', '   ');
+SELECT table_name || '|' || staged || '|' || status FROM dolt_status;" \
+  "Error near line 3: dolt_commit requires a non-empty message
+t|0|new table" "$DB31"
+
+run_test "begin_failed_commit_all_A_reopen_unstaged" \
+  "SELECT table_name || '|' || staged || '|' || status FROM dolt_status;" \
+  "t|0|new table" "$DB31"
+
+rm -f "$DB" "$DB_DUP" "$DB2" "$DB3" "$DB_BOTH" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB26" "$DB27" "$DB28" "$DB29" "$DB30" "$DB31"
 
 dltest_finish
