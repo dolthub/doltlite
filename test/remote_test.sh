@@ -1193,6 +1193,45 @@ result=$("$DB" "file:lazy_revision_requires_lazy?mode=memory&lazy_origin=1" \
   "SELECT dolt_clone('--revision','main','$R/lazy_revision_origin.db');" 2>&1)
 check_match "clone revision requires lazy mode" "revision requires --lazy" "$result"
 
+result=$("$DB" "$TMPDIR/lazy_failed_rev.db" <<ENDSQL 2>&1
+SELECT dolt_clone('--lazy','--revision','no_such_rev','$R/lazy_revision_origin.db');
+SELECT dolt_remote('add','origin','$R/lazy_revision_origin.db');
+SELECT dolt_fetch('origin');
+SELECT dolt_checkout('-b','fetched','origin/main');
+SELECT dolt_remote('remove','origin');
+SELECT count(*) FROM dolt_remotes;
+ENDSQL
+)
+check_match "failed lazy revision clone errors" "failed to initialize lazy clone" "$result"
+check_match "failed lazy revision clone allows adding, fetching, and removing origin" "0
+0
+0
+0
+0" "$result"
+result=$("$DB" "$TMPDIR/lazy_failed_rev.db" "SELECT dolt_checkout('fetched'); SELECT count(*) FROM base_t;")
+check "fetch after failed lazy revision clone synced chunks locally" "0
+2" "$result"
+
+printf 'not a valid doltlite db' > "$TMPDIR/lazy_corrupt_remote.db"
+result=$("$DB" "$TMPDIR/lazy_failed_corrupt.db" <<ENDSQL 2>&1
+SELECT dolt_clone('--lazy','$R/lazy_corrupt_remote.db');
+SELECT dolt_remote('add','origin','$R/lazy_revision_origin.db');
+SELECT dolt_fetch('origin');
+SELECT dolt_checkout('-b','fetched','origin/main');
+SELECT dolt_remote('remove','origin');
+SELECT count(*) FROM dolt_remotes;
+ENDSQL
+)
+check_match "failed lazy clone on corrupt remote errors" "clone failed" "$result"
+check_match "failed lazy clone on corrupt remote allows adding, fetching, and removing origin" "0
+0
+0
+0
+0" "$result"
+result=$("$DB" "$TMPDIR/lazy_failed_corrupt.db" "SELECT dolt_checkout('fetched'); SELECT count(*) FROM base_t;")
+check "fetch after failed lazy clone on corrupt remote synced chunks locally" "0
+2" "$result"
+
 lazy_parity_sql="
 SELECT count(*) || '|' || sum(id) || '|' || sum(length(payload)) FROM lazy_rows;
 SELECT count(*) || '|' || max(message='lazy update') FROM dolt_log;

@@ -2138,6 +2138,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   char *zRemoteOwned = 0;
   DoltliteTxnState savedState;
   int bLazy = 0;
+  int bEnabledOrigin = 0;
   int bSingle = 0;
   int dirty = 0;
   int branchMissing = 0;
@@ -2286,6 +2287,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }
 
   if( bLazy ){
+    int wasOriginEnabled = doltliteOriginSourceIsEnabled(cs);
     rc = doltliteOriginSourceEnable(cs, db, 0);
     if( rc!=SQLITE_OK ){
       pRemote->xClose(pRemote);
@@ -2295,6 +2297,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
                                 "failed to initialize lazy clone");
       return;
     }
+    bEnabledOrigin = !wasOriginEnabled;
   }
   branchMissing = 0;
   occupied = 0;
@@ -2321,6 +2324,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
     zOwned = zMsg ? sqlite3_mprintf("%s", zMsg) : 0;
     pRemote->xClose(pRemote);
+    if( bEnabledOrigin ) doltliteOriginSourceDisable(cs);
     /* Keep the post-refresh refs. The saved hash is the pre-clone root, and
     ** restoring it would publish that over a peer on the next commit. */
     if( occupied ){
@@ -2343,11 +2347,14 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   if( bLazy ){
     Btree *pBtree = sqlite3DbNameToBtree(db, 0);
     char *zPreparedBranch = 0;
+    u8 savedDeferredOpen = 0;
     if( !pBtree || !sqlite3BtreeIsDoltliteFormat(pBtree) ){
+      if( bEnabledOrigin ) doltliteOriginSourceDisable(cs);
       remoteSqlFailAfterCloneCommit(ctx, db, cs, &savedState, SQLITE_ERROR,
                                     "failed to initialize lazy clone");
       return;
     }
+    savedDeferredOpen = pBtree->bDeferredOpen;
     pBtree->bDeferredOpen = 1;
     if( zRevision ){
       rc = remoteSqlSelectLazyRevision(db, pBtree, cs, zRevision);
@@ -2361,6 +2368,8 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
     sqlite3_free(zPreparedBranch);
     if( rc!=SQLITE_OK ){
+      pBtree->bDeferredOpen = savedDeferredOpen;
+      if( bEnabledOrigin ) doltliteOriginSourceDisable(cs);
       remoteSqlFailAfterCloneCommit(ctx, db, cs, &savedState, rc,
                                     "failed to initialize lazy clone");
       return;

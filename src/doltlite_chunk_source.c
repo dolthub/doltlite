@@ -770,6 +770,22 @@ int doltliteOriginSourceEnable(
   return SQLITE_OK;
 }
 
+int doltliteOriginSourceIsEnabled(ChunkStore *cs){
+  DoltliteChunkSourceState *p = cs ? cs->pChunkSource : 0;
+  return p && p->originEnabled;
+}
+
+void doltliteOriginSourceDisable(ChunkStore *cs){
+  DoltliteChunkSourceState *p = cs ? cs->pChunkSource : 0;
+  if( !p ) return;
+  p->originEnabled = 0;
+  memset(&p->originSource, 0, sizeof(p->originSource));
+#if DOLTLITE_ENABLE_REMOTES
+  csOriginRemoteClose(p);
+#endif
+  if( !p->pHostSource ) chunkStoreSourceClose(cs);
+}
+
 int chunkStoreOriginSourceEnabled(ChunkStore *cs){
   DoltliteChunkSourceState *p = cs->pChunkSource;
   return p && p->originEnabled && csHasOrigin(cs);
@@ -1124,6 +1140,18 @@ int doltliteOriginSourceEnable(ChunkStore *cs, sqlite3 *db, int *pChanged){
   p = cs->pChunkSource;
   p->originEnabled = 1;
   return SQLITE_OK;
+}
+
+int doltliteOriginSourceIsEnabled(ChunkStore *cs){
+  DoltliteChunkSourceState *p = cs ? cs->pChunkSource : 0;
+  return p && p->originEnabled;
+}
+
+void doltliteOriginSourceDisable(ChunkStore *cs){
+  DoltliteChunkSourceState *p = cs ? cs->pChunkSource : 0;
+  if( !p ) return;
+  p->originEnabled = 0;
+  chunkStoreSourceClose(cs);
 }
 
 int chunkStoreOriginSourceEnabled(ChunkStore *cs){
