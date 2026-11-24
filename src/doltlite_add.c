@@ -41,14 +41,19 @@ static int addCheckIgnoreAt(
   sqlite3_context *context,
   const char *zName,
   int *pIgnored,
-  const ProllyHash *pCatalog
+  const ProllyHash *pCatalog,
+  DoltliteIgnoreSet **ppSet
 ){
+  DoltliteIgnoreSet *pOwn = 0;
   char *zIgnErr = 0;
-  int rc;
+  int rc = SQLITE_OK;
   *pIgnored = 0;
-  rc = pCatalog
-      ? doltliteCheckIgnoreCatalog(db, pCatalog, zName, pIgnored, &zIgnErr)
-      : doltliteCheckIgnore(db, zName, pIgnored, &zIgnErr);
+  if( !ppSet ) ppSet = &pOwn;
+  if( !*ppSet ) rc = doltliteIgnoreSetLoad(db, pCatalog, ppSet, &zIgnErr);
+  if( rc==SQLITE_OK ){
+    rc = doltliteIgnoreSetCheck(*ppSet, zName, pIgnored, &zIgnErr);
+  }
+  doltliteIgnoreSetFree(pOwn);
   if( rc==SQLITE_CONSTRAINT ){
     addResultIgnoreConflict(context, zIgnErr);
   }else if( rc!=SQLITE_OK ){
@@ -61,7 +66,7 @@ static int addCheckIgnoreAt(
 static int addCheckIgnore(
   sqlite3 *db, sqlite3_context *context, const char *zName, int *pIgnored
 ){
-  return addCheckIgnoreAt(db, context, zName, pIgnored, 0);
+  return addCheckIgnoreAt(db, context, zName, pIgnored, 0, 0);
 }
 
 static int addAppendTableEntry(
@@ -494,6 +499,7 @@ static int addStageAllTables(
   int useWorkingHash = 1;
   int rc;
   AddNameIndex workingIdx;
+  DoltliteIgnoreSet *pIgnore = 0;
   int workingIdxInit = 0;
   int onPlan = pStagedOut ? bOnPlan : doltliteSessionOnRebasePlan(db);
   int skippedPlan = 0;
@@ -542,7 +548,7 @@ static int addStageAllTables(
     }
     if( aWorking[k].iTable>1 && zName && !bForce ){
       rc = addCheckIgnoreAt(db, context, zName, &ignored,
-          pStagedOut ? pWorkingHash : 0);
+          pStagedOut ? pWorkingHash : 0, &pIgnore);
       if( rc!=SQLITE_OK ) goto stage_all_done;
     }
     aUseWorking[k] = !ignored;
@@ -558,7 +564,7 @@ static int addStageAllTables(
     pWorking = addNameIndexFind(&workingIdx, zName);
     if( !pWorking ){
       rc = addCheckIgnoreAt(db, context, zName, &ignored,
-          pStagedOut ? pWorkingHash : 0);
+          pStagedOut ? pWorkingHash : 0, &pIgnore);
       if( rc!=SQLITE_OK ) goto stage_all_done;
       rc = doltliteCatalogRenameMate(db, aHead, nHead,
           aStaged, nStaged, aWorking, nWorking, &aStaged[k], 1, &pWorking);
@@ -632,6 +638,7 @@ static int addStageAllTables(
       pStagedOut ? pWorkingHash : 0);
 
 stage_all_done:
+  doltliteIgnoreSetFree(pIgnore);
   if( workingIdxInit ) addNameIndexFree(&workingIdx);
   sqlite3_free(aUseWorking);
   sqlite3_free(aKeepStaged);
