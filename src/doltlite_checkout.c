@@ -460,7 +460,8 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
     if( rc!=SQLITE_OK ) return rc;
   }
 
-  if( p->haveOldState && !p->savedWasDetached && p->oldBranchExists ){
+  if( p->haveOldState && !p->savedWasDetached && p->oldBranchExists
+   && strcmp(p->zCurrentBranch, p->zTargetBranch)!=0 ){
     rc = doltliteUpdateBranchWorkingState(db, p->zCurrentBranch,
                                           &p->oldCatHash, &p->oldCommitHash);
     if( rc!=SQLITE_OK ){
