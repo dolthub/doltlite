@@ -650,6 +650,10 @@ struct RemoteStoreHdr {
   ChunkStore *pStore;
 };
 
+/* A sync asks the remote about every child of each node it walks, and those
+** hashes land on index pages at random. */
+#define FS_REMOTE_CACHE_BYTES ((i64)64*1024*1024)
+
 typedef struct FsRemote FsRemote;
 struct FsRemote {
   DoltliteRemote base;
@@ -930,6 +934,8 @@ static DoltliteRemote *fsRemoteOpen(
     sqlite3_free(p);
     return 0;
   }
+  csIndexCacheSetBudget(&p->store,
+      csIndexCacheBudgetFor(&p->store, FS_REMOTE_CACHE_BYTES));
 
   return &p->base;
 }

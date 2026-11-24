@@ -1,5 +1,6 @@
 #include "prolly_btree_int.h"
 #include "chunk_store_int.h"
+#include "doltlite_remote.h"
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -1148,6 +1149,21 @@ static void testIndexCacheSizedByIndex(void){
   check("small budget still holds the index and the node cache",
       budgetMatches(db, 1024*1024));
   check("close grown index db", sqlite3_close(db)==SQLITE_OK);
+  {
+    struct { DoltliteRemote base; ChunkStore *pStore; } *pRemote;
+    pRemote = (void*)doltliteFsRemoteOpen(sqlite3_vfs_find(0), zPath);
+    check("open file remote", pRemote!=0);
+    if( pRemote ){
+      pStore = pRemote->pStore;
+      check("file remote index is paged", pStore->index.lazy.active==1
+          && pStore->index.lazy.nEntries>8192);
+      check("file remote caches its whole paged index",
+          (i64)pStore->nIndexCacheSlot*((CS_INDEX_PAGE_SIZE
+              -CS_INDEX_PAGE_HEADER_SIZE)/CHUNK_INDEX_ENTRY_SIZE)
+          >=pStore->index.lazy.nEntries);
+      pRemote->base.xClose(&pRemote->base);
+    }
+  }
   unlink(zPath);
 }
 
