@@ -266,7 +266,7 @@ static int doltliteResolveBaseRef(
   ChunkStore *cs = doltliteGetChunkStore(db);
   int i, rc;
 
-  if( sqlite3_stricmp(zRef, "HEAD")==0 ){
+  if( strcmp(zRef, "HEAD")==0 || strcmp(zRef, "head")==0 ){
     doltliteGetSessionHead(db, pCommit);
     if( prollyHashIsEmpty(pCommit) ) return SQLITE_NOTFOUND;
     return SQLITE_OK;
@@ -304,6 +304,12 @@ static int doltliteResolveBaseRef(
       return doltliteValidateCommitHash(db, pCommit);
     }
     if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ) return rc;
+  }
+
+  if( sqlite3_stricmp(zRef, "HEAD")==0 ){
+    doltliteGetSessionHead(db, pCommit);
+    if( prollyHashIsEmpty(pCommit) ) return SQLITE_NOTFOUND;
+    return SQLITE_OK;
   }
 
   return SQLITE_NOTFOUND;
@@ -421,10 +427,25 @@ int doltliteResolveRefForMutation(
   if( db->autoCommit && sqlite3_txn_state(db, "main")==SQLITE_TXN_NONE
    && sqlite3_strnicmp(zRef, "HEAD", 4)==0
    && (zRef[4]==0 || zRef[4]=='~' || zRef[4]=='^') ){
-    zBranchRef = sqlite3_mprintf("refs/heads/%s%s",
-                                doltliteGetSessionBranch(db), zRef+4);
-    if( !zBranchRef ) return SQLITE_NOMEM;
-    zRef = zBranchRef;
+    int isHeadAlias = (strncmp(zRef, "HEAD", 4)==0 || strncmp(zRef, "head", 4)==0);
+    if( !isHeadAlias ){
+      ChunkStore *cs = doltliteGetChunkStore(db);
+      char base[5];
+      ProllyHash tmp;
+      memcpy(base, zRef, 4);
+      base[4] = 0;
+      if( cs
+       && chunkStoreFindBranch(cs, base, &tmp)==SQLITE_NOTFOUND
+       && chunkStoreFindTag(cs, base, &tmp)==SQLITE_NOTFOUND ){
+        isHeadAlias = 1;
+      }
+    }
+    if( isHeadAlias ){
+      zBranchRef = sqlite3_mprintf("refs/heads/%s%s",
+                                  doltliteGetSessionBranch(db), zRef+4);
+      if( !zBranchRef ) return SQLITE_NOMEM;
+      zRef = zBranchRef;
+    }
   }
   rc = doltliteResolveRef(db, zRef, pCommit);
   sqlite3_free(zBranchRef);
