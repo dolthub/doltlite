@@ -251,6 +251,93 @@ if "$DOLTLITE" "$TMP/bad-port.db" "SELECT dolt_clone('$bad_url');" \
 fi
 echo "http remote checked URL port: PASS"
 
+python3 - "$DOLTLITE" "$TMP" <<'PY'
+import socket
+import subprocess
+import sys
+import threading
+
+doltlite, tmpdir = sys.argv[1:]
+received = []
+stop_event = threading.Event()
+
+srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(("127.0.0.1", 0))
+srv.listen(16)
+srv.settimeout(0.1)
+port = srv.getsockname()[1]
+
+def serve():
+    while not stop_event.is_set():
+        try:
+            conn, _ = srv.accept()
+        except socket.timeout:
+            continue
+        except OSError:
+            break
+        try:
+            conn.settimeout(1.0)
+            data = conn.recv(4096)
+            received.append(data)
+            conn.sendall(
+                b"HTTP/1.1 400 Bad Request\r\n"
+                b"Content-Length: 11\r\nConnection: close\r\n\r\n"
+                b"Bad Request"
+            )
+        except OSError:
+            pass
+        finally:
+            conn.close()
+
+t = threading.Thread(target=serve, daemon=True)
+t.start()
+
+cases = [
+    ("path-crlf", f"http://127.0.0.1:{port}/repo.db\r\nX-Injected: 1"),
+    ("path-lf", f"http://127.0.0.1:{port}/repo.db\nX-Injected: 1"),
+    ("path-cr", f"http://127.0.0.1:{port}/repo.db\rX-Injected: 1"),
+    ("path-space", f"http://127.0.0.1:{port}/repo.db HTTP/1.1"),
+    ("path-tab", f"http://127.0.0.1:{port}/repo\t.db"),
+    ("path-ctrl", f"http://127.0.0.1:{port}/repo\x01.db"),
+    ("path-del", f"http://127.0.0.1:{port}/repo\x7f.db"),
+    ("path-query", f"http://127.0.0.1:{port}/repo.db?foo=bar"),
+    ("path-fragment", f"http://127.0.0.1:{port}/repo.db#frag"),
+    ("host-crlf", f"http://127.0.0.1\r\nX-Injected: 1:{port}/repo.db"),
+    ("host-space", "http://127.0.0.1 evil/repo.db"),
+    ("host-ctrl", "http://127.0.0.1\x01/repo.db"),
+    ("host-del", "http://127.0.0.1\x7f/repo.db"),
+    ("host-query", "http://127.0.0.1?foo/repo.db"),
+    ("host-fragment", "http://127.0.0.1#frag/repo.db"),
+]
+
+try:
+    for i, (name, bad_url) in enumerate(cases):
+        before = len(received)
+        escaped = bad_url.replace("'", "''")
+        proc = subprocess.run(
+            [doltlite, f"{tmpdir}/bad-url-{i}.db", f"SELECT dolt_clone('{escaped}');"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=5,
+            text=True,
+        )
+        if proc.returncode == 0:
+            print(f"FAIL: {name}: clone succeeded unexpectedly")
+            sys.exit(1)
+        if len(received) != before:
+            print(f"FAIL: {name}: client sent HTTP request for invalid URL: {received[-1]!r}")
+            sys.exit(1)
+        if "failed to open remote" not in proc.stdout:
+            print(f"FAIL: {name}: expected 'failed to open remote', got: {proc.stdout!r}")
+            sys.exit(1)
+finally:
+    stop_event.set()
+    t.join(timeout=2)
+    srv.close()
+PY
+echo "http remote rejected unsafe URL characters: PASS"
+
 for mode in invalid duplicate overflow over-cap truncated transfer; do
   printf '%s\n' "$mode" >"$TMP/response-mode"
   if "$DOLTLITE" "$TMP/bad-response-$mode.db" \
