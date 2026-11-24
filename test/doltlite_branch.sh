@@ -445,5 +445,17 @@ SQL
 run_test "checkout_B_other_in_savepoint_keeps_main_dirty" "SELECT count(*) FROM t;" "2" "$DB27/main"
 run_test "checkout_B_other_in_savepoint_other_clean" "SELECT count(*) FROM t;" "1" "$DB27/other"
 
-rm -f "$DB" "$DB2" "$DB2B" "$DB2C" "$DB2D" "$DB2E" "$DB2F" "$DB2G" "$DB2H" "$DB2I" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB26" "$DB27"
+DB28=/tmp/test_branch_head_case_$$.db
+rm -f "$DB28"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-Am','init');" | $DOLTLITE "$DB28" > /dev/null 2>&1
+run_test_error_match "branch_HEAD_rejected" "SELECT dolt_branch('HEAD');" "invalid branch name" "$DB28"
+run_test_error_match "branch_head_rejected" "SELECT dolt_branch('head');" "invalid branch name" "$DB28"
+run_test_error_match "branch_Head_rejected" "SELECT dolt_branch('Head');" "invalid branch name" "$DB28"
+run_test_error_match "branch_HeAd_rejected" "SELECT dolt_branch('HeAd');" "invalid branch name" "$DB28"
+run_test_error_match "checkout_b_Head_rejected" "SELECT dolt_checkout('-b','Head');" "invalid branch name" "$DB28"
+run_test_error_match "branch_copy_Head_rejected" "SELECT dolt_branch('-c','main','Head');" "invalid branch name" "$DB28"
+run_test "branch_header_allowed" "SELECT dolt_branch('header');" "0" "$DB28"
+run_test "branch_my_head_allowed" "SELECT dolt_branch('my_head');" "0" "$DB28"
+
+rm -f "$DB" "$DB2" "$DB2B" "$DB2C" "$DB2D" "$DB2E" "$DB2F" "$DB2G" "$DB2H" "$DB2I" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB26" "$DB27" "$DB28"
 dltest_finish

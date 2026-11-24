@@ -169,7 +169,7 @@ int doltliteUserRefNameIsValid(const char *zName){
   int isHash = 1;
 
   if( !zName || !zName[0] ) return 0;
-  if( strcmp(zName, "HEAD")==0 || strcmp(zName, "head")==0
+  if( sqlite3_stricmp(zName, "HEAD")==0
    || sqlite3_stricmp(zName, "WORKING")==0
    || sqlite3_stricmp(zName, "STAGED")==0
    || strcmp(zName, "-")==0 || strcmp(zName, "@")==0 ){

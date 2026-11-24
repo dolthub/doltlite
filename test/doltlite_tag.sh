@@ -153,5 +153,14 @@ SELECT tag_name || '|' || length(message) FROM dolt_tags WHERE tag_name='empty-m
   "0
 empty-msg|0" "$DB4"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6"
+DB7=/tmp/test_tag_head_case_$$.db; rm -f "$DB7"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-Am','init');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+run_test_error_match "tag_HEAD_rejected" "SELECT dolt_tag('HEAD');" "invalid tag name" "$DB7"
+run_test_error_match "tag_head_rejected" "SELECT dolt_tag('head');" "invalid tag name" "$DB7"
+run_test_error_match "tag_Head_rejected" "SELECT dolt_tag('Head');" "invalid tag name" "$DB7"
+run_test_error_match "tag_HeAd_rejected" "SELECT dolt_tag('HeAd');" "invalid tag name" "$DB7"
+run_test "tag_header_allowed" "SELECT dolt_tag('header');" "0" "$DB7"
+run_test "tag_my_head_allowed" "SELECT dolt_tag('my_head');" "0" "$DB7"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7"
 dltest_finish
