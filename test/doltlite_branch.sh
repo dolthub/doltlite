@@ -386,5 +386,64 @@ run_test_error_match "checkout_dashdash_tag_named_table_matches_dolt" \
 run_test_error_match "checkout_tag_only_still_errors" \
   "SELECT dolt_checkout('tagonly');" "detached head" "$DB23"
 
-rm -f "$DB" "$DB2" "$DB2B" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23"
+DB24=/tmp/test_branch_checkout_B_sp_$$.db
+rm -f "$DB24"
+$DOLTLITE "$DB24" > /dev/null 2>&1 <<SQL
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'v1');
+SELECT dolt_commit('-Am','c1');
+INSERT INTO t VALUES(2,'dirty');
+SAVEPOINT sp;
+SELECT dolt_checkout('-B','main','HEAD');
+SQL
+run_test "checkout_B_current_head_in_savepoint_rows" "SELECT count(*) FROM t;" "1" "$DB24"
+run_test "checkout_B_current_head_in_savepoint_clean" "SELECT count(*) FROM dolt_status;" "0" "$DB24"
+run_test "checkout_B_current_head_in_savepoint_not_dirty" "SELECT dirty FROM dolt_branches WHERE name='main';" "0" "$DB24"
+
+DB25=/tmp/test_branch_checkout_B_sp_noref_$$.db
+rm -f "$DB25"
+$DOLTLITE "$DB25" > /dev/null 2>&1 <<SQL
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'v1');
+SELECT dolt_commit('-Am','c1');
+INSERT INTO t VALUES(2,'dirty');
+SAVEPOINT sp;
+SELECT dolt_checkout('-B','main');
+SQL
+run_test "checkout_B_current_noref_in_savepoint_rows" "SELECT count(*) FROM t;" "1" "$DB25"
+run_test "checkout_B_current_noref_in_savepoint_clean" "SELECT count(*) FROM dolt_status;" "0" "$DB25"
+
+DB26=/tmp/test_branch_checkout_B_nested_sp_$$.db
+rm -f "$DB26"
+$DOLTLITE "$DB26" > /dev/null 2>&1 <<SQL
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'v1');
+SELECT dolt_commit('-Am','c1');
+INSERT INTO t VALUES(2,'v2');
+SELECT dolt_commit('-Am','c2');
+INSERT INTO t VALUES(3,'dirty');
+BEGIN;
+SAVEPOINT sp;
+SELECT dolt_checkout('-B','main','HEAD~1');
+COMMIT;
+SQL
+run_test "checkout_B_current_parent_in_nested_sp_rows" "SELECT count(*) FROM t;" "1" "$DB26"
+run_test "checkout_B_current_parent_in_nested_sp_clean" "SELECT count(*) FROM dolt_status;" "0" "$DB26"
+run_test "checkout_B_current_parent_in_nested_sp_head" "SELECT message FROM dolt_log LIMIT 1;" "c1" "$DB26"
+
+DB27=/tmp/test_branch_checkout_B_other_sp_$$.db
+rm -f "$DB27"
+$DOLTLITE "$DB27" > /dev/null 2>&1 <<SQL
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'v1');
+SELECT dolt_commit('-Am','c1');
+SELECT dolt_branch('other');
+INSERT INTO t VALUES(2,'dirty');
+SAVEPOINT sp;
+SELECT dolt_checkout('-B','other','HEAD');
+SQL
+run_test "checkout_B_other_in_savepoint_keeps_main_dirty" "SELECT count(*) FROM t;" "2" "$DB27/main"
+run_test "checkout_B_other_in_savepoint_other_clean" "SELECT count(*) FROM t;" "1" "$DB27/other"
+
+rm -f "$DB" "$DB2" "$DB2B" "$DB2C" "$DB2D" "$DB2E" "$DB2F" "$DB2G" "$DB2H" "$DB2I" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB26" "$DB27"
 dltest_finish
