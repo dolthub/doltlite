@@ -14500,6 +14500,62 @@ static void run_stage_all_reads_ignore_once(void){
   check("stage_all_ignore_once", nMany==nFew);
 }
 
+static int masterStmtTrace(unsigned m, void *pCtx, void *pStmt, void *pSql){
+  const char *zSql = sqlite3_sql((sqlite3_stmt*)pStmt);
+  (void)m; (void)pSql;
+  if( zSql && strstr(zSql, "sqlite_master") ) (*(int*)pCtx)++;
+  return 0;
+}
+
+static int workspaceSchemaScans(sqlite3 *db, const char *zSql){
+  int n = 0;
+  int rc;
+  sqlite3_trace_v2(db, SQLITE_TRACE_STMT, masterStmtTrace, &n);
+  rc = execSql(db, zSql);
+  sqlite3_trace_v2(db, 0, 0, 0);
+  return rc==SQLITE_OK ? n : -1;
+}
+
+/* A workspace write refuses a table whose schema changed. Rows cannot change
+** it, so the schema is read once per statement, not once per row. */
+static void run_workspace_schema_check_once(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char zErr[256];
+  int nStage, nUnstage, nDiscard;
+
+  printf("=== Workspace Schema Check Once Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_workspace_schema_check");
+  removeDbFiles(dbpath);
+  check("wsc_open", open_db(dbpath, &db)==SQLITE_OK);
+  check("wsc_seed", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "CREATE TABLE s(id INTEGER PRIMARY KEY, v TEXT);"
+    "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<400)"
+    " INSERT INTO t SELECT x, 'base_'||x FROM c;"
+    "INSERT INTO s VALUES(1,'a');"
+    "SELECT dolt_commit('-Am','base');"
+    "UPDATE t SET v='new_'||id WHERE id%2=0;")==SQLITE_OK);
+  nStage = workspaceSchemaScans(db, "UPDATE dolt_workspace_t SET staged=1");
+  nUnstage = workspaceSchemaScans(db, "UPDATE dolt_workspace_t SET staged=0");
+  nDiscard = workspaceSchemaScans(db, "DELETE FROM dolt_workspace_t");
+  printf("  schema scans for 200 rows: stage %d, unstage %d, discard %d\n",
+         nStage, nUnstage, nDiscard);
+  check("wsc_stage_once", nStage>=0 && nStage<50);
+  check("wsc_unstage_once", nUnstage>=0 && nUnstage<50);
+  check("wsc_discard_once", nDiscard>=0 && nDiscard<50);
+  check("wsc_discarded", strcmp(queryScalarText(db,
+      "SELECT (SELECT count(*) FROM dolt_workspace_t)||','||"
+      "(SELECT count(*) FROM t WHERE v LIKE 'new_%')"), "0,0")==0);
+  check("wsc_schema_change", execSql(db,
+      "UPDATE s SET v='b'; ALTER TABLE s ADD COLUMN extra INTEGER;")==SQLITE_OK);
+  check("wsc_schema_change_refused", execErr(db,
+      "UPDATE dolt_workspace_s SET staged=1", zErr, sizeof(zErr))!=SQLITE_OK
+      && strstr(zErr, "not modifiable due to schema change")!=0);
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_rebase_temp_shadow_ignored(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -21552,6 +21608,7 @@ static const RegressionCase aCases[] = {
   { "rebase_concurrent_peer_commit_is_preserved", "Rebase Concurrent Peer Commit Preservation Test", run_rebase_concurrent_peer_commit_is_preserved },
   { "rebase_continue_keeps_peer_branch", "Rebase Continue Keeps Peer Branch Test", run_rebase_continue_keeps_peer_branch },
   { "rebase_deep_history_ordering", "Rebase Deep History Ordering Test", run_rebase_deep_history_ordering },
+  { "workspace_schema_check_once", "Workspace Schema Check Once Test", run_workspace_schema_check_once },
   { "rebase_main_table_schema_guard", "Rebase Main Table Schema Guard Test", run_rebase_main_table_schema_guard },
   { "rebase_temp_shadow_ignored", "Rebase Temp Shadow Ignored Test", run_rebase_temp_shadow_ignored },
   { "stage_all_reads_ignore_once", "Stage All Reads Ignore Once Test", run_stage_all_reads_ignore_once },

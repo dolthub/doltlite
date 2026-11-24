@@ -63,6 +63,7 @@ struct WorkspaceChanges {
   WorkspaceChange *a;
   int n;
   int nAlloc;
+  WorkspaceVtab *pSchemaChecked;
 };
 
 typedef struct WorkspaceCursor WorkspaceCursor;
@@ -1014,21 +1015,47 @@ static int wsApplyRowToStaged(
   return rc;
 }
 
-static int wsQueueChange(
-  WorkspaceVtab *p, WorkspaceRows *pRows, WorkspaceRow *r, int staged
-){
-  Vdbe *pStmt = p->db->pWorkspaceStatement;
+static WorkspaceChanges *wsStatementChanges(sqlite3 *db){
+  Vdbe *pStmt = db->pWorkspaceStatement;
   WorkspaceChanges *pChanges;
-  WorkspaceChange *pChange;
-  int i;
   assert( pStmt );
   pChanges = pStmt->pWorkspaceChanges;
   if( !pChanges ){
     pChanges = sqlite3_malloc(sizeof(*pChanges));
-    if( !pChanges ) return SQLITE_NOMEM;
+    if( !pChanges ) return 0;
     memset(pChanges, 0, sizeof(*pChanges));
     pStmt->pWorkspaceChanges = pChanges;
   }
+  return pChanges;
+}
+
+/* Row writes cannot change the table's schema, so one check covers every
+** row a statement sends to this table. */
+static int wsRefuseSchemaChange(WorkspaceVtab *p){
+  WorkspaceChanges *pChanges = wsStatementChanges(p->db);
+  int schemaChanged = 0;
+  int rc;
+  if( !pChanges ) return SQLITE_NOMEM;
+  if( pChanges->pSchemaChecked==p ) return SQLITE_OK;
+  rc = wsTableSchemaChanged(p->db, p->zTableName, &schemaChanged);
+  if( rc!=SQLITE_OK ) return rc;
+  if( schemaChanged ){
+    p->base.zErrMsg = sqlite3_mprintf(
+        "dolt_workspace_%s table is not modifiable due to schema change",
+        p->zTableName);
+    return SQLITE_ERROR;
+  }
+  pChanges->pSchemaChecked = p;
+  return SQLITE_OK;
+}
+
+static int wsQueueChange(
+  WorkspaceVtab *p, WorkspaceRows *pRows, WorkspaceRow *r, int staged
+){
+  WorkspaceChanges *pChanges = wsStatementChanges(p->db);
+  WorkspaceChange *pChange;
+  int i;
+  if( !pChanges ) return SQLITE_NOMEM;
   for(i=0; i<pChanges->n; i++){
     WorkspaceRow *pOld;
     pChange = &pChanges->a[i];
@@ -1297,7 +1324,6 @@ static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
     int nVal;
     int rc;
     Index *pUniqueViolation = 0;
-    int schemaChanged = 0;
     r = wsFindCachedRow(p, sqlite3_value_int64(argv[0]), 0);
     if( !r ){
       pBase->zErrMsg = sqlite3_mprintf("workspace row is no longer available");
@@ -1308,16 +1334,8 @@ static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
           "cannot delete staged rows from workspace");
       return SQLITE_ERROR;
     }
-    {
-      int rc = wsTableSchemaChanged(p->db, p->zTableName, &schemaChanged);
-      if( rc!=SQLITE_OK ) return rc;
-      if( schemaChanged ){
-        pBase->zErrMsg = sqlite3_mprintf(
-            "dolt_workspace_%s table is not modifiable due to schema change",
-            p->zTableName);
-        return SQLITE_ERROR;
-      }
-    }
+    rc = wsRefuseSchemaChange(p);
+    if( rc!=SQLITE_OK ) return rc;
     {
       Table *pTab = sqlite3FindTable(p->db, p->zTableName, "main");
       if( pTab && IsOrdinaryTable(pTab) ){
@@ -1370,17 +1388,8 @@ static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
   if( rc!=SQLITE_OK ) return rc;
   newStaged = sqlite3_value_int(argv[2 + 1]) ? 1 : 0;
   if( newStaged==r->staged ) return SQLITE_OK;
-  {
-    int schemaChanged = 0;
-    int rc = wsTableSchemaChanged(p->db, p->zTableName, &schemaChanged);
-    if( rc!=SQLITE_OK ) return rc;
-    if( schemaChanged ){
-      pBase->zErrMsg = sqlite3_mprintf(
-          "dolt_workspace_%s table is not modifiable due to schema change",
-          p->zTableName);
-      return SQLITE_ERROR;
-    }
-  }
+  rc = wsRefuseSchemaChange(p);
+  if( rc!=SQLITE_OK ) return rc;
   {
     Table *pTab = sqlite3FindTable(p->db, p->zTableName, "main");
     Index *pIdx;
