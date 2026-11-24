@@ -645,6 +645,109 @@ SELECT group_concat(name) FROM sqlite_master;
 PRAGMA integrity_check;" "$DBC")"
 rm -f "$DBC"
 
+scenario "dolt_reset of newly staged vtab removes vtab from staged catalog"
+newdb
+run_sql "CREATE TABLE base(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am','c0');
+CREATE TABLE other(id INTEGER PRIMARY KEY);
+CREATE VIRTUAL TABLE v USING fts5(body);
+INSERT INTO v VALUES('hello');
+SELECT dolt_add('v');
+SELECT dolt_reset('v');" "$DB" > /dev/null
+check "reset_new_vtab_staged_zero" "0" \
+  "$(run_sql "SELECT count(*) FROM dolt_status WHERE staged=1;" "$DB")"
+result=$(run_sql "SELECT dolt_commit('-m','empty');" "$DB")
+case "$result" in
+  *"nothing to commit"*) PASS=$((PASS+1));;
+  *) note_fail "reset_new_vtab_nothing_to_commit" "expected nothing to commit, got: $result";;
+esac
+run_sql "SELECT dolt_add('other'); SELECT dolt_commit('-m','other only');" "$DB" > /dev/null
+tip=$(run_sql "SELECT dolt_hashof('HEAD');" "$DB" | tr -d '[:space:]')
+check "reset_new_vtab_absent_in_commit" "base,other
+ok" "$(run_sql "SELECT group_concat(name) FROM (SELECT name FROM sqlite_master ORDER BY name);
+PRAGMA integrity_check;" "$DB/$tip")"
+
+newdb
+run_sql "CREATE VIRTUAL TABLE v USING fts5(body);
+INSERT INTO v VALUES('hello');
+SELECT dolt_add('v');
+SELECT dolt_reset('v');" "$DB" > /dev/null
+result=$(run_sql "SELECT dolt_commit('-m','empty');" "$DB")
+case "$result" in
+  *"nothing to commit"*) PASS=$((PASS+1));;
+  *) note_fail "reset_new_vtab_initial_commit" "expected nothing to commit, got: $result";;
+esac
+
+scenario "dolt_reset of dropped and staged vtab restores it to index"
+newdb
+run_sql "CREATE VIRTUAL TABLE v USING fts5(body);
+INSERT INTO v(rowid, body) VALUES(1,'hello world');
+SELECT dolt_commit('-Am','c0');
+SELECT dolt_branch('v');
+DROP TABLE v;
+SELECT dolt_add('v');" "$DB" > /dev/null
+head_before=$(run_sql "SELECT dolt_hashof('HEAD');" "$DB" | tr -d '[:space:]')
+check "reset_dropped_vtab_ok" "0" \
+  "$(run_sql "SELECT dolt_reset('v');" "$DB")"
+head_after=$(run_sql "SELECT dolt_hashof('HEAD');" "$DB" | tr -d '[:space:]')
+check "reset_dropped_vtab_keeps_head" "$head_before" "$head_after"
+check "reset_dropped_vtab_staged_zero" "0" \
+  "$(run_sql "SELECT count(*) FROM dolt_status WHERE staged=1;" "$DB")"
+result=$(run_sql "SELECT dolt_commit('-m','empty');" "$DB")
+case "$result" in
+  *"nothing to commit"*) PASS=$((PASS+1));;
+  *) note_fail "reset_dropped_vtab_nothing_to_commit" "expected nothing to commit, got: $result";;
+esac
+check "reset_dropped_vtab_hard_restores" "0
+1
+ok" "$(run_sql "SELECT dolt_reset('--hard');
+SELECT count(*) FROM v WHERE v MATCH 'hello';
+INSERT INTO v(v) VALUES('integrity-check');
+PRAGMA integrity_check;" "$DB")"
+
+scenario "dolt_reset of redefined and staged vtab reverts schema and shadows"
+newdb
+run_sql "CREATE VIRTUAL TABLE v USING fts5(body);
+INSERT INTO v(rowid, body) VALUES(1,'hello');
+SELECT dolt_commit('-Am','c0');
+DROP TABLE v;
+CREATE VIRTUAL TABLE v USING fts5(title, body);
+INSERT INTO v(rowid, title, body) VALUES(2,'t','world');
+SELECT dolt_add('v');
+SELECT dolt_reset('v');" "$DB" > /dev/null
+check "reset_redefined_vtab_staged_zero" "0" \
+  "$(run_sql "SELECT count(*) FROM dolt_status WHERE staged=1;" "$DB")"
+result=$(run_sql "SELECT dolt_commit('-m','empty');" "$DB")
+case "$result" in
+  *"nothing to commit"*) PASS=$((PASS+1));;
+  *) note_fail "reset_redefined_vtab_nothing_to_commit" "expected nothing to commit, got: $result";;
+esac
+check "reset_redefined_vtab_hard_restores" "0
+CREATE VIRTUAL TABLE v USING fts5(body)
+1
+ok" "$(run_sql "SELECT dolt_reset('--hard');
+SELECT sql FROM sqlite_master WHERE name='v';
+SELECT count(*) FROM v WHERE v MATCH 'hello';
+INSERT INTO v(v) VALUES('integrity-check');
+PRAGMA integrity_check;" "$DB")"
+
+newdb
+run_sql "CREATE VIRTUAL TABLE v USING fts5(body);
+INSERT INTO v(rowid, body) VALUES(1,'hello');
+SELECT dolt_commit('-Am','c0');
+DROP TABLE v;
+CREATE VIRTUAL TABLE v USING rtree(id, x0, x1);
+INSERT INTO v VALUES(1, 0, 1);
+SELECT dolt_add('v');
+SELECT dolt_reset('v');" "$DB" > /dev/null
+check "reset_changed_module_vtab_staged_zero" "0" \
+  "$(run_sql "SELECT count(*) FROM dolt_status WHERE staged=1;" "$DB")"
+result=$(run_sql "SELECT dolt_commit('-m','empty');" "$DB")
+case "$result" in
+  *"nothing to commit"*) PASS=$((PASS+1));;
+  *) note_fail "reset_changed_module_vtab_nothing_to_commit" "expected nothing to commit, got: $result";;
+esac
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then
