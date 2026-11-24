@@ -789,7 +789,7 @@ static int remoteSrvStoreChunkBatch(
       rc = SQLITE_PROTOCOL;
       goto store_error;
     }
-    rc = chunkStorePut(pStore, pBody+offset, (int)len, 0);
+    rc = chunkStorePutHashed(pStore, pBody+offset, (int)len, &computed);
     if( rc!=SQLITE_OK ) goto store_error;
     offset += (int)len;
   }
