@@ -674,13 +674,12 @@ static ProllyCacheEntry *cacheOldestUnpinned(
   return 0;
 }
 
-/* The oldest unpinned prefix a write scan left behind, looking only at the
-** tail of the prefix list. */
-static ProllyCacheEntry *cacheWriteLeftoverCandidate(ProllyCache *cache){
+/* The oldest unpinned prefix, looking only at the tail of the prefix list. */
+static ProllyCacheEntry *cacheStalePrefixCandidate(ProllyCache *cache){
   ProllyCacheEntry *pEntry = cache->prefixTail.pLruPrev;
   int n = 0;
   while( pEntry!=&cache->prefixHead && n++<16 ){
-    if( pEntry->nRef==0 && (pEntry->bScanOnly & PROLLY_CACHE_SCAN_KEEP) ){
+    if( pEntry->nRef==0 ){
       return pEntry;
     }
     pEntry = pEntry->pLruPrev;
@@ -714,7 +713,7 @@ static ProllyCacheEntry *cacheEvictOne(ProllyCache *cache){
     if( !pEntry ) pEntry = cacheInternalCandidate(cache);
   }
   if( pEntry && pEntry->bReadAheadUnused && cache->nReadAheadStarved ){
-    ProllyCacheEntry *pPrefix = cacheWriteLeftoverCandidate(cache);
+    ProllyCacheEntry *pPrefix = cacheStalePrefixCandidate(cache);
     if( pPrefix ) pEntry = pPrefix;
   }
   if( pEntry && cacheKeepPrefixes(cache, pEntry) ) return 0;
@@ -807,10 +806,10 @@ static void cacheTrim(ProllyCache *cache, i64 nMaxByte){
       ProllyCacheEntry *pPrev = pEntry->pLruPrev;
       /* A chunk read ahead for a cursor that has not reached it yet is about
       ** to be used; once read-ahead is being wasted, evicting it only reads
-      ** it again, so a prefix a write scan left behind goes first. */
+      ** it again, so the oldest prefix goes first. */
       if( pass==0 && nMaxByte>0 && pEntry->nRef==0
        && pEntry->bReadAheadUnused && cache->nReadAheadStarved ){
-        ProllyCacheEntry *pOld = cacheWriteLeftoverCandidate(cache);
+        ProllyCacheEntry *pOld = cacheStalePrefixCandidate(cache);
         if( pOld ){
           if( !cacheKeepPrefixes(cache, pOld) ) cacheEvictEntry(cache, pOld);
           continue;
