@@ -673,12 +673,46 @@ static int pushAcquireLocal(sqlite3 *db, ChunkStore *cs){
   return rc;
 }
 
+static int remoteSqlRefreshLocal(sqlite3 *db, ChunkStore *cs){
+  int changed = 0;
+  int rc;
+  do {
+    rc = chunkStoreRefreshIfChangedOrBusy(cs, &changed);
+  }while( rc==SQLITE_BUSY && sqlite3InvokeBusyHandler(&db->busyHandler) );
+  if( rc==SQLITE_OK && changed ) doltliteNoteSessionMissedDiskTip(db);
+  return rc;
+}
+
 #define REMOTE_HEADS_PREFIX "refs/heads/"
 #define REMOTE_TAGS_PREFIX  "refs/tags/"
 
 static const char *remoteSqlStripPrefix(const char *z, const char *zPrefix){
   int n = (int)strlen(zPrefix);
   return strncmp(z, zPrefix, n)==0 ? z + n : z;
+}
+
+static int pushResolveSrcCommit(
+  sqlite3 *db,
+  ChunkStore *cs,
+  const char *zSrc,
+  ProllyHash *pCommit
+){
+  const char *zSrcName = remoteSqlStripPrefix(zSrc, REMOTE_HEADS_PREFIX);
+  int rc;
+  memset(pCommit, 0, sizeof(*pCommit));
+  if( strcmp(zSrcName, "HEAD")==0 ){
+    const char *zHead = doltliteGetSessionBranch(db);
+    if( doltliteIsDetached(db) || !zHead || !zHead[0]
+     || chunkStoreFindBranch(cs, zHead, pCommit)!=SQLITE_OK
+     || prollyHashIsEmpty(pCommit) ){
+      return SQLITE_NOTFOUND;
+    }
+    return SQLITE_OK;
+  }
+  rc = doltliteResolveRef(db, zSrcName, pCommit);
+  if( rc==SQLITE_NOMEM ) return SQLITE_NOMEM;
+  if( rc!=SQLITE_OK || prollyHashIsEmpty(pCommit) ) return SQLITE_NOTFOUND;
+  return SQLITE_OK;
 }
 
 /* zRef is a branch, tag, ":branch", ":refs/tags/tag", or "src:dst" refspec.
@@ -743,36 +777,6 @@ static int doltPushParsedFunc(
       doltliteVcResultError(ctx, db, "invalid branch name");
       return SQLITE_ERROR;
     }
-    /* HEAD is the checked-out branch's tip. Any other source is a revision:
-    ** a branch, tag, hash, or parent walk such as HEAD~1. */
-    {
-      const char *zSrcName = remoteSqlStripPrefix(zSrc, REMOTE_HEADS_PREFIX);
-      int rrc;
-      memset(&srcCommit, 0, sizeof(srcCommit));
-      if( strcmp(zSrcName, "HEAD")==0 ){
-        const char *zHead = doltliteGetSessionBranch(db);
-        if( doltliteIsDetached(db) || !zHead || !zHead[0]
-         || chunkStoreFindBranch(cs, zHead, &srcCommit)!=SQLITE_OK
-         || prollyHashIsEmpty(&srcCommit) ){
-          sqlite3_free(zSrc);
-          doltliteVcResultError(ctx, db, "push failed: branch or tag not found");
-          return SQLITE_NOTFOUND;
-        }
-        rrc = SQLITE_OK;
-      }else{
-        rrc = doltliteResolveRef(db, zSrcName, &srcCommit);
-      }
-      if( rrc==SQLITE_NOMEM ){
-        sqlite3_free(zSrc);
-        sqlite3_result_error_nomem(ctx);
-        return SQLITE_NOMEM;
-      }
-      if( rrc!=SQLITE_OK || prollyHashIsEmpty(&srcCommit) ){
-        sqlite3_free(zSrc);
-        doltliteVcResultError(ctx, db, "push failed: branch or tag not found");
-        return SQLITE_NOTFOUND;
-      }
-    }
   }else if( zRef && !bTagDelete ){
     if( zRef[0]==':' ){
       const char *zBranch = remoteSqlStripPrefix(zRef+1, REMOTE_HEADS_PREFIX);
@@ -786,6 +790,29 @@ static int doltPushParsedFunc(
       zRef += strlen(REMOTE_TAGS_PREFIX);
     }else{
       zRef = remoteSqlStripPrefix(zRef, REMOTE_HEADS_PREFIX);
+    }
+  }
+
+  rc = remoteSqlRefreshLocal(db, cs);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zSrc);
+    sqlite3_free(zDelete);
+    (void)doltliteVcSealSavepointError(db);
+    remoteSqlResultError(ctx, rc, 0);
+    return rc;
+  }
+
+  if( zSrc ){
+    rc = pushResolveSrcCommit(db, cs, zSrc, &srcCommit);
+    if( rc==SQLITE_NOMEM ){
+      sqlite3_free(zSrc);
+      sqlite3_result_error_nomem(ctx);
+      return SQLITE_NOMEM;
+    }
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zSrc);
+      doltliteVcResultError(ctx, db, "push failed: branch or tag not found");
+      return SQLITE_NOTFOUND;
     }
   }
 
@@ -812,13 +839,17 @@ static int doltPushParsedFunc(
     mutation.bDelete = 0;
     mutation.zBranch = zRef;
     bBranch = 1;
-    memcpy(&mutation.commit, &srcCommit, sizeof(mutation.commit));
     rc = pushAcquireLocal(db, cs);
     if( rc!=SQLITE_OK ){
       bPrecondition = 1;
     }else{
       bLocalLock = 1;
-      rc = doltlitePushAs(cs, pRemote, 0, zRef, bForce, &srcCommit);
+      doltliteNoteSessionMissedDiskTip(db);
+      rc = pushResolveSrcCommit(db, cs, zSrc, &srcCommit);
+      if( rc==SQLITE_OK ){
+        memcpy(&mutation.commit, &srcCommit, sizeof(mutation.commit));
+        rc = doltlitePushAs(cs, pRemote, 0, zRef, bForce, &srcCommit);
+      }
     }
   }else if( !bTagRef
          && (zRef[0]==':' || chunkStoreFindBranch(cs, zRef, 0)==SQLITE_OK) ){
@@ -826,15 +857,20 @@ static int doltPushParsedFunc(
     mutation.bDelete = zRef[0]==':';
     mutation.zBranch = zRef + mutation.bDelete;
     bBranch = 1;
-    if( !mutation.bDelete ){
-      chunkStoreFindBranch(cs, zRef, &mutation.commit);
-    }
     rc = pushAcquireLocal(db, cs);
     if( rc!=SQLITE_OK ){
       bPrecondition = 1;
     }else{
       bLocalLock = 1;
-      rc = doltlitePush(cs, pRemote, zRef, bForce);
+      doltliteNoteSessionMissedDiskTip(db);
+      if( mutation.bDelete ){
+        rc = doltlitePush(cs, pRemote, zRef, bForce);
+      }else{
+        rc = chunkStoreFindBranch(cs, zRef, &mutation.commit);
+        if( rc==SQLITE_OK ){
+          rc = doltlitePushAs(cs, pRemote, 0, zRef, bForce, &mutation.commit);
+        }
+      }
     }
   }else{
     rc = doltlitePushTag(cs, pRemote, zRef);
@@ -931,6 +967,12 @@ static int pushEveryLocalBranch(
   if( !cs ){
     doltliteVcResultError(ctx, db, "no database");
     return SQLITE_ERROR;
+  }
+  rc = remoteSqlRefreshLocal(db, cs);
+  if( rc!=SQLITE_OK ){
+    (void)doltliteVcSealSavepointError(db);
+    remoteSqlResultError(ctx, rc, 0);
+    return rc;
   }
   refsTableGetBranches(&cs->refs, &nBr, &aBr);
   if( nBr<=0 ){
@@ -1445,6 +1487,19 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     (void)doltliteVcSealSavepointError(db);
     return;
   }
+  if( bPrune && args.nPositional>1 ){
+    doltliteCmdArgsClear(&args);
+    doltliteVcResultError(ctx, db,
+        "--prune option cannot be provided with a ref spec");
+    return;
+  }
+  rc = remoteSqlRefreshLocal(db, cs);
+  if( rc!=SQLITE_OK ){
+    doltliteCmdArgsClear(&args);
+    (void)doltliteVcSealSavepointError(db);
+    remoteSqlResultError(ctx, rc, 0);
+    return;
+  }
   if( args.nPositional>0 ){
     zRemoteName = args.azPositional[0];
   }else{
@@ -1455,13 +1510,6 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       return;
     }
     zRemoteName = zRemoteOwned;
-  }
-  if( bPrune && args.nPositional>1 ){
-    sqlite3_free(zRemoteOwned);
-    doltliteCmdArgsClear(&args);
-    doltliteVcResultError(ctx, db,
-        "--prune option cannot be provided with a ref spec");
-    return;
   }
 
   rc = remoteSqlOpenNamedRemote(db, cs, zRemoteName, 0, &zUrl, &pRemote);
@@ -2043,6 +2091,13 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   if( !zBranch ){
     doltliteCmdArgsClear(&args);
     doltliteVcResultError(ctx, db, "cannot pull in detached head");
+    return;
+  }
+  rc = remoteSqlRefreshLocal(db, doltliteGetChunkStore(db));
+  if( rc!=SQLITE_OK ){
+    doltliteCmdArgsClear(&args);
+    (void)doltliteVcSealSavepointError(db);
+    remoteSqlResultError(ctx, rc, 0);
     return;
   }
   if( args.nPositional>0 ){

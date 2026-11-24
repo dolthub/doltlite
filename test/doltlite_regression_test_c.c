@@ -20944,6 +20944,134 @@ static void run_vc_error_parity(void){
   removeDbFiles(dbpath);
 }
 
+static void run_push_refreshes_before_reading_refs(void){
+  char zLocal[256], zRemote[256], zRemote2[256], zSql[512];
+  char zC1[64], zC2[64], zC3[64];
+  sqlite3 *db1 = 0, *db2 = 0, *dbRem = 0, *dbRem2 = 0;
+
+  printf("=== Push Refreshes Before Reading Refs Test ===\n\n");
+  make_dbpath(zLocal, sizeof(zLocal), "push_refresh_local");
+  make_dbpath(zRemote, sizeof(zRemote), "push_refresh_remote");
+  make_dbpath(zRemote2, sizeof(zRemote2), "push_refresh_remote2");
+  removeDbFiles(zLocal);
+  removeDbFiles(zRemote);
+  removeDbFiles(zRemote2);
+
+  check("push_refresh: open db1", open_db(zLocal, &db1)==SQLITE_OK);
+  check("push_refresh: open db2", open_db(zLocal, &db2)==SQLITE_OK);
+  check("push_refresh: seed c1",
+      execSql(db1,
+          "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+          "INSERT INTO t VALUES(1, 'c1');"
+          "SELECT dolt_commit('-Am', 'c1');")==SQLITE_OK);
+  snprintf(zC1, sizeof(zC1), "%s",
+      queryScalarText(db1, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+  snprintf(zSql, sizeof(zSql),
+      "SELECT dolt_remote('add', 'origin', 'file://%s');"
+      "SELECT dolt_push('origin', 'main');", zRemote);
+  check("push_refresh: initial push", execSql(db1, zSql)==SQLITE_OK);
+  check("push_refresh: db2 sees c1",
+      strcmp(queryScalarText(db2, "SELECT commit_hash FROM dolt_log LIMIT 1"),
+             zC1)==0);
+
+  /* Peer commits C2 on main while db1 stays at C1; db1 pushes main directly. */
+  check("push_refresh: db2 commits c2",
+      execSql(db2,
+          "INSERT INTO t VALUES(2, 'c2');"
+          "SELECT dolt_commit('-Am', 'c2');")==SQLITE_OK);
+  snprintf(zC2, sizeof(zC2), "%s",
+      queryScalarText(db2, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+  check("push_refresh: c2 differs from c1", strcmp(zC1, zC2)!=0);
+
+  check("push_refresh: db1 pushes main",
+      execSql(db1, "SELECT dolt_push('origin', 'main');")==SQLITE_OK);
+  check("push_refresh: open remote", open_db(zRemote, &dbRem)==SQLITE_OK);
+  check("push_refresh: remote main at c2",
+      strcmp(queryScalarText(dbRem,
+          "SELECT hash FROM dolt_branches WHERE name='main'"), zC2)==0);
+  check("push_refresh: local tracking updated to c2",
+      strcmp(queryScalarText(db2,
+          "SELECT hash FROM dolt_remote_branches "
+          "WHERE name='remotes/origin/main'"), zC2)==0);
+  check("push_refresh: db1 sees c2 rows after push refresh",
+      strcmp(queryScalarText(db1, "SELECT count(*) FROM t"), "2")==0);
+
+  /* Peer creates branch feat; db1 pushes feat without querying tables first. */
+  check("push_refresh: db2 creates feat",
+      execSql(db2, "SELECT dolt_branch('feat');")==SQLITE_OK);
+  check("push_refresh: db1 pushes peer-created feat",
+      execSql(db1, "SELECT dolt_push('origin', 'feat');")==SQLITE_OK);
+  check("push_refresh: remote feat at c2",
+      strcmp(queryScalarText(dbRem,
+          "SELECT hash FROM dolt_branches WHERE name='feat'"), zC2)==0);
+  check("push_refresh: local tracking feat at c2",
+      strcmp(queryScalarText(db2,
+          "SELECT hash FROM dolt_remote_branches "
+          "WHERE name='remotes/origin/feat'"), zC2)==0);
+
+  /* Peer creates branch feat_src and advances main to C3; db1 pushes refspecs. */
+  check("push_refresh: db2 commits c3 and creates feat_src",
+      execSql(db2,
+          "INSERT INTO t VALUES(3, 'c3');"
+          "SELECT dolt_commit('-Am', 'c3');"
+          "SELECT dolt_branch('feat_src');")==SQLITE_OK);
+  snprintf(zC3, sizeof(zC3), "%s",
+      queryScalarText(db2, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+  check("push_refresh: db1 pushes feat_src:feat_dst",
+      execSql(db1, "SELECT dolt_push('origin', 'feat_src:feat_dst');")==SQLITE_OK);
+  check("push_refresh: remote feat_dst at c3",
+      strcmp(queryScalarText(dbRem,
+          "SELECT hash FROM dolt_branches WHERE name='feat_dst'"), zC3)==0);
+  check("push_refresh: local tracking feat_dst at c3",
+      strcmp(queryScalarText(db2,
+          "SELECT hash FROM dolt_remote_branches "
+          "WHERE name='remotes/origin/feat_dst'"), zC3)==0);
+
+  /* Peer creates branch all_br and tag v1; db1 pushes --all and --tags. */
+  check("push_refresh: db2 creates all_br and tag v1",
+      execSql(db2,
+          "SELECT dolt_branch('all_br');"
+          "SELECT dolt_tag('v1');")==SQLITE_OK);
+  check("push_refresh: db1 pushes --all",
+      execSql(db1, "SELECT dolt_push('--all', 'origin');")==SQLITE_OK);
+  check("push_refresh: remote all_br at c3",
+      strcmp(queryScalarText(dbRem,
+          "SELECT hash FROM dolt_branches WHERE name='all_br'"), zC3)==0);
+  check("push_refresh: db2 creates tag v2",
+      execSql(db2, "SELECT dolt_tag('v2');")==SQLITE_OK);
+  check("push_refresh: db1 pushes --tags",
+      execSql(db1, "SELECT dolt_push('origin', '--tags');")==SQLITE_OK);
+  check("push_refresh: remote has tags v1 and v2",
+      strcmp(queryScalarText(dbRem,
+          "SELECT count(*) FROM dolt_tags WHERE tag_name IN ('v1','v2')"),
+          "2")==0);
+
+  /* Peer adds a second remote; db1 fetches and pulls from it directly. */
+  check("push_refresh: seed remote2",
+      open_db(zRemote2, &dbRem2)==SQLITE_OK
+      && execSql(dbRem2,
+          "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+          "INSERT INTO t VALUES(1, 'c1');"
+          "SELECT dolt_commit('-Am', 'r2');")==SQLITE_OK);
+  snprintf(zSql, sizeof(zSql),
+      "SELECT dolt_remote('add', 'peer_rem', 'file://%s');", zRemote2);
+  check("push_refresh: db2 adds peer_rem", execSql(db2, zSql)==SQLITE_OK);
+  check("push_refresh: db1 fetches peer_rem",
+      execSql(db1, "SELECT dolt_fetch('peer_rem');")==SQLITE_OK);
+  check("push_refresh: tracking ref for peer_rem exists",
+      strcmp(queryScalarText(db2,
+          "SELECT count(*) FROM dolt_remote_branches "
+          "WHERE name='remotes/peer_rem/main'"), "1")==0);
+
+  sqlite3_close(dbRem2);
+  sqlite3_close(dbRem);
+  sqlite3_close(db2);
+  sqlite3_close(db1);
+  removeDbFiles(zLocal);
+  removeDbFiles(zRemote);
+  removeDbFiles(zRemote2);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -21228,7 +21356,8 @@ static const RegressionCase aCases[] = {
   { "range_rank_ioerr", "Numeric Index Prefix Rank Read Error Test", run_range_rank_ioerr },
   { "compacted_noop_commit", "Compacted No-op Commit Test", run_compacted_noop_commit },
   { "opfs_like_vfs", "OPFS-like VFS File Database Test", run_opfs_like_vfs },
-  { "opfs_large_transaction", "OPFS Large Transaction Test", run_opfs_large_transaction }
+  { "opfs_large_transaction", "OPFS Large Transaction Test", run_opfs_large_transaction },
+  { "push_refreshes_before_reading_refs", "Push Refreshes Before Reading Refs Test", run_push_refreshes_before_reading_refs }
 };
 
 static int run_case_by_name(const char *zName){
