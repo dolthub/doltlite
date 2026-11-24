@@ -143,6 +143,13 @@ chunked = exchange(
     b"Host: localhost\r\n"
     b"Transfer-Encoding: chunked\r\n\r\n"
 )
+misnamed_body = b"\0" * 20 + (5).to_bytes(4, "little") + b"hello"
+misnamed = exchange(
+    b"POST /headers.db/chunks HTTP/1.1\r\n"
+    b"Host: localhost\r\n"
+    b"Content-Length: " + str(len(misnamed_body)).encode("ascii") + b"\r\n\r\n"
+    + misnamed_body
+)
 
 print(f"mixed={mixed[0]}|{mixed[1]}|{mixed[2]}")
 print(f"prefixed={prefixed[0]}|{prefixed[1]}|{prefixed[2]}")
@@ -150,6 +157,7 @@ print(f"duplicate={duplicate[0]}")
 print(f"malformed={malformed[0]}")
 print(f"oversized={oversized[0]}")
 print(f"chunked={chunked[0]}")
+print(f"misnamed={misnamed[0]}")
 PY
 )
 check "header names are case-insensitive and exact" \
@@ -158,7 +166,8 @@ prefixed=200|0|0
 duplicate=400
 malformed=400
 oversized=413
-chunked=400" "$result"
+chunked=400
+misnamed=400" "$result"
 
 cat >"$TMP/proxy.py" <<'PY'
 import re
