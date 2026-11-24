@@ -1631,6 +1631,17 @@ void doltliteHttpRemoteSetConnection(DoltliteRemote *remote, sqlite3 *db){
 #endif
 }
 
+static int httpValidUrlComponent(const char *z, int n){
+  int i;
+  for(i=0; i<n; i++){
+    unsigned char c = (unsigned char)z[i];
+    if( c <= 0x20 || c == 0x7f || c == '?' || c == '#' ){
+      return 0;
+    }
+  }
+  return 1;
+}
+
 DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
   HttpRemote *p;
   const char *zAfterScheme;
@@ -1688,10 +1699,12 @@ DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
   }
 
   if( nHost <= 0 ) return 0;
+  if( !httpValidUrlComponent(zHostStart, nHost) ) return 0;
 
   nUserPath = 0;
   if( zPathStart ){
     nUserPath = (int)strlen(zPathStart);
+    if( !httpValidUrlComponent(zPathStart, nUserPath) ) return 0;
 
     while( nUserPath > 0 && zPathStart[nUserPath-1] == '/' ){
       nUserPath--;
