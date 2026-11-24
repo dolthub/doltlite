@@ -857,6 +857,8 @@ int btreeReadResult(Btree*, int);
 int btreeReloadBranchWorkingStateInto(Btree*, int, ProllyHash*);
 int doltliteBtreeHydrateDeferred(Btree*);
 int doltliteOriginSourceEnable(ChunkStore*, sqlite3*, int*);
+void doltliteOriginSourceDisable(ChunkStore*);
+int doltliteOriginSourceIsEnabled(ChunkStore*);
 int doltliteBtreeRunDeferredWork(sqlite3*);
 int doltliteBtreeCheckEmptyEngine(Btree*);
 void doltliteBtreeRegistrationDone(sqlite3*);
