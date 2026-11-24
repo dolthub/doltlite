@@ -298,7 +298,7 @@ static int testParseReal(const char *z, double *pValue){
   if( !z || !z[0] || sqlite3Isspace(z[0]) ) return 0;
   errno = 0;
   v = strtod(z, &zEnd);
-  if( errno==ERANGE || zEnd==z || *zEnd!=0 ) return 0;
+  if( errno==ERANGE || zEnd==z || *zEnd!=0 || sqlite3IsNaN(v) ) return 0;
   *pValue = v;
   return 1;
 }

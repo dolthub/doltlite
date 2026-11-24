@@ -126,6 +126,28 @@ plain_int|PASS|
 plus_int|PASS|
 trail_int|FAIL|Could not compare non integer value '1 ', with 1" "$DB"
 
+run_test "nan_float_assertions" \
+  "INSERT INTO dolt_tests VALUES
+     ('nan_eq','nan','SELECT 1.5','expected_single_value','==','NaN'),
+     ('nan_ne','nan','SELECT 1.5','expected_single_value','!=','NaN'),
+     ('nan_le','nan','SELECT 1.5','expected_single_value','<=','NaN'),
+     ('nan_ge','nan','SELECT 1.5','expected_single_value','>=','NaN'),
+     ('nan_lt','nan','SELECT 1.5','expected_single_value','<','NaN'),
+     ('nan_gt','nan','SELECT 1.5','expected_single_value','>','NaN'),
+     ('nan_lower','nan','SELECT 1.5','expected_single_value','==','nan'),
+     ('inf_lt','nan','SELECT 1.5','expected_single_value','<','Inf'),
+     ('ninf_gt','nan','SELECT 1.5','expected_single_value','>','-Inf');
+   SELECT test_name, status, message FROM dolt_test_run('nan') ORDER BY test_name;" \
+  "inf_lt|PASS|
+nan_eq|FAIL|Could not compare non float value 'NaN', with 1.500000
+nan_ge|FAIL|Could not compare non float value 'NaN', with 1.500000
+nan_gt|FAIL|Could not compare non float value 'NaN', with 1.500000
+nan_le|FAIL|Could not compare non float value 'NaN', with 1.500000
+nan_lower|FAIL|Could not compare non float value 'nan', with 1.500000
+nan_lt|FAIL|Could not compare non float value 'NaN', with 1.500000
+nan_ne|FAIL|Could not compare non float value 'NaN', with 1.500000
+ninf_gt|PASS|" "$DB"
+
 run_test "null_assertion" \
   "INSERT INTO dolt_tests(test_name,test_group,test_query,assertion_type,assertion_comparator)
    VALUES('null_pass','nulls','SELECT NULL','expected_single_value','=='),
