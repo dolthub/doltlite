@@ -1566,6 +1566,10 @@ static void conflictsResolveParsedFunc(
   char **azTables = 0;
   u8 *aObject = 0;
   char **azSideView = 0;
+  ConflictsFkCount **aaFkBefore = 0;
+  int *anFkBefore = 0;
+  u8 *aHasConflict = 0;
+  u8 *aApplied = 0;
   char *zOwnedError = 0;
 
   int bBegan = 0;
@@ -1582,6 +1586,19 @@ static void conflictsResolveParsedFunc(
     else{
       memset(aObject, 0, nTables);
       memset(azSideView, 0, sizeof(char*)*nTables);
+    }
+    if( rc==SQLITE_OK && !useOurs ){
+      aaFkBefore = sqlite3_malloc64(sizeof(ConflictsFkCount*)*(sqlite3_uint64)nTables);
+      anFkBefore = sqlite3_malloc64(sizeof(int)*(sqlite3_uint64)nTables);
+      aHasConflict = sqlite3_malloc(nTables);
+      aApplied = sqlite3_malloc(nTables);
+      if( aaFkBefore ) memset(aaFkBefore, 0, sizeof(ConflictsFkCount*)*(sqlite3_uint64)nTables);
+      if( anFkBefore ) memset(anFkBefore, 0, sizeof(int)*(sqlite3_uint64)nTables);
+      if( aHasConflict ) memset(aHasConflict, 0, (size_t)nTables);
+      if( aApplied ) memset(aApplied, 0, (size_t)nTables);
+      if( !aaFkBefore || !anFkBefore || !aHasConflict || !aApplied ){
+        rc = SQLITE_NOMEM;
+      }
     }
   }
   if( rc!=SQLITE_OK ){
@@ -1627,6 +1644,7 @@ static void conflictsResolveParsedFunc(
     }
     if( found && !useOurs ){
       int bDiffer = 0;
+      aHasConflict[i] = 1;
       rc = conflictsTheirColumnsDiffer(db, cs, azTables[i], &bDiffer);
       if( rc!=SQLITE_OK ){
         sqlite3_result_error_code(ctx, rc);
@@ -1656,6 +1674,15 @@ static void conflictsResolveParsedFunc(
     goto resolve_free;
   }
 
+  if( !useOurs ){
+    for(i=0; i<nTables; i++){
+      if( !aHasConflict[i] ) continue;
+      rc = conflictsCountFkViolations(db, azTables[i],
+                                      &aaFkBefore[i], &anFkBefore[i]);
+      if( rc!=SQLITE_OK ) goto resolve_error;
+    }
+  }
+
   for(i=0; i<nTables; i++){
     if( aObject[i] ){
       char *zDrop = sqlite3_mprintf("DROP %s IF EXISTS main.\"%w\"",
@@ -1678,16 +1705,9 @@ static void conflictsResolveParsedFunc(
       rc = removeConflictTableFromCatalog(db, cs, azTables[i], &found);
       if( rc!=SQLITE_OK ) goto resolve_error;
     }else{
-      ConflictsFkCount *aFkBefore = 0, *aFkAfter = 0;
-      int nFkBefore = 0, nFkAfter = 0, bFkAdded;
       rc = loadConflictTable(db, cs, azTables[i], &table, &found);
       if( rc!=SQLITE_OK ) goto resolve_error;
       if( found ){
-        rc = conflictsCountFkViolations(db, azTables[i], &aFkBefore, &nFkBefore);
-        if( rc!=SQLITE_OK ){
-          freeConflictTable(&table);
-          goto resolve_error;
-        }
         {
           DoltliteRawRow *aRow = sqlite3_malloc64(
               sizeof(DoltliteRawRow)*(u64)(table.nConflicts+1));
@@ -1707,26 +1727,12 @@ static void conflictsResolveParsedFunc(
           sqlite3_free(aRow);
           if( rc!=SQLITE_OK ){
             freeConflictTable(&table);
-            conflictsFreeFkCounts(aFkBefore, nFkBefore);
             zError = "failed to apply theirs value";
             goto resolve_error;
           }
         }
         freeConflictTable(&table);
-        rc = conflictsCountFkViolations(db, azTables[i], &aFkAfter, &nFkAfter);
-        bFkAdded = rc==SQLITE_OK && conflictsFkViolationsAdded(
-            aFkBefore, nFkBefore, aFkAfter, nFkAfter);
-        conflictsFreeFkCounts(aFkBefore, nFkBefore);
-        conflictsFreeFkCounts(aFkAfter, nFkAfter);
-        if( rc!=SQLITE_OK ) goto resolve_error;
-        if( bFkAdded ){
-          zOwnedError = sqlite3_mprintf("resolving conflicts for table %s "
-                                        "created foreign key violations",
-                                        azTables[i]);
-          rc = zOwnedError ? SQLITE_CONSTRAINT_FOREIGNKEY : SQLITE_NOMEM;
-          zError = zOwnedError;
-          goto resolve_error;
-        }
+        aApplied[i] = 1;
         rc = removeConflictTableFromCatalog(db, cs, azTables[i], &found);
         if( rc!=SQLITE_OK ) goto resolve_error;
       }else{
@@ -1734,6 +1740,26 @@ static void conflictsResolveParsedFunc(
       }
     }
     if( !found ) needsSeal = 1;
+  }
+  if( !useOurs ){
+    for(i=0; i<nTables; i++){
+      ConflictsFkCount *aFkAfter = 0;
+      int nFkAfter = 0, bFkAdded;
+      if( !aApplied[i] ) continue;
+      rc = conflictsCountFkViolations(db, azTables[i], &aFkAfter, &nFkAfter);
+      bFkAdded = rc==SQLITE_OK && conflictsFkViolationsAdded(
+          aaFkBefore[i], anFkBefore[i], aFkAfter, nFkAfter);
+      conflictsFreeFkCounts(aFkAfter, nFkAfter);
+      if( rc!=SQLITE_OK ) goto resolve_error;
+      if( bFkAdded ){
+        zOwnedError = sqlite3_mprintf("resolving conflicts for table %s "
+                                      "created foreign key violations",
+                                      azTables[i]);
+        rc = zOwnedError ? SQLITE_CONSTRAINT_FOREIGNKEY : SQLITE_NOMEM;
+        zError = zOwnedError;
+        goto resolve_error;
+      }
+    }
   }
   if( AtomicLoad(&db->u1.isInterrupted)
    && !doltliteVcInterruptDeferred(db, 0) ){
@@ -1776,6 +1802,15 @@ resolve_error:
   sqlite3_result_error_code(ctx, rc);
 
 resolve_free:
+  if( aaFkBefore && anFkBefore ){
+    for(i=0; i<nTables; i++){
+      conflictsFreeFkCounts(aaFkBefore[i], anFkBefore[i]);
+    }
+  }
+  sqlite3_free(aaFkBefore);
+  sqlite3_free(anFkBefore);
+  sqlite3_free(aHasConflict);
+  sqlite3_free(aApplied);
   sqlite3_free(zOwnedError);
   if( azSideView ) doltliteFreeStringArray(azSideView, nTables);
   sqlite3_free(aObject);

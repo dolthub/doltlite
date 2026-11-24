@@ -342,5 +342,86 @@ SELECT dolt_conflicts_resolve('--theirs','t');" \
   "Unable to automatically resolve schema conflicts" "$DBV"
 rm -f "$DBV"
 
+# Multi-table FK-linked conflicts resolved with --theirs must validate FK
+# constraints across the whole batch rather than per table.
+DBFK1=/tmp/test_conf_fk1_$$.db; rm -f "$DBFK1"
+echo "PRAGMA foreign_keys = ON;
+CREATE TABLE parent(id INTEGER PRIMARY KEY, name TEXT);
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES parent(id), note TEXT);
+CREATE TABLE other(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO parent VALUES(1,'p1'),(2,'p2');
+INSERT INTO child VALUES(10,1,'base');
+INSERT INTO other VALUES(1,'base');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('theirs');
+DELETE FROM parent WHERE id=2;
+UPDATE child SET note='main' WHERE id=10;
+UPDATE other SET v='main' WHERE id=1;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_checkout('theirs');
+UPDATE parent SET name='p2_theirs' WHERE id=2;
+UPDATE child SET pid=2, note='theirs' WHERE id=10;
+UPDATE other SET v='theirs' WHERE id=1;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DBFK1" > /dev/null 2>&1
+
+run_test_error_output_match "fk_batch_reparent_child_before_parent" \
+  "BEGIN; SELECT dolt_merge('theirs');
+SELECT dolt_conflicts_resolve('--theirs','child','parent');
+SELECT 'FK1|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT pid || ',' || note FROM child WHERE id=10) || '|' || (SELECT name FROM parent WHERE id=2);
+ROLLBACK;" \
+  "^FK1\\|1\\|2,theirs\\|p2_theirs$" "$DBFK1" 'Merge has [1-9][0-9]* conflict\(s\)'
+
+run_test_error_output_match "fk_batch_reparent_dot" \
+  "BEGIN; SELECT dolt_merge('theirs');
+SELECT dolt_conflicts_resolve('--theirs','.');
+SELECT 'FK2|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT pid || ',' || note FROM child WHERE id=10) || '|' || (SELECT name FROM parent WHERE id=2) || '|' || (SELECT v FROM other WHERE id=1);
+ROLLBACK;" \
+  "^FK2\\|0\\|2,theirs\\|p2_theirs\\|theirs$" "$DBFK1" 'Merge has [1-9][0-9]* conflict\(s\)'
+
+run_test_error_match "fk_single_child_still_rejected" \
+  "BEGIN; SELECT dolt_merge('theirs');
+SELECT dolt_conflicts_resolve('--theirs','child');
+ROLLBACK;" \
+  "resolving conflicts for table child created foreign key violations" "$DBFK1"
+
+run_test_error_output_match "fk_partial_batch_rolls_back_all" \
+  "BEGIN; SELECT dolt_merge('theirs');
+SELECT dolt_conflicts_resolve('--theirs','other','child');
+SELECT 'FK3|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT v FROM other WHERE id=1) || '|' || (SELECT pid || ',' || note FROM child WHERE id=10);
+ROLLBACK;" \
+  "^FK3\\|3\\|main\\|1,main$" "$DBFK1" 'Merge has [1-9][0-9]* conflict\(s\)|resolving conflicts for table child created foreign key violations'
+
+DBFK2=/tmp/test_conf_fk2_$$.db; rm -f "$DBFK2"
+echo "PRAGMA foreign_keys = ON;
+CREATE TABLE parent(id INTEGER PRIMARY KEY, name TEXT);
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES parent(id), note TEXT);
+INSERT INTO parent VALUES(1,'p1');
+INSERT INTO child VALUES(10,1,'base');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('theirs');
+UPDATE parent SET name='p1_main' WHERE id=1;
+UPDATE child SET note='main' WHERE id=10;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_checkout('theirs');
+DELETE FROM child WHERE id=10;
+DELETE FROM parent WHERE id=1;
+SELECT dolt_commit('-Am','theirs');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DBFK2" > /dev/null 2>&1
+
+run_test_error_output_match "fk_batch_paired_delete_parent_before_child" \
+  "BEGIN; SELECT dolt_merge('theirs');
+SELECT dolt_conflicts_resolve('--theirs','parent','child');
+SELECT 'FK4|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM parent) || '|' || (SELECT count(*) FROM child);
+ROLLBACK;" \
+  "^FK4\\|0\\|0\\|0$" "$DBFK2" 'Merge has [1-9][0-9]* conflict\(s\)'
+
+run_test_error_match "fk_single_parent_delete_still_rejected" \
+  "BEGIN; SELECT dolt_merge('theirs');
+SELECT dolt_conflicts_resolve('--theirs','parent');
+ROLLBACK;" \
+  "resolving conflicts for table parent created foreign key violations" "$DBFK2"
+
+rm -f "$DBFK1" "$DBFK2"
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14"
 dltest_finish
