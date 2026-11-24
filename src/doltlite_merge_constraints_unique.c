@@ -280,82 +280,12 @@ struct UniqueIndexEntry {
 ** back over the connection: mid-merge that read still returns the pre-merge
 ** catalog, so a column the merged schema adds looks absent and an index over
 ** it cannot be mapped. */
-static int uniqueAppendExprSql(sqlite3_str *p, const Expr *pExpr, Table *pTab){
-  int i;
-  if( !pExpr ) return SQLITE_ERROR;
-  switch( pExpr->op ){
-    case TK_COLLATE:
-    case TK_UPLUS:
-      return uniqueAppendExprSql(p, pExpr->pLeft, pTab);
-    case TK_UMINUS:
-      sqlite3_str_appendall(p, "-(");
-      if( uniqueAppendExprSql(p, pExpr->pLeft, pTab) ) return SQLITE_ERROR;
-      sqlite3_str_appendall(p, ")");
-      return SQLITE_OK;
-    case TK_COLUMN:
-      if( pExpr->iColumn<0 ){
-        sqlite3_str_appendall(p, "rowid");
-      }else if( pTab && pExpr->iColumn<pTab->nCol ){
-        sqlite3_str_appendf(p, "\"%w\"", pTab->aCol[pExpr->iColumn].zCnName);
-      }else{
-        return SQLITE_ERROR;
-      }
-      return SQLITE_OK;
-    case TK_STRING:
-      sqlite3_str_appendf(p, "%Q", pExpr->u.zToken);
-      return SQLITE_OK;
-    case TK_FLOAT:
-      sqlite3_str_appendall(p, pExpr->u.zToken);
-      return SQLITE_OK;
-    case TK_NULL:
-      sqlite3_str_appendall(p, "NULL");
-      return SQLITE_OK;
-    case TK_INTEGER:
-      if( ExprHasProperty(pExpr, EP_IntValue) ){
-        sqlite3_str_appendf(p, "%d", pExpr->u.iValue);
-      }else{
-        sqlite3_str_appendall(p, pExpr->u.zToken);
-      }
-      return SQLITE_OK;
-    case TK_FUNCTION:
-      sqlite3_str_appendf(p, "%s(", pExpr->u.zToken);
-      if( pExpr->x.pList ){
-        for(i=0; i<pExpr->x.pList->nExpr; i++){
-          if( i ) sqlite3_str_appendall(p, ",");
-          if( uniqueAppendExprSql(p, pExpr->x.pList->a[i].pExpr, pTab) ){
-            return SQLITE_ERROR;
-          }
-        }
-      }
-      sqlite3_str_appendall(p, ")");
-      return SQLITE_OK;
-    case TK_PLUS:
-    case TK_MINUS:
-    case TK_STAR:
-    case TK_SLASH:
-    case TK_REM:
-    case TK_CONCAT:
-      sqlite3_str_appendall(p, "(");
-      if( uniqueAppendExprSql(p, pExpr->pLeft, pTab) ) return SQLITE_ERROR;
-      sqlite3_str_appendall(p,
-          pExpr->op==TK_PLUS ? "+" :
-          pExpr->op==TK_MINUS ? "-" :
-          pExpr->op==TK_STAR ? "*" :
-          pExpr->op==TK_SLASH ? "/" :
-          pExpr->op==TK_REM ? "%" : "||");
-      if( uniqueAppendExprSql(p, pExpr->pRight, pTab) ) return SQLITE_ERROR;
-      sqlite3_str_appendall(p, ")");
-      return SQLITE_OK;
-    default:
-      return SQLITE_ERROR;
-  }
-}
-
 static int uniqueStoredField(Table *pTab, int iColumn){
   if( HasRowid(pTab) ) return sqlite3TableColumnToStorage(pTab, iColumn);
   return sqlite3TableColumnToIndex(sqlite3PrimaryKeyIndex(pTab), iColumn);
 }
 
+#ifndef SQLITE_OMIT_GENERATED_COLUMNS
 static int uniqueBindStoredColumn(
   sqlite3 *db,
   sqlite3_stmt *pStmt,
@@ -385,11 +315,9 @@ static int uniqueBindStoredColumn(
   return sqlite3_bind_blob(pStmt, iParam, v.p, v.n, SQLITE_TRANSIENT);
 }
 
-/* A VIRTUAL column is not a field of the WITHOUT ROWID record.
-** sqlite3TableColumnToIndex returns -1 and the field read was reported
-** as a corrupt database. Compute the generation expression from the
-** stored columns instead. Earlier VIRTUAL columns are projected too,
-** so a generated column may refer to one declared before it. */
+/* A VIRTUAL column is not a field of the WITHOUT ROWID record. Evaluate its
+** generation expression via SQLite's code generator against the stored
+** columns of the record. */
 static int uniqueEvalVirtualColumn(
   sqlite3 *db,
   Table *pTab,
@@ -400,90 +328,26 @@ static int uniqueEvalVirtualColumn(
   DoltliteSerialValue *pOut,
   u8 **ppOwned
 ){
-  sqlite3 *pEval = 0;
   sqlite3_stmt *pStmt = 0;
-  sqlite3_str *pInner;
-  char *zCur = 0;
-  char *zSql = 0;
-  int *aBind = 0;
-  int nBind = 0;
-  int i, rc;
+  Expr *pExpr;
   sqlite3_value *pVal;
-  int eType, n;
+  int i, iParam, eType, n, rc;
 
   *ppOwned = 0;
   memset(pOut, 0, sizeof(*pOut));
-  if( iCol<0 || iCol>=pTab->nCol ) return SQLITE_CORRUPT;
-  aBind = sqlite3_malloc(pTab->nCol * (int)sizeof(int));
-  if( !aBind ) return SQLITE_NOMEM;
-  pInner = sqlite3_str_new(0);
-  sqlite3_str_appendall(pInner, "SELECT ");
-  for(i=0; i<pTab->nCol; i++){
-#ifndef SQLITE_OMIT_GENERATED_COLUMNS
-    if( pTab->aCol[i].colFlags & COLFLAG_VIRTUAL ) continue;
-#endif
-    if( nBind ) sqlite3_str_appendall(pInner, ", ");
-    nBind++;
-    aBind[nBind-1] = i;
-    sqlite3_str_appendf(pInner, "?%d AS \"%w\"", nBind, pTab->aCol[i].zCnName);
-  }
-  if( nBind==0 ) sqlite3_str_appendall(pInner, "NULL AS \"_\"");
-  zCur = sqlite3_str_finish(pInner);
-  if( !zCur ){
-    sqlite3_free(aBind);
-    return SQLITE_NOMEM;
-  }
-  for(i=0; i<=iCol; i++){
-    sqlite3_str *pWrap;
-    char *zWrap;
-    Expr *pExpr;
-#ifndef SQLITE_OMIT_GENERATED_COLUMNS
-    if( (pTab->aCol[i].colFlags & COLFLAG_VIRTUAL)==0 ) continue;
-#else
-    continue;
-#endif
-    pExpr = sqlite3ColumnExpr(pTab, &pTab->aCol[i]);
-    pWrap = sqlite3_str_new(0);
-    sqlite3_str_appendall(pWrap, "SELECT *, (");
-    if( uniqueAppendExprSql(pWrap, pExpr, pTab)!=SQLITE_OK ){
-      sqlite3_free(sqlite3_str_finish(pWrap));
-      sqlite3_free(zCur);
-      sqlite3_free(aBind);
-      return SQLITE_ERROR;
-    }
-    sqlite3_str_appendf(pWrap, ") AS \"%w\" FROM (", pTab->aCol[i].zCnName);
-    sqlite3_str_appendall(pWrap, zCur);
-    sqlite3_str_appendall(pWrap, ")");
-    zWrap = sqlite3_str_finish(pWrap);
-    sqlite3_free(zCur);
-    if( !zWrap ){
-      sqlite3_free(aBind);
-      return SQLITE_NOMEM;
-    }
-    zCur = zWrap;
-  }
-  pInner = sqlite3_str_new(0);
-  sqlite3_str_appendf(pInner, "SELECT \"%w\" FROM (", pTab->aCol[iCol].zCnName);
-  sqlite3_str_appendall(pInner, zCur);
-  sqlite3_str_appendall(pInner, ")");
-  sqlite3_free(zCur);
-  zSql = sqlite3_str_finish(pInner);
-  if( !zSql ){
-    sqlite3_free(aBind);
-    return SQLITE_NOMEM;
-  }
-  rc = sqlite3_open(":memory:", &pEval);
-  if( rc==SQLITE_OK ) rc = sqlite3_prepare_v2(pEval, zSql, -1, &pStmt, 0);
-  sqlite3_free(zSql);
-  for(i=0; i<nBind && rc==SQLITE_OK; i++){
+  if( !db || !pTab || iCol<0 || iCol>=pTab->nCol ) return SQLITE_CORRUPT;
+  pExpr = sqlite3ColumnExpr(pTab, &pTab->aCol[iCol]);
+  if( !pExpr ) return SQLITE_CORRUPT;
+  rc = doltlitePrepareIndexExpr(db, pTab, pExpr, iCol, &pStmt);
+  if( rc!=SQLITE_OK ) return rc;
+  for(i=0, iParam=1; i<pTab->nCol && rc==SQLITE_OK; i++){
+    if( doltliteColumnIsVirtual(pTab, i) ) continue;
     rc = uniqueBindStoredColumn(
-        db, pStmt, i+1, pRecord, nRecord, pInfo, pTab, aBind[i]);
+        db, pStmt, iParam++, pRecord, nRecord, pInfo, pTab, i);
   }
-  sqlite3_free(aBind);
   if( rc==SQLITE_OK ) rc = sqlite3_step(pStmt);
   if( rc!=SQLITE_ROW ){
     sqlite3_finalize(pStmt);
-    sqlite3_close(pEval);
     return rc==SQLITE_DONE ? SQLITE_ERROR : rc;
   }
   pVal = sqlite3_column_value(pStmt, 0);
@@ -499,7 +363,6 @@ static int uniqueEvalVirtualColumn(
     *ppOwned = sqlite3_malloc(n ? n : 1);
     if( !*ppOwned ){
       sqlite3_finalize(pStmt);
-      sqlite3_close(pEval);
       return SQLITE_NOMEM;
     }
     if( n>0 ){
@@ -514,9 +377,9 @@ static int uniqueEvalVirtualColumn(
     pOut->eType = SQLITE_NULL;
   }
   sqlite3_finalize(pStmt);
-  sqlite3_close(pEval);
   return SQLITE_OK;
 }
+#endif
 
 static int uniqueRecordFromTableRow(
   sqlite3 *db,
@@ -1013,9 +876,29 @@ static void uniqueTrim(char *z){
 
 static void uniqueStripSort(char *z){
   int n, k;
+  const char *azNulls[2] = { "FIRST", "LAST" };
   const char *azKw[2] = { "DESC", "ASC" };
   int i;
   uniqueTrim(z);
+  for(i=0; i<2; i++){
+    n = (int)strlen(z);
+    k = (int)strlen(azNulls[i]);
+    if( n>k
+     && sqlite3_strnicmp(z+n-k, azNulls[i], k)==0
+     && (z[n-k-1]==' ' || z[n-k-1]=='\t' || z[n-k-1]=='\n' || z[n-k-1]=='\r') ){
+      int p = n - k;
+      while( p>0 && (z[p-1]==' ' || z[p-1]=='\t' || z[p-1]=='\n' || z[p-1]=='\r') ){
+        p--;
+      }
+      if( p>5
+       && sqlite3_strnicmp(z+p-5, "NULLS", 5)==0
+       && !uniqueIsIdent(z[p-6]) ){
+        z[p-5] = 0;
+        uniqueTrim(z);
+        break;
+      }
+    }
+  }
   for(i=0; i<2; i++){
     n = (int)strlen(z);
     k = (int)strlen(azKw[i]);
