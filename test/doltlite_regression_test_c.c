@@ -9984,6 +9984,56 @@ static void run_violation_delete_writes_once(void){
   removeDbFiles(dbpath);
 }
 
+static int gConnOpens = 0;
+static int countConnOpen(
+  sqlite3 *db, char **pzErr, const sqlite3_api_routines *pApi
+){
+  (void)db; (void)pzErr; (void)pApi;
+  gConnOpens++;
+  return SQLITE_OK;
+}
+
+/* Staging rows decodes them with the staged schema, which is parsed in a
+** scratch connection: once for the statement, not once per row. */
+static void run_workspace_stage_parses_schema_once(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  int nOpen;
+
+  printf("=== Workspace Stage Parses Schema Once Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_workspace_stage_schema");
+  removeDbFiles(dbpath);
+  check("wss_open", open_db(dbpath, &db)==SQLITE_OK);
+  check("wss_seed", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, k INTEGER);"
+    "CREATE INDEX ik ON t(k);"
+    "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<500)"
+    " INSERT INTO t SELECT x, 'base_'||x, x FROM c;"
+    "SELECT dolt_commit('-Am','base');"
+    "UPDATE t SET v='new_'||id, k=k+1000 WHERE id%2=0;")==SQLITE_OK);
+  sqlite3_auto_extension((void(*)(void))countConnOpen);
+  gConnOpens = 0;
+  check("wss_stage", execSql(db,
+      "UPDATE dolt_workspace_t SET staged=1")==SQLITE_OK);
+  nOpen = gConnOpens;
+  sqlite3_cancel_auto_extension((void(*)(void))countConnOpen);
+  printf("  scratch connections for 250 rows: %d\n", nOpen);
+  check("wss_opens_once", nOpen<25);
+  check("wss_staged", strcmp(queryScalarText(db,
+      "SELECT count(*)||','||sum(staged) FROM dolt_workspace_t"),
+      "250,250")==0);
+  check("wss_commit", execSql(db,
+      "SELECT dolt_commit('-m','staged')")==SQLITE_OK);
+  check("wss_rows", strcmp(queryScalarText(db,
+      "SELECT sum(v LIKE 'new_%')||','||"
+      "(SELECT count(*) FROM t INDEXED BY ik WHERE k>1000) FROM t"),
+      "250,250")==0);
+  check("wss_clean", strcmp(queryScalarText(db,
+      "SELECT count(*) FROM dolt_status"), "0")==0);
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_open_ignores_stale_working_set(void){
   sqlite3 *db = 0;
   sqlite3 *db2 = 0;
@@ -21470,6 +21520,7 @@ static const RegressionCase aCases[] = {
   { "begin_write_from_stale_read_snapshot", "Begin Write From Stale Read Snapshot Test", run_begin_write_from_stale_read_snapshot },
   { "open_rejects_corrupt_working_set", "Open Rejects Corrupt Working Set Test", run_open_rejects_corrupt_working_set },
   { "working_set_blob_size_validation", "Working Set Blob Size Validation Test", run_working_set_blob_size_validation },
+  { "workspace_stage_parses_schema_once", "Workspace Stage Parses Schema Once Test", run_workspace_stage_parses_schema_once },
   { "open_ignores_stale_working_set", "Open Ignores Stale Working Set Test", run_open_ignores_stale_working_set },
   { "violation_delete_writes_once", "Violation Delete Writes Once Test", run_violation_delete_writes_once },
   { "diff_stat_requires_refs", "Diff Stat Requires Refs Test", run_diff_stat_requires_refs },
