@@ -167,14 +167,22 @@ struct RebaseWalkCommit {
   int queued;
 };
 
+static u32 rebaseWalkSlot(const ProllyHash *pHash, int nSlot){
+  u32 h;
+  memcpy(&h, pHash->data, sizeof(h));
+  return h & (u32)(nSlot-1);
+}
+
 static int rebaseWalkFind(
   const RebaseWalkCommit *a,
-  int n,
+  const int *aSlot,
+  int nSlot,
   const ProllyHash *pHash
 ){
-  int i;
-  for(i=0; i<n; i++){
-    if( prollyHashCompare(&a[i].hash, pHash)==0 ) return i;
+  u32 i = rebaseWalkSlot(pHash, nSlot);
+  while( aSlot[i]>=0 ){
+    if( prollyHashCompare(&a[aSlot[i]].hash, pHash)==0 ) return aSlot[i];
+    i = (i+1) & (u32)(nSlot-1);
   }
   return -1;
 }
@@ -263,14 +271,15 @@ static int rebaseOrderReplayCommits(
   ProllyHash *queue = 0;
   ProllyHash *aNewest = 0;
   ProllyHashSet seen;
-  int *aKnown = 0;
+  int *aSlot = 0;
+  int *aStack = 0;
   int *aHeap = 0;
   int nAll = 0, nAlloc = 0;
   int qHead = 0, qTail = 0, qAlloc = 0;
   int nHeap = 0;
   int nNewest = 0;
   int seenInit = 0;
-  int nKnown = 0;
+  int nSlot = 0;
   int rc = SQLITE_OK;
   int i;
 
@@ -345,37 +354,49 @@ static int rebaseOrderReplayCommits(
     doltliteCommitClear(&c);
   }
 
-  if( nAll>0 ){
-    aKnown = sqlite3_malloc(nAll * (int)sizeof(int));
-    if( !aKnown ){ rc = SQLITE_NOMEM; goto done; }
-    memset(aKnown, 0, (size_t)nAll * sizeof(int));
+  nSlot = 16;
+  while( nSlot/2<nAll ) nSlot *= 2;
+  aSlot = sqlite3_malloc64((u64)nSlot*sizeof(int));
+  aStack = sqlite3_malloc64((u64)(nAll+1)*sizeof(int));
+  if( !aSlot || !aStack ){ rc = SQLITE_NOMEM; goto done; }
+  for(i=0; i<nSlot; i++) aSlot[i] = -1;
+  for(i=0; i<nAll; i++){
+    u32 iSlot = rebaseWalkSlot(&aAll[i].hash, nSlot);
+    while( aSlot[iSlot]>=0 ) iSlot = (iSlot+1) & (u32)(nSlot-1);
+    aSlot[iSlot] = i;
   }
-  while( nKnown<nAll ){
-    int progressed = 0;
-    for(i=0; i<nAll; i++){
-      int ready = 1;
+  /* Height 0 marks a commit whose parents are still being resolved. */
+  for(i=0; i<nAll; i++){
+    int nStack = 0;
+    if( aAll[i].height>0 ) continue;
+    aAll[i].height = 0;
+    aStack[nStack++] = i;
+    while( nStack>0 ){
+      RebaseWalkCommit *p = &aAll[aStack[nStack-1]];
       int maxH = 0;
+      int iWait = -1;
       int pidx;
-      if( aKnown[i] ) continue;
-      for(pidx=0; pidx<aAll[i].nParents; pidx++){
+      for(pidx=0; pidx<p->nParents; pidx++){
         int pi;
-        if( prollyHashIsEmpty(&aAll[i].aParents[pidx]) ) continue;
-        pi = rebaseWalkFind(aAll, nAll, &aAll[i].aParents[pidx]);
-        if( pi<0 || aAll[pi].height<0 ){
-          ready = 0;
+        if( prollyHashIsEmpty(&p->aParents[pidx]) ) continue;
+        pi = rebaseWalkFind(aAll, aSlot, nSlot, &p->aParents[pidx]);
+        if( pi<0 || aAll[pi].height==0 ){
+          rc = SQLITE_CORRUPT;
+          goto done;
+        }
+        if( aAll[pi].height<0 ){
+          iWait = pi;
           break;
         }
         if( aAll[pi].height>maxH ) maxH = aAll[pi].height;
       }
-      if( !ready ) continue;
-      aAll[i].height = maxH + 1;
-      aKnown[i] = 1;
-      nKnown++;
-      progressed = 1;
-    }
-    if( !progressed ){
-      rc = SQLITE_CORRUPT;
-      goto done;
+      if( iWait>=0 ){
+        aAll[iWait].height = 0;
+        aStack[nStack++] = iWait;
+      }else{
+        p->height = maxH + 1;
+        nStack--;
+      }
     }
   }
 
@@ -383,7 +404,7 @@ static int rebaseOrderReplayCommits(
   aNewest = sqlite3_malloc(nReplay * (int)sizeof(ProllyHash));
   if( !aHeap || !aNewest ){ rc = SQLITE_NOMEM; goto done; }
   {
-    int headIdx = rebaseWalkFind(aAll, nAll, pHeadHash);
+    int headIdx = rebaseWalkFind(aAll, aSlot, nSlot, pHeadHash);
     int pidx;
     if( headIdx<0 ){ rc = SQLITE_CORRUPT; goto done; }
     aAll[headIdx].queued = 1;
@@ -394,7 +415,7 @@ static int rebaseOrderReplayCommits(
         int pi;
         if( prollyHashIsEmpty(&aAll[idx].aParents[pidx]) ) continue;
         if( prollyHashSetContains(pUpstream, &aAll[idx].aParents[pidx]) ) continue;
-        pi = rebaseWalkFind(aAll, nAll, &aAll[idx].aParents[pidx]);
+        pi = rebaseWalkFind(aAll, aSlot, nSlot, &aAll[idx].aParents[pidx]);
         if( pi<0 ){ rc = SQLITE_CORRUPT; goto done; }
         if( aAll[pi].queued ) continue;
         aAll[pi].queued = 1;
@@ -411,7 +432,8 @@ static int rebaseOrderReplayCommits(
 done:
   sqlite3_free(queue);
   sqlite3_free(aAll);
-  sqlite3_free(aKnown);
+  sqlite3_free(aSlot);
+  sqlite3_free(aStack);
   sqlite3_free(aHeap);
   sqlite3_free(aNewest);
   if( seenInit ) prollyHashSetFree(&seen);
