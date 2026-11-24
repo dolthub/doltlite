@@ -4,6 +4,8 @@
 #include "doltlite_remote.h"
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
+#include "lib/test_tmpdir.h"
 
 typedef struct FakeRemote FakeRemote;
 struct FakeRemote {
@@ -116,6 +118,47 @@ static int syncOnce(
   return rc;
 }
 
+static void testVerifyingDestination(
+  const u8 *pData,
+  int nData,
+  const ProllyHash *pHash
+){
+  int batch;
+  for(batch=0; batch<2; batch++){
+    char zPath[160];
+    FakeRemote src;
+    DoltliteRemote *pDst;
+    ProllyHash wrong = *pHash;
+    ProllyHash root;
+    u8 has = 1;
+    int rc;
+    wrong.data[0] ^= 0xff;
+    sqlite3_snprintf(sizeof(zPath), zPath,
+        DOLTLITE_TEST_TMPDIR "/remote-integrity-%d.db", (int)getpid());
+    unlink(zPath);
+    pDst = doltliteFsRemoteOpen(sqlite3_vfs_find(0), zPath);
+    check("open verifying destination", pDst!=0 && pDst->bPutVerifies);
+    if( !pDst ) return;
+    memset(&src, 0, sizeof(src));
+    src.pData = pData;
+    src.nData = nData;
+    src.base.xGetChunk = fakeGetChunk;
+    if( batch ) src.base.xGetChunks = fakeGetChunks;
+    root = wrong;
+    rc = doltliteSyncChunks(&src.base, pDst, &root, 1);
+    check("verifying destination rejects mismatched hash", rc==SQLITE_CORRUPT);
+    rc = pDst->xHasChunks(pDst, &wrong, 1, &has);
+    check("verifying destination stores nothing", rc==SQLITE_OK && !has);
+    root = *pHash;
+    rc = doltliteSyncChunks(&src.base, pDst, &root, 1);
+    check("verifying destination accepts matching hash", rc==SQLITE_OK);
+    rc = pDst->xHasChunks(pDst, pHash, 1, &has);
+    check("verifying destination stores chunk", rc==SQLITE_OK && has);
+    pDst->xClose(pDst);
+    unlink(zPath);
+  }
+}
+
 static u8 *makeRefsBlob(const ProllyHash *pCommit, int *pnBlob){
   ChunkStore refs;
   u8 *pBlob = 0;
@@ -212,6 +255,7 @@ int main(void){
   if( rc!=SQLITE_OK ) return 1;
   prollyHashCompute(pCommit, nCommit, &actual);
   testMissingChunks(pCommit, nCommit, &actual);
+  testVerifyingDestination(pCommit, nCommit, &actual);
   wrong = actual;
   wrong.data[0] ^= 0xff;
 
