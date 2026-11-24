@@ -80,6 +80,18 @@ static void patchRowsClear(PatchCursor *pCur){
   pCur->zTo = 0;
 }
 
+static char *patchStatement(const char *zSql){
+  static const char *const azTerm[] = { "", "*/", "\n" };
+  int i;
+  if( sqlite3_complete(zSql) ) return sqlite3_mprintf("%s", zSql);
+  for(i=0; i<ArraySize(azTerm); i++){
+    char *z = sqlite3_mprintf("%s%s;", zSql, azTerm[i]);
+    if( !z || sqlite3_complete(z) ) return z;
+    sqlite3_free(z);
+  }
+  return sqlite3_mprintf("%s;", zSql);
+}
+
 static int patchAppendRow(
   PatchCursor *pCur,
   const char *zTable,
@@ -95,8 +107,7 @@ static int patchAppendRow(
   memset(p, 0, sizeof(*p));
   p->zTable = sqlite3_mprintf("%s", zTable ? zTable : "");
   p->zType = sqlite3_mprintf("%s", zType ? zType : "");
-  p->zSql = sqlite3_mprintf("%s%s", zSql,
-      zSql[strlen(zSql)-1]==';' ? "" : ";");
+  p->zSql = patchStatement(zSql);
   if( !p->zTable || !p->zType || !p->zSql ){
     sqlite3_free(p->zTable);
     sqlite3_free(p->zType);
