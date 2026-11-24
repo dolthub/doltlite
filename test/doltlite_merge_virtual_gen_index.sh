@@ -149,4 +149,94 @@ if dltest_require "virtual_equiv_setup" "$DB5" "$SETUP5"; then
 fi
 rm -f "$DB5"
 
+DB6=/tmp/test_merge_virtual_without_rowid_unique_$$.db
+rm -f "$DB6"
+SETUP6="
+CREATE TABLE t2(
+  id INT PRIMARY KEY,
+  x INT,
+  g INT GENERATED ALWAYS AS (CASE WHEN x > 0 THEN x ELSE 0 END) VIRTUAL,
+  UNIQUE(g)
+) WITHOUT ROWID;
+CREATE TABLE t3(
+  x INT,
+  g1 TEXT GENERATED ALWAYS AS (CAST(x AS TEXT)) VIRTUAL,
+  g2 TEXT GENERATED ALWAYS AS (
+    CASE WHEN x IS NULL THEN NULL
+         WHEN x IN (1, 2) AND x > 0 THEN g1 || '_ok'
+         ELSE 'other' END
+  ) VIRTUAL,
+  id INT PRIMARY KEY,
+  UNIQUE(g2)
+) WITHOUT ROWID;
+INSERT INTO t2(id, x) VALUES (1, 10);
+INSERT INTO t3(id, x) VALUES (1, 1), (2, 2), (3, NULL), (4, NULL), (5, 99);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('clean_feat');
+SELECT dolt_branch('dup_feat');
+INSERT INTO t2(id, x) VALUES (2, -5);
+SELECT dolt_commit('-Am', 'main');
+SELECT dolt_checkout('clean_feat');
+INSERT INTO t2(id, x) VALUES (4, 20);
+SELECT dolt_commit('-Am', 'clean_feat');
+SELECT dolt_checkout('dup_feat');
+INSERT INTO t2(id, x) VALUES (3, -9);
+SELECT dolt_commit('-Am', 'dup_feat');
+SELECT dolt_checkout('main');
+"
+if dltest_require "virtual_worowid_unique_setup" "$DB6" "$SETUP6"; then
+  run_test "virtual_worowid_verify_clean" \
+    "SELECT dolt_verify_constraints('--all');" "0" "$DB6"
+  TX_OUT=$(echo "BEGIN;
+SELECT dolt_merge('dup_feat');
+SELECT 'TX|' || (SELECT \"table\" || ':' || num_violations FROM dolt_constraint_violations) || '|' ||
+       (SELECT group_concat(id || '=' || x, ',') FROM (SELECT id, x FROM dolt_constraint_violations_t2 ORDER BY id)) || '|' ||
+       (SELECT dolt_verify_constraints('--all'));
+ROLLBACK;" | $DOLTLITE "$DB6" 2>&1 | grep '^TX|')
+  if [ "$TX_OUT" = "TX|t2:2|2=-5,3=-9|1" ]; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+    ERRORS="$ERRORS\nFAIL: virtual_worowid_merge_dup_violations\n  expected: TX|t2:2|2=-5,3=-9|1\n  got:      $TX_OUT"
+  fi
+  run_test_match "virtual_worowid_merge_clean" \
+    "SELECT dolt_merge('clean_feat');" "^[0-9a-f]{40}$" "$DB6"
+  run_test "virtual_worowid_verify_after_merge" \
+    "SELECT dolt_verify_constraints('--all');" "0" "$DB6"
+  run_test_lastline "virtual_worowid_integrity" "PRAGMA integrity_check;" "ok" "$DB6"
+fi
+rm -f "$DB6"
+
+DB7=/tmp/test_merge_unique_expr_sort_$$.db
+rm -f "$DB7"
+SETUP7="
+CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT);
+CREATE UNIQUE INDEX idx_lower ON t(lower(name) COLLATE NOCASE DESC);
+INSERT INTO t VALUES (1, 'Alpha');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES (2, 'Beta');
+SELECT dolt_commit('-Am', 'main');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (3, 'BETA');
+SELECT dolt_commit('-Am', 'feat');
+SELECT dolt_checkout('main');
+"
+if dltest_require "unique_expr_sort_setup" "$DB7" "$SETUP7"; then
+  run_test "unique_expr_sort_verify_clean" \
+    "SELECT dolt_verify_constraints('--all');" "0" "$DB7"
+  TX_OUT=$(echo "BEGIN;
+SELECT dolt_merge('feat');
+SELECT 'TX|' || (SELECT \"table\" || ':' || num_violations FROM dolt_constraint_violations) || '|' ||
+       (SELECT dolt_verify_constraints('--all'));
+ROLLBACK;" | $DOLTLITE "$DB7" 2>&1 | grep '^TX|')
+  if [ "$TX_OUT" = "TX|t:2|1" ]; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+    ERRORS="$ERRORS\nFAIL: unique_expr_sort_merge_dup\n  expected: TX|t:2|1\n  got:      $TX_OUT"
+  fi
+fi
+rm -f "$DB7"
+
 dltest_finish
