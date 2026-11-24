@@ -1472,7 +1472,7 @@ static void doltCheckoutParsedFunc(
           "unable to create new branch in a read-only database");
       return;
     }
-    if( argc!=1 ){
+    if( argc!=1 || iEndOptions==0 ){
       doltliteVcResultError(ctx, db, "no current branch");
       return;
     }
@@ -1548,7 +1548,7 @@ static void doltCheckoutParsedFunc(
     isCreateAndSwitch = 1;
   }
 
-  if( !createBranch && argc==1 ){
+  if( !createBranch && argc==1 && iEndOptions!=0 ){
     ProllyHash probe;
     if( chunkStoreFindTag(cs, zBranch, &probe)==SQLITE_OK
      && !prollyHashIsEmpty(&probe) ){
@@ -1562,7 +1562,7 @@ static void doltCheckoutParsedFunc(
     }
   }
 
-  if( !createBranch && !doltliteIsDetached(db)
+  if( !createBranch && !doltliteIsDetached(db) && iEndOptions!=0
    && strcmp(zBranch, doltliteGetSessionBranch(db))==0 && argc==1 ){
     sqlite3_result_int(ctx, 0);
     return;
