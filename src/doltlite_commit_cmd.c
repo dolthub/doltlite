@@ -755,15 +755,8 @@ static int doltliteCommitCreateObject(
 
   {
     const char *p = zMessage;
-    if( !p ){
-      sqlite3_free(zAmendMessage);
-      sqlite3_free(zParsedName);
-      sqlite3_free(zParsedEmail);
-      sqlite3_result_error_code(context, SQLITE_NOMEM);
-      return SQLITE_NOMEM;
-    }
-    while( *p==' ' || *p=='\t' || *p=='\n' || *p=='\r' ) p++;
-    if( *p==0 ){
+    while( p && (*p==' ' || *p=='\t' || *p=='\n' || *p=='\r') ) p++;
+    if( !p || *p==0 ){
       sqlite3_free(zAmendMessage);
       sqlite3_free(zParsedName);
       sqlite3_free(zParsedEmail);
@@ -1706,6 +1699,24 @@ static void doltliteCommitAllFunc(
   if( opts.zBranch ){
     sqlite3_result_error(context,
         "--branch is not supported by dolt_commit_all", -1);
+    return;
+  }
+  if( opts.zAuthor
+   && doltliteCommitValidateAuthor(context, opts.zAuthor)!=SQLITE_OK ){
+    return;
+  }
+  if( opts.zDate
+   && doltliteParseCommitDate(opts.zDate, &opts.explicitTimestamp)!=SQLITE_OK ){
+    char *zErr = sqlite3_mprintf(
+        "could not parse --date `%s` (expected YYYY-MM-DD or "
+        "YYYY-MM-DDTHH:MM:SS[Z|±HH:MM])", opts.zDate);
+    sqlite3_result_error(context, zErr ? zErr : "bad --date", -1);
+    sqlite3_free(zErr);
+    return;
+  }
+  if( (!opts.zMessage || opts.zMessage[0]==0) && !opts.amend ){
+    sqlite3_result_error(context,
+      "dolt_commit requires a message: SELECT dolt_commit('-m', 'msg')", -1);
     return;
   }
 
