@@ -631,18 +631,6 @@ static WorkspaceRow *wsFindCachedRow(WorkspaceVtab *p, i64 rowid,
   return 0;
 }
 
-static int wsApplyRowToIndex(
-  sqlite3 *db,
-  ChunkStore *cs, ProllyCache *pCache,
-  struct TableEntry *idxEntry, Index *pIdx, int iPKey,
-  const u8 *pKey, int nKey, i64 intKey,
-  const u8 *pSrc, int nSrc, const u8 *pTgt, int nTgt
-){
-  return doltliteIndexApplyRowDeltaChecked(
-      db, cs, pCache, &idxEntry->root, idxEntry->flags, pIdx,
-      iPKey, intKey, pKey, nKey, pSrc, nSrc, pTgt, nTgt, 1);
-}
-
 static void wsEmptyEntryRoot(struct TableEntry *p){
   memset(&p->root, 0, sizeof(p->root));
   p->pPending = 0;
@@ -866,151 +854,175 @@ static int wsUniqueConstraintError(WorkspaceVtab *p, Index *pIdx){
   return rc==SQLITE_OK ? SQLITE_CONSTRAINT_UNIQUE : rc;
 }
 
-static int wsApplyRowToStaged(
-  WorkspaceVtab *p, WorkspaceRow *r, int makeStaged, int pass
+typedef struct WorkspaceIndexEdits WorkspaceIndexEdits;
+struct WorkspaceIndexEdits {
+  Index *pIdx;
+  struct TableEntry *pEntry;
+  ProllyMutMap mm;
+};
+
+/* Apply every queued change of one table to the staged catalog: one edit
+** map per tree, flushed once. Unique indexes are checked after all of the
+** statement's old entries are gone, so rows may trade values. */
+static int wsApplyChangesToStaged(
+  WorkspaceVtab *p, WorkspaceChange *aChange, int nChange
 ){
-  sqlite3 *db;
-  ChunkStore *cs;
-  ProllyCache *pCache;
-  ProllyHash headHash, headCat, stagedCat, newRoot, newCat;
+  sqlite3 *db = p->db;
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  ProllyHash headHash, headCat, stagedCat, newCat;
   struct TableEntry *aTables = 0;
   int nTables = 0;
   struct TableEntry *pData;
   Table *pTab;
+  Index *pIdx;
+  WorkspaceIndexEdits *aIdx = 0;
+  int nIdx = 0;
+  ProllyMutMap mm;
+  ProllyMutator mut;
+  DoltliteSideCols *pSide = &p->applySide;
   u8 *pCatBuf = 0;
   int nCatBuf = 0;
-  int rc;
-  const u8 *pHeadVal;
-  int nHeadVal;
-  const u8 *pWorkVal;
-  int nWorkVal;
-  const u8 *pSrc;
-  int nSrc;
-  const u8 *pTgt;
-  int nTgt;
-  u8 *pProj = 0;
-  int nProj = 0;
-  DoltliteSideCols *pSide = &p->applySide;
+  int mmInit = 0;
+  int stagedExisted;
+  int anyStaged = 0;
   int nKeep = 0;
-  int stagedExisted = 0;
-
-  assert( p!=0 && r!=0 );
-  assert( p->zTableName!=0 );
-  assert( makeStaged==0 || makeStaged==1 );
-  assert( r->staged==0 || r->staged==1 );
-  db = p->db;
-  cs = doltliteGetChunkStore(db);
-  pCache = doltliteGetCache(db);
-
-  pHeadVal = (r->diffType==PROLLY_DIFF_ADD)    ? 0 : r->pOldVal;
-  nHeadVal = (r->diffType==PROLLY_DIFF_ADD)    ? 0 : r->nOldVal;
-  pWorkVal = (r->diffType==PROLLY_DIFF_DELETE) ? 0 : r->pNewVal;
-  nWorkVal = (r->diffType==PROLLY_DIFF_DELETE) ? 0 : r->nNewVal;
-  pSrc = makeStaged ? pHeadVal : pWorkVal;
-  nSrc = makeStaged ? nHeadVal : nWorkVal;
-  pTgt = makeStaged ? pWorkVal : pHeadVal;
-  nTgt = makeStaged ? nWorkVal : nHeadVal;
+  int i, k;
+  int rc;
 
   if( !cs || !pCache ) return SQLITE_ERROR;
   doltliteGetSessionHead(db, &headHash);
   if( prollyHashIsEmpty(&headHash) ) return SQLITE_ERROR;
   rc = doltliteCommitCatalogHash(db, &headHash, &headCat);
   if( rc!=SQLITE_OK ) return rc;
-
   doltliteGetSessionStaged(db, &stagedCat);
   if( prollyHashIsEmpty(&stagedCat) ) stagedCat = headCat;
 
-  /* Patch data and secondary-index roots in the staged catalog, then reserialize. */
   rc = doltliteLoadCatalog(db, &stagedCat, &aTables, &nTables, 0);
   if( rc!=SQLITE_OK ) return rc;
+  for(k=0; k<nChange; k++){
+    if( aChange[k].pVtab==p && aChange[k].staged ) anyStaged = 1;
+  }
   pData = doltliteFindTableByName(aTables, nTables, p->zTableName);
   stagedExisted = pData!=0;
-  if( !pData && makeStaged ){
+  if( !pData && anyStaged ){
     rc = wsEnsureEmptyStagedTable(db, p->zTableName, &aTables, &nTables);
-    if( rc!=SQLITE_OK ){
-      doltliteFreeCatalog(aTables, nTables);
-      return rc;
-    }
+    if( rc!=SQLITE_OK ) goto apply_done;
     pData = doltliteFindTableByName(aTables, nTables, p->zTableName);
   }
   if( !pData ){
-    doltliteFreeCatalog(aTables, nTables);
-    return SQLITE_NOTFOUND;
+    rc = SQLITE_NOTFOUND;
+    goto apply_done;
   }
-
-  if( pTgt && makeStaged && stagedExisted ){
+  if( anyStaged && stagedExisted ){
     rc = doltliteSideColsLoad(db, &stagedCat, &pData->schemaHash,
                               p->zTableName, &p->cols, 1, pSide);
-    if( rc==SQLITE_OK && pSide->valid ){
-      nKeep = wsRecordFieldCount(&pSide->ci);
+    if( rc!=SQLITE_OK ) goto apply_done;
+    if( pSide->valid ) nKeep = wsRecordFieldCount(&pSide->ci);
+  }
+
+  pTab = sqlite3FindTable(db, p->zTableName, "main");
+  for(pIdx=pTab ? pTab->pIndex : 0; pIdx; pIdx=pIdx->pNext) nIdx++;
+  if( nIdx>0 ){
+    aIdx = sqlite3_malloc64(sizeof(*aIdx)*(sqlite3_uint64)nIdx);
+    if( !aIdx ){
+      rc = SQLITE_NOMEM;
+      goto apply_done;
+    }
+    nIdx = 0;
+  }
+  for(pIdx=pTab ? pTab->pIndex : 0; pIdx && rc==SQLITE_OK; pIdx=pIdx->pNext){
+    struct TableEntry *pEntry;
+    /* WITHOUT ROWID PK is the table tree, not a secondary index. Rowid-table PK is. */
+    if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY && !HasRowid(pTab) ) continue;
+    pEntry = doltliteFindTableByNumber(aTables, nTables, pIdx->tnum);
+    if( !pEntry ) continue;
+    rc = prollyMutMapInit(&aIdx[nIdx].mm, 0);
+    if( rc==SQLITE_OK ){
+      aIdx[nIdx].pIdx = pIdx;
+      aIdx[nIdx].pEntry = pEntry;
+      nIdx++;
+    }
+  }
+  if( rc==SQLITE_OK ){
+    rc = prollyMutMapInit(&mm, (pData->flags & PROLLY_NODE_INTKEY) ? 1 : 0);
+    mmInit = rc==SQLITE_OK;
+  }
+
+  for(k=0; k<nChange && rc==SQLITE_OK; k++){
+    WorkspaceRow *r;
+    const u8 *pHeadVal, *pWorkVal, *pSrc, *pTgt;
+    int nHeadVal, nWorkVal, nSrc, nTgt;
+    int makeStaged;
+    u8 *pProj = 0;
+    int nProj = 0;
+    if( aChange[k].pVtab!=p ) continue;
+    r = &aChange[k].pRows->a[aChange[k].iRow];
+    makeStaged = aChange[k].staged;
+    assert( makeStaged==0 || makeStaged==1 );
+    pHeadVal = (r->diffType==PROLLY_DIFF_ADD)    ? 0 : r->pOldVal;
+    nHeadVal = (r->diffType==PROLLY_DIFF_ADD)    ? 0 : r->nOldVal;
+    pWorkVal = (r->diffType==PROLLY_DIFF_DELETE) ? 0 : r->pNewVal;
+    nWorkVal = (r->diffType==PROLLY_DIFF_DELETE) ? 0 : r->nNewVal;
+    pSrc = makeStaged ? pHeadVal : pWorkVal;
+    nSrc = makeStaged ? nHeadVal : nWorkVal;
+    pTgt = makeStaged ? pWorkVal : pHeadVal;
+    nTgt = makeStaged ? nWorkVal : nHeadVal;
+
+    if( pTgt && makeStaged && nKeep>0 ){
       rc = wsProjectRecord(pTgt, nTgt, nKeep, &pProj, &nProj);
       if( rc==SQLITE_OK && pProj ){
         pTgt = pProj;
         nTgt = nProj;
       }
     }
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(pProj);
-      doltliteFreeCatalog(aTables, nTables);
-      return rc;
+    if( rc==SQLITE_OK && pTgt ){
+      /* The table stores an empty value when every column is in the key.
+      ** The index update keeps the record rebuilt for display. */
+      int storeEmpty = (pProj==0) && (
+          (makeStaged && r->newEmpty) || (!makeStaged && r->oldEmpty));
+      rc = prollyMutMapInsert(&mm, r->pKey, r->nKey, r->intKey,
+                              pTgt, storeEmpty ? 0 : nTgt);
+    }else if( rc==SQLITE_OK ){
+      rc = prollyMutMapDelete(&mm, r->pKey, r->nKey, r->intKey);
     }
-  }
-
-  if( pass!=0 && pTgt ){
-    const u8 *pIns = pTgt;
-    int nIns = nTgt;
-    int storeEmpty = (pProj==0) && (
-        (makeStaged && r->newEmpty) || (!makeStaged && r->oldEmpty));
-    /* The table stores an empty value when every column is in the key.
-    ** The index update keeps the record rebuilt for display. */
-    static const u8 zEmpty = 0;
-    if( storeEmpty ){
-      pIns = &zEmpty;
-      nIns = 0;
+    for(i=0; i<nIdx && rc==SQLITE_OK; i++){
+      rc = doltliteIndexAccumRowDelta(db, aIdx[i].pIdx, &aIdx[i].mm,
+          pTab->iPKey, r->intKey, pSrc, nSrc, pTgt, nTgt);
     }
-    rc = prollyMutateInsert(cs, pCache, &pData->root, pData->flags,
-                            r->pKey, r->nKey, r->intKey, pIns, nIns, &newRoot);
-  }else if( pass!=0 ){
-    rc = prollyMutateDelete(cs, pCache, &pData->root, pData->flags,
-                            r->pKey, r->nKey, r->intKey, &newRoot);
-  }
-  if( rc!=SQLITE_OK ){
     sqlite3_free(pProj);
-    doltliteFreeCatalog(aTables, nTables);
-    return rc;
   }
-  if( pass!=0 ) pData->root = newRoot;
 
-  pTab = sqlite3FindTable(db, p->zTableName, "main");
-  if( pTab ){
-    Index *pIdx;
-    for(pIdx=pTab->pIndex; pIdx && rc==SQLITE_OK; pIdx=pIdx->pNext){
-      struct TableEntry *idxEntry;
-      /* WITHOUT ROWID PK is the table tree, not a secondary index. Rowid-table PK is. */
-      if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY && !HasRowid(pTab) ) continue;
-      idxEntry = doltliteFindTableByNumber(aTables, nTables, pIdx->tnum);
-      if( !idxEntry ) continue;
-      rc = wsApplyRowToIndex(db, cs, pCache, idxEntry, pIdx, pTab->iPKey,
-                             r->pKey, r->nKey, r->intKey,
-                             pass==1 ? 0 : pSrc, pass==1 ? 0 : nSrc,
-                             pass==0 ? 0 : pTgt, pass==0 ? 0 : nTgt);
-      if( rc==SQLITE_CONSTRAINT_UNIQUE ){
-        rc = wsUniqueConstraintError(p, pIdx);
-      }
+  if( rc==SQLITE_OK && !prollyMutMapIsEmpty(&mm) ){
+    memset(&mut, 0, sizeof(mut));
+    mut.pStore = cs;
+    mut.pCache = pCache;
+    mut.oldRoot = pData->root;
+    mut.pEdits = &mm;
+    mut.flags = pData->flags;
+    rc = prollyMutateFlush(&mut);
+    if( rc==SQLITE_OK ) pData->root = mut.newRoot;
+  }
+  for(i=0; i<nIdx && rc==SQLITE_OK; i++){
+    rc = doltliteIndexFlushDelta(db, cs, pCache, &aIdx[i].pEntry->root,
+        aIdx[i].pEntry->flags, aIdx[i].pIdx, &aIdx[i].mm, 1);
+    if( rc==SQLITE_CONSTRAINT_UNIQUE ){
+      rc = wsUniqueConstraintError(p, aIdx[i].pIdx);
     }
   }
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(pProj);
-    doltliteFreeCatalog(aTables, nTables);
-    return rc;
+  if( rc==SQLITE_OK ){
+    rc = doltliteSerializeCatalogEntries(db, aTables, nTables,
+                                         &pCatBuf, &nCatBuf);
   }
-
-  rc = doltliteSerializeCatalogEntries(db, aTables, nTables, &pCatBuf, &nCatBuf);
   if( rc==SQLITE_OK ) rc = chunkStorePut(cs, pCatBuf, nCatBuf, &newCat);
   sqlite3_free(pCatBuf);
-  doltliteFreeCatalog(aTables, nTables);
-  sqlite3_free(pProj);
   if( rc==SQLITE_OK ) rc = doltliteSetSessionStaged(db, &newCat);
+
+apply_done:
+  if( mmInit ) prollyMutMapFree(&mm);
+  for(i=0; i<nIdx; i++) prollyMutMapFree(&aIdx[i].mm);
+  sqlite3_free(aIdx);
+  doltliteFreeCatalog(aTables, nTables);
   return rc;
 }
 
@@ -1130,16 +1142,15 @@ static int wsQueueChange(
 void doltliteWorkspaceFinishStatement(Vdbe *pStmt){
   WorkspaceChanges *pChanges = pStmt->pWorkspaceChanges;
   ProllyHash stagedHash;
-  int pass, i, rc = SQLITE_OK;
+  int i, j, rc = SQLITE_OK;
   if( pStmt->rc==SQLITE_OK ){
     doltliteGetSessionStaged(pStmt->db, &stagedHash);
-    for(pass=0; pass<2 && rc==SQLITE_OK; pass++){
-      for(i=0; i<pChanges->n && rc==SQLITE_OK; i++){
-        WorkspaceChange *p = &pChanges->a[i];
-        rc = wsApplyRowToStaged(p->pVtab, &p->pRows->a[p->iRow],
-                                p->staged, pass);
-        if( rc!=SQLITE_OK ) sqlite3VtabImportErrmsg(pStmt, &p->pVtab->base);
-      }
+    for(i=0; i<pChanges->n && rc==SQLITE_OK; i++){
+      WorkspaceVtab *pVtab = pChanges->a[i].pVtab;
+      for(j=0; j<i && pChanges->a[j].pVtab!=pVtab; j++){}
+      if( j<i ) continue;
+      rc = wsApplyChangesToStaged(pVtab, &pChanges->a[i], pChanges->n-i);
+      if( rc!=SQLITE_OK ) sqlite3VtabImportErrmsg(pStmt, &pVtab->base);
     }
     if( rc!=SQLITE_OK ){
       doltliteSetSessionStaged(pStmt->db, &stagedHash);
@@ -1428,17 +1439,7 @@ static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
   if( newStaged==r->staged ) return SQLITE_OK;
   rc = wsRefuseSchemaChange(p);
   if( rc!=SQLITE_OK ) return rc;
-  {
-    Table *pTab = sqlite3FindTable(p->db, p->zTableName, "main");
-    Index *pIdx;
-    for(pIdx=pTab ? pTab->pIndex : 0; pIdx; pIdx=pIdx->pNext){
-      if( IsUniqueIndex(pIdx)
-       && (HasRowid(pTab) || !IsPrimaryKeyIndex(pIdx)) ){
-        return wsQueueChange(p, pRows, r, newStaged);
-      }
-    }
-  }
-  return wsApplyRowToStaged(p, r, newStaged, 2);
+  return wsQueueChange(p, pRows, r, newStaged);
 }
 
 static sqlite3_module workspaceModule = {

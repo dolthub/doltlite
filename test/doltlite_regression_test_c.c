@@ -14618,6 +14618,80 @@ static void run_workspace_queue_dedupes_rows(void){
   removeDbFiles(dbpath);
 }
 
+static long long engineChunkWrites(sqlite3 *db){
+  return atoll(queryScalarText(db,
+      "SELECT value FROM dolt_engine_stats WHERE name='chunk_write'"));
+}
+
+/* A statement's workspace changes are applied to the staged trees together,
+** so the trees are written once however many rows it stages. */
+static void run_workspace_stage_writes_once(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char zErr[256];
+  long long before, nStage, nUnstage;
+
+  printf("=== Workspace Stage Writes Once Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_workspace_stage_writes");
+  removeDbFiles(dbpath);
+  check("wsw_open", open_db(dbpath, &db)==SQLITE_OK);
+  check("wsw_seed", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, k INTEGER);"
+    "CREATE INDEX ik ON t(k);"
+    "CREATE TABLE u(id INTEGER PRIMARY KEY, n INTEGER UNIQUE);"
+    "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<6000)"
+    " INSERT INTO t SELECT x, 'base_'||x, x FROM c;"
+    "INSERT INTO u VALUES(1,10),(2,20),(3,30);"
+    "SELECT dolt_commit('-Am','base');"
+    "UPDATE t SET v='new_'||id, k=k+100000 WHERE id%3=0;"
+    "DELETE FROM t WHERE id=4;"
+    "INSERT INTO t VALUES(7001,'added',7001);")==SQLITE_OK);
+  before = engineChunkWrites(db);
+  check("wsw_stage", execSql(db,
+      "UPDATE dolt_workspace_t SET staged=1")==SQLITE_OK);
+  nStage = engineChunkWrites(db) - before;
+  check("wsw_all_staged", strcmp(queryScalarText(db,
+      "SELECT count(*)||','||sum(staged) FROM dolt_workspace_t"),
+      "2002,2002")==0);
+  before = engineChunkWrites(db);
+  check("wsw_unstage", execSql(db,
+      "UPDATE dolt_workspace_t SET staged=0"
+      " WHERE coalesce(to_id,from_id)%2=0")==SQLITE_OK);
+  nUnstage = engineChunkWrites(db) - before;
+  printf("  chunk writes: stage 2002 rows %lld, unstage 1001 rows %lld\n",
+         nStage, nUnstage);
+  check("wsw_stage_writes_once", nStage<1000);
+  check("wsw_unstage_writes_once", nUnstage<500);
+  check("wsw_commit", execSql(db,
+      "SELECT dolt_commit('-m','odd rows')")==SQLITE_OK);
+  check("wsw_committed", strcmp(queryScalarText(db,
+      "SELECT count(*)||','||sum(v LIKE 'new_%')||','||sum(v='added')"
+      " FROM dolt_at_t('HEAD')"), "6001,1000,1")==0);
+  check("wsw_committed_index", strcmp(queryScalarText(db,
+      "SELECT rows_added||','||rows_deleted||','||rows_modified"
+      " FROM dolt_diff_stat('HEAD~1','HEAD')"), "1,0,1000")==0);
+  check("wsw_rest_unstaged", strcmp(queryScalarText(db,
+      "SELECT count(*)||','||sum(staged) FROM dolt_workspace_t"),
+      "1001,0")==0);
+
+  check("wsw_swap", execSql(db,
+      "UPDATE u SET n=-1 WHERE id=1;"
+      "UPDATE u SET n=10 WHERE id=2;"
+      "UPDATE u SET n=20 WHERE id=1;"
+      "UPDATE dolt_workspace_u SET staged=1;")==SQLITE_OK);
+  check("wsw_swap_staged", strcmp(queryScalarText(db,
+      "SELECT count(*)||','||sum(staged) FROM dolt_workspace_u"), "2,2")==0);
+  check("wsw_swap_reset", execSql(db, "SELECT dolt_reset()")==SQLITE_OK);
+  check("wsw_half_swap_refused", execErr(db,
+      "UPDATE dolt_workspace_u SET staged=1 WHERE to_id=1",
+      zErr, sizeof(zErr))!=SQLITE_OK
+      && strstr(zErr, "UNIQUE constraint failed: u.n")!=0);
+  check("wsw_refusal_stages_nothing", strcmp(queryScalarText(db,
+      "SELECT count(*)||','||sum(staged) FROM dolt_workspace_u"), "2,0")==0);
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_workspace_schema_check_once(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -16813,6 +16887,31 @@ static void run_mutmap_differential_randomized(void){
   prollyMutMapFree(&lazy);
 }
 
+static int testMutateDelete(
+  ChunkStore *pStore, ProllyCache *pCache,
+  const ProllyHash *pRoot, u8 flags,
+  const u8 *pKey, int nKey, i64 intKey,
+  ProllyHash *pNewRoot
+){
+  ProllyMutMap mm;
+  ProllyMutator mut;
+  int rc = prollyMutMapInit(&mm, (flags & PROLLY_NODE_INTKEY) ? 1 : 0);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = prollyMutMapDelete(&mm, pKey, nKey, intKey);
+  if( rc==SQLITE_OK ){
+    memset(&mut, 0, sizeof(mut));
+    mut.pStore = pStore;
+    mut.pCache = pCache;
+    mut.oldRoot = *pRoot;
+    mut.pEdits = &mm;
+    mut.flags = flags;
+    rc = prollyMutateFlush(&mut);
+    if( rc==SQLITE_OK ) *pNewRoot = mut.newRoot;
+  }
+  prollyMutMapFree(&mm);
+  return rc;
+}
+
 static void run_prolly_mutate_preserves_order_across_skipped_subtrees(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -16862,8 +16961,8 @@ static void run_prolly_mutate_preserves_order_across_skipped_subtrees(void){
   pRootData = 0;
 
   make_prolly_blob_key(iDelete, aKey, sizeof(aKey));
-  rc = prollyMutateDelete(&cs, &cache, &rootHash, PROLLY_NODE_BLOBKEY,
-                          aKey, 32, 0, &newRootHash);
+  rc = testMutateDelete(&cs, &cache, &rootHash, PROLLY_NODE_BLOBKEY,
+                        aKey, 32, 0, &newRootHash);
   check("delete_key_from_multi_level_tree", rc==SQLITE_OK);
 
   prollyCursorInit(&cur, &cs, &cache, &newRootHash, PROLLY_NODE_BLOBKEY);
@@ -21709,6 +21808,7 @@ static const RegressionCase aCases[] = {
   { "rebase_concurrent_peer_commit_is_preserved", "Rebase Concurrent Peer Commit Preservation Test", run_rebase_concurrent_peer_commit_is_preserved },
   { "rebase_continue_keeps_peer_branch", "Rebase Continue Keeps Peer Branch Test", run_rebase_continue_keeps_peer_branch },
   { "rebase_deep_history_ordering", "Rebase Deep History Ordering Test", run_rebase_deep_history_ordering },
+  { "workspace_stage_writes_once", "Workspace Stage Writes Once Test", run_workspace_stage_writes_once },
   { "workspace_schema_check_once", "Workspace Schema Check Once Test", run_workspace_schema_check_once },
   { "workspace_queue_dedupes_rows", "Workspace Queue Dedupes Rows Test", run_workspace_queue_dedupes_rows },
   { "rebase_main_table_schema_guard", "Rebase Main Table Schema Guard Test", run_rebase_main_table_schema_guard },

@@ -1009,36 +1009,5 @@ int doltliteIndexFlushDelta(
   return rc;
 }
 
-int doltliteIndexApplyRowDeltaChecked(
-  sqlite3 *db,
-  ChunkStore *cs,
-  ProllyCache *cache,
-  ProllyHash *pIdxRoot,
-  u8 idxFlags,
-  Index *pIdx,
-  int iPKey, i64 intKey,
-  const u8 *pTreeKey, int nTreeKey,
-  const u8 *pOldVal, int nOldVal,
-  const u8 *pNewVal, int nNewVal,
-  int checkUnique
-){
-  ProllyMutMap mm;
-  int rc;
-
-  UNUSED_PARAMETER(pTreeKey);
-  UNUSED_PARAMETER(nTreeKey);
-  if( !cs || !cache || !pIdxRoot || !pIdx ) return SQLITE_MISUSE;
-  rc = prollyMutMapInit(&mm, 0);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteIndexAccumRowDelta(db, pIdx, &mm, iPKey, intKey,
-      pOldVal, nOldVal, pNewVal, nNewVal);
-  if( rc==SQLITE_OK ){
-    rc = doltliteIndexFlushDelta(db, cs, cache, pIdxRoot, idxFlags, pIdx,
-        &mm, checkUnique);
-  }
-  prollyMutMapFree(&mm);
-  return rc;
-}
-
 
 #endif /* DOLTLITE_PROLLY */
