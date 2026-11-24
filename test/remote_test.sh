@@ -73,6 +73,18 @@ check_match "remote add rejects invalid name" "remote name invalid" "$result"
 result=$("$DB" "$TMPDIR/src.db" "SELECT count(*) FROM dolt_remotes WHERE name='bad/name';")
 check "invalid remote not stored" "0" "$result"
 
+result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_remote('add','','$R/empty.db');" 2>&1)
+check_match "remote add rejects empty name" "remote name invalid" "$result"
+
+result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_remote('add','   ','$R/spaces.db');" 2>&1)
+check_match "remote add rejects whitespace-only name" "remote name invalid" "$result"
+
+result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_remote('add',char(9,10),'$R/ws.db');" 2>&1)
+check_match "remote add rejects tab/newline-only name" "remote name invalid" "$result"
+
+result=$("$DB" "$TMPDIR/src.db" "SELECT count(*) FROM dolt_remotes WHERE name='';")
+check "empty remote not stored" "0" "$result"
+
 result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_remote('add','  spaced  ','$R/spaced.db');")
 check "remote add trims name" "0" "$result"
 
