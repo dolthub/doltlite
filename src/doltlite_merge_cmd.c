@@ -1006,13 +1006,15 @@ static int mergeFastForward(
     }
     if( rc==SQLITE_OK ){
       rc = doltliteRefreshAndConfirmHead(db, cs, pOurHead);
-    }
-    if( rc==SQLITE_OK ){
-      int persistRc = db->autoCommit
-          ? doltlitePersistWorkingSetWithHash(db, &workingCatHash)
-          : doltliteSaveWorkingSet(db);
-      chunkStoreUnlock(cs);
-      rc = persistRc;
+      if( rc==SQLITE_OK ){
+        rc = doltliteConfirmWorkingSet(db, cs, &cleanWorkingSet);
+        if( rc==SQLITE_OK ){
+          rc = db->autoCommit
+              ? doltlitePersistWorkingSetWithHash(db, &workingCatHash)
+              : doltliteSaveWorkingSet(db);
+        }
+        chunkStoreUnlock(cs);
+      }
     }
   }else{
     if( rc==SQLITE_OK ){
@@ -1611,9 +1613,15 @@ static int mergeRefLeaveUncommitted(
   }
 
   rc = doltliteRefreshAndConfirmHead(db, cs, pOurHead);
+  if( rc==SQLITE_OK ){
+    rc = doltliteConfirmWorkingSet(db, cs, pCleanWorkingSet);
+    if( rc!=SQLITE_OK ) chunkStoreUnlock(cs);
+  }
   if( rc==SQLITE_BUSY ){
+    int restoreRc;
     doltliteCmdResultBranchBusyOrGone(context, db, "merge");
-    doltliteRestoreTxnStateOnFailure(db, pSaved, rc);
+    restoreRc = doltliteRestoreTxnStateOnFailure(db, pSaved, rc);
+    if( restoreRc!=rc ) sqlite3_result_error_code(context, restoreRc);
     return SQLITE_ERROR;
   }
   if( rc!=SQLITE_OK ){
