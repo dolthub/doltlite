@@ -10,7 +10,13 @@ int doltliteCheckIgnore(sqlite3 *db, const char *zTable,
                         int *pIgnored, char **pzErr);
 int doltliteVtabSkipIgnored(sqlite3 *db, sqlite3_vtab *pVtab,
                             const char *zName, int *pSkip);
-int doltliteCheckIgnoreCatalog(sqlite3*, const ProllyHash*, const char*, int*, char**);
+
+typedef struct DoltliteIgnoreSet DoltliteIgnoreSet;
+int doltliteIgnoreSetLoad(sqlite3*, const ProllyHash *pCatalog,
+                          DoltliteIgnoreSet**, char **pzErr);
+int doltliteIgnoreSetCheck(const DoltliteIgnoreSet*, const char *zTable,
+                           int *pIgnored, char **pzErr);
+void doltliteIgnoreSetFree(DoltliteIgnoreSet*);
 int doltliteIgnoreRegister(sqlite3 *db);
 
 #endif

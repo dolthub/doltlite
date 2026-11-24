@@ -14290,6 +14290,63 @@ static void run_rebase_main_table_schema_guard(void){
   removeDbFiles(dbpath);
 }
 
+static int ignoreStmtTrace(unsigned m, void *pCtx, void *pStmt, void *pSql){
+  const char *zSql = sqlite3_sql((sqlite3_stmt*)pStmt);
+  (void)m; (void)pSql;
+  if( zSql && strstr(zSql, "dolt_ignore") ) (*(int*)pCtx)++;
+  return 0;
+}
+
+static int stageAllIgnoreStmts(int nTable){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char zSql[128];
+  int nStmt = 0;
+  int i;
+  int rc;
+
+  make_dbpath(dbpath, sizeof(dbpath), "test_stage_all_ignore_once");
+  removeDbFiles(dbpath);
+  rc = open_db(dbpath, &db);
+  if( rc==SQLITE_OK ){
+    rc = execSql(db, "INSERT INTO dolt_ignore VALUES('skip_*', 1);"
+                     "CREATE TABLE skip_me(id INTEGER PRIMARY KEY);");
+  }
+  for(i=0; rc==SQLITE_OK && i<nTable; i++){
+    sqlite3_snprintf(sizeof(zSql), zSql,
+        "CREATE TABLE t%d(id INTEGER PRIMARY KEY, v TEXT)", i);
+    rc = execSql(db, zSql);
+  }
+  if( rc==SQLITE_OK ){
+    sqlite3_trace_v2(db, SQLITE_TRACE_STMT, ignoreStmtTrace, &nStmt);
+    rc = execSql(db, "SELECT dolt_add('-A')");
+    sqlite3_trace_v2(db, 0, 0, 0);
+  }
+  if( rc==SQLITE_OK ){
+    sqlite3_snprintf(sizeof(zSql), zSql, "%d", nTable+1);
+    if( strcmp(queryScalarText(db,
+          "SELECT count(*) FROM dolt_status WHERE staged=1"), zSql)!=0
+     || strcmp(queryScalarText(db,
+          "SELECT count(*) FROM dolt_status"
+          " WHERE table_name='skip_me'"), "0")!=0 ){
+      rc = SQLITE_ERROR;
+    }
+  }
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+  return rc==SQLITE_OK ? nStmt : -1;
+}
+
+static void run_stage_all_reads_ignore_once(void){
+  int nFew, nMany;
+  printf("=== Stage All Reads Ignore Once Test ===\n\n");
+  nFew = stageAllIgnoreStmts(2);
+  nMany = stageAllIgnoreStmts(40);
+  printf("  dolt_ignore statements: %d for 2 tables, %d for 40\n", nFew, nMany);
+  check("stage_all_ignore_ran", nFew>0 && nMany>0);
+  check("stage_all_ignore_once", nMany==nFew);
+}
+
 static void run_rebase_temp_shadow_ignored(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -21213,6 +21270,7 @@ static const RegressionCase aCases[] = {
   { "rebase_continue_keeps_peer_branch", "Rebase Continue Keeps Peer Branch Test", run_rebase_continue_keeps_peer_branch },
   { "rebase_main_table_schema_guard", "Rebase Main Table Schema Guard Test", run_rebase_main_table_schema_guard },
   { "rebase_temp_shadow_ignored", "Rebase Temp Shadow Ignored Test", run_rebase_temp_shadow_ignored },
+  { "stage_all_reads_ignore_once", "Stage All Reads Ignore Once Test", run_stage_all_reads_ignore_once },
   { "remote_add_duplicate_preserves_durable_state", "Remote Add Duplicate Preserves Durable State Test", run_remote_add_duplicate_preserves_durable_state },
   { "remote_remove_missing_preserves_durable_state", "Remote Remove Missing Preserves Durable State Test", run_remote_remove_missing_preserves_durable_state },
   { "checkout_table_index_name_collision", "Checkout Table Index Name Collision Test", run_checkout_table_index_name_collision },

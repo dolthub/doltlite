@@ -248,22 +248,23 @@ bad:
   return SQLITE_OK;
 }
 
-int doltliteCheckIgnore(
-  sqlite3 *db,
-  const char *zTable,
-  int *pIgnored,
-  char **pzErr
-){
+struct DoltliteIgnoreSet {
+  IgnoreMatch *a;
+  int n;
+  int nAlloc;
+};
+
+void doltliteIgnoreSetFree(DoltliteIgnoreSet *p){
+  if( !p ) return;
+  ignoreMatchesClear(p->a, p->n);
+  sqlite3_free(p);
+}
+
+static int ignoreSetLoadLive(sqlite3 *db, DoltliteIgnoreSet *p, char **pzErr){
   sqlite3_stmt *pStmt = 0;
-  IgnoreMatch *aMatch = 0;
   int rc;
   int rc2;
   int schemaState;
-  int nMatch = 0;
-  int nAlloc = 0;
-
-  *pIgnored = 0;
-  if( pzErr ) *pzErr = 0;
 
   rc = doltliteIgnoreSchemaState(db, &schemaState);
   if( rc!=SQLITE_OK ){
@@ -291,36 +292,24 @@ int doltliteCheckIgnore(
     const char *zPat = (const char*)sqlite3_column_text(pStmt, 0);
     int ign = sqlite3_column_int(pStmt, 1);
     if( !zPat ) continue;
-    if( !ignorePatternMatch(zPat, zTable) ) continue;
-    rc = ignoreMatchAppend(&aMatch, &nMatch, &nAlloc, zPat, ign);
+    rc = ignoreMatchAppend(&p->a, &p->n, &p->nAlloc, zPat, ign);
     if( rc!=SQLITE_OK ) break;
   }
   if( rc==SQLITE_DONE ) rc = SQLITE_OK;
   rc2 = sqlite3_finalize(pStmt);
   if( rc==SQLITE_OK && rc2!=SQLITE_OK ) rc = rc2;
-  if( rc!=SQLITE_OK ){
-    ignoreMatchesClear(aMatch, nMatch);
-    return rc;
-  }
-  rc = ignoreResolveMatches(aMatch, nMatch, zTable, pIgnored, pzErr);
-  ignoreMatchesClear(aMatch, nMatch);
   return rc;
 }
 
-int doltliteCheckIgnoreCatalog(
+static int ignoreSetLoadCatalog(
   sqlite3 *db,
   const ProllyHash *pCatalog,
-  const char *zTable,
-  int *pIgnored,
-  char **pzErr
+  DoltliteIgnoreSet *p
 ){
   struct TableEntry *aTables = 0, *pTable;
   ProllyCursor cur;
-  IgnoreMatch *aMatch = 0;
-  int nTables = 0, nMatch = 0, nAlloc = 0;
+  int nTables = 0;
   int res = 0, rc;
-  *pIgnored = 0;
-  if( pzErr ) *pzErr = 0;
   rc = doltliteLoadCatalog(db, pCatalog, &aTables, &nTables, 0);
   if( rc!=SQLITE_OK ) return rc;
   pTable = doltliteFindTableByName(aTables, nTables, "dolt_ignore");
@@ -341,8 +330,8 @@ int doltliteCheckIgnoreCatalog(
     if( rc==SQLITE_OK && info.nField!=2 ) rc = SQLITE_CORRUPT;
     if( rc==SQLITE_OK ) rc = dlRecordTextField(pVal, nVal, &info, 0, &zPattern);
     if( rc==SQLITE_OK && !zPattern ) rc = SQLITE_CORRUPT;
-    if( rc==SQLITE_OK && ignorePatternMatch(zPattern, zTable) ){
-      rc = ignoreMatchAppend(&aMatch, &nMatch, &nAlloc, zPattern,
+    if( rc==SQLITE_OK ){
+      rc = ignoreMatchAppend(&p->a, &p->n, &p->nAlloc, zPattern,
           dlRecordIntField(pVal, nVal, &info, 1)==1);
     }
     sqlite3_free(zPattern);
@@ -351,10 +340,70 @@ int doltliteCheckIgnoreCatalog(
   }
   prollyCursorClose(&cur);
   doltliteFreeCatalog(aTables, nTables);
+  return rc;
+}
+
+int doltliteIgnoreSetLoad(
+  sqlite3 *db,
+  const ProllyHash *pCatalog,
+  DoltliteIgnoreSet **ppSet,
+  char **pzErr
+){
+  DoltliteIgnoreSet *p;
+  int rc;
+  *ppSet = 0;
+  if( pzErr ) *pzErr = 0;
+  p = sqlite3_malloc64(sizeof(*p));
+  if( !p ) return SQLITE_NOMEM;
+  memset(p, 0, sizeof(*p));
+  rc = pCatalog ? ignoreSetLoadCatalog(db, pCatalog, p)
+                : ignoreSetLoadLive(db, p, pzErr);
+  if( rc!=SQLITE_OK ){
+    doltliteIgnoreSetFree(p);
+    return rc;
+  }
+  *ppSet = p;
+  return SQLITE_OK;
+}
+
+int doltliteIgnoreSetCheck(
+  const DoltliteIgnoreSet *p,
+  const char *zTable,
+  int *pIgnored,
+  char **pzErr
+){
+  IgnoreMatch *aMatch = 0;
+  int nMatch = 0;
+  int nAlloc = 0;
+  int rc = SQLITE_OK;
+  int i;
+  *pIgnored = 0;
+  if( pzErr ) *pzErr = 0;
+  for(i=0; rc==SQLITE_OK && i<p->n; i++){
+    if( !ignorePatternMatch(p->a[i].zPattern, zTable) ) continue;
+    rc = ignoreMatchAppend(&aMatch, &nMatch, &nAlloc,
+        p->a[i].zPattern, p->a[i].ignored);
+  }
   if( rc==SQLITE_OK ){
     rc = ignoreResolveMatches(aMatch, nMatch, zTable, pIgnored, pzErr);
   }
   ignoreMatchesClear(aMatch, nMatch);
+  return rc;
+}
+
+int doltliteCheckIgnore(
+  sqlite3 *db,
+  const char *zTable,
+  int *pIgnored,
+  char **pzErr
+){
+  DoltliteIgnoreSet *pSet = 0;
+  int rc;
+  *pIgnored = 0;
+  rc = doltliteIgnoreSetLoad(db, 0, &pSet, pzErr);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteIgnoreSetCheck(pSet, zTable, pIgnored, pzErr);
+  doltliteIgnoreSetFree(pSet);
   return rc;
 }
 
