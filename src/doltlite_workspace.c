@@ -48,6 +48,7 @@ struct WorkspaceVtab {
   DoltliteColInfo cols;
   WorkspaceRows *pRows;
   i64 nextRowid;
+  DoltliteSideCols applySide;
 };
 
 typedef struct WorkspaceChange WorkspaceChange;
@@ -463,6 +464,7 @@ static int wsDisconnect(sqlite3_vtab *pBase){
     p->pRows = pRows->pNext;
     wsRowsRelease(pRows);
   }
+  doltliteSideColsClear(&p->applySide);
   doltliteFreeColInfo(&p->cols);
   sqlite3_free(p->zTableName);
   sqlite3_free(p);
@@ -885,7 +887,7 @@ static int wsApplyRowToStaged(
   int nTgt;
   u8 *pProj = 0;
   int nProj = 0;
-  DoltliteSideCols stagedSide;
+  DoltliteSideCols *pSide = &p->applySide;
   int nKeep = 0;
   int stagedExisted = 0;
 
@@ -933,12 +935,11 @@ static int wsApplyRowToStaged(
     return SQLITE_NOTFOUND;
   }
 
-  memset(&stagedSide, 0, sizeof(stagedSide));
   if( pTgt && makeStaged && stagedExisted ){
     rc = doltliteSideColsLoad(db, &stagedCat, &pData->schemaHash,
-                              p->zTableName, &p->cols, 1, &stagedSide);
-    if( rc==SQLITE_OK && stagedSide.valid ){
-      nKeep = wsRecordFieldCount(&stagedSide.ci);
+                              p->zTableName, &p->cols, 1, pSide);
+    if( rc==SQLITE_OK && pSide->valid ){
+      nKeep = wsRecordFieldCount(&pSide->ci);
       rc = wsProjectRecord(pTgt, nTgt, nKeep, &pProj, &nProj);
       if( rc==SQLITE_OK && pProj ){
         pTgt = pProj;
@@ -946,7 +947,6 @@ static int wsApplyRowToStaged(
       }
     }
     if( rc!=SQLITE_OK ){
-      doltliteSideColsClear(&stagedSide);
       sqlite3_free(pProj);
       doltliteFreeCatalog(aTables, nTables);
       return rc;
@@ -972,7 +972,6 @@ static int wsApplyRowToStaged(
                             r->pKey, r->nKey, r->intKey, &newRoot);
   }
   if( rc!=SQLITE_OK ){
-    doltliteSideColsClear(&stagedSide);
     sqlite3_free(pProj);
     doltliteFreeCatalog(aTables, nTables);
     return rc;
@@ -998,7 +997,6 @@ static int wsApplyRowToStaged(
     }
   }
   if( rc!=SQLITE_OK ){
-    doltliteSideColsClear(&stagedSide);
     sqlite3_free(pProj);
     doltliteFreeCatalog(aTables, nTables);
     return rc;
@@ -1008,7 +1006,6 @@ static int wsApplyRowToStaged(
   if( rc==SQLITE_OK ) rc = chunkStorePut(cs, pCatBuf, nCatBuf, &newCat);
   sqlite3_free(pCatBuf);
   doltliteFreeCatalog(aTables, nTables);
-  doltliteSideColsClear(&stagedSide);
   sqlite3_free(pProj);
   if( rc==SQLITE_OK ) rc = doltliteSetSessionStaged(db, &newCat);
   return rc;
