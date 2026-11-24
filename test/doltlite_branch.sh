@@ -356,5 +356,35 @@ run_test "delete_clean_branch_works" "SELECT dolt_branch('-d','clean');" "0" "$D
 run_test "delete_dirty_branch_gone" \
   "SELECT group_concat(name) FROM dolt_branches;" "main" "$DB22"
 
-rm -f "$DB" "$DB2" "$DB2B" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22"
+DB23=/tmp/test_branch_checkout_disambig_$$.db
+rm -f "$DB23"
+$DOLTLITE "$DB23" > /dev/null 2>&1 <<SQL
+CREATE TABLE main(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO main VALUES(1,'orig_main');
+CREATE TABLE v1(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO v1 VALUES(1,'orig_v1');
+CREATE TABLE HEAD(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO HEAD VALUES(1,'orig_head');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_tag('v1');
+SELECT dolt_tag('tagonly');
+SQL
+run_test "checkout_dashdash_head_named_table" "
+UPDATE HEAD SET v='dirty' WHERE id=1;
+SELECT dolt_checkout('--','HEAD');
+SELECT v FROM HEAD WHERE id=1;
+" "0
+orig_head" "$DB23"
+run_test "checkout_ref_dashdash_same_named_table" "
+UPDATE main SET v='dirty' WHERE id=1;
+SELECT dolt_checkout('main','--','main');
+SELECT v FROM main WHERE id=1;
+" "0
+orig_main" "$DB23"
+run_test_error_match "checkout_dashdash_tag_named_table_matches_dolt" \
+  "SELECT dolt_checkout('--','v1');" "detached head" "$DB23"
+run_test_error_match "checkout_tag_only_still_errors" \
+  "SELECT dolt_checkout('tagonly');" "detached head" "$DB23"
+
+rm -f "$DB" "$DB2" "$DB2B" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23"
 dltest_finish

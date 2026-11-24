@@ -1472,7 +1472,7 @@ static void doltCheckoutParsedFunc(
           "unable to create new branch in a read-only database");
       return;
     }
-    if( argc!=1 ){
+    if( argc!=1 || iEndOptions==0 ){
       doltliteVcResultError(ctx, db, "no current branch");
       return;
     }
@@ -1555,7 +1555,8 @@ static void doltCheckoutParsedFunc(
       checkoutDetachedHeadError(ctx, db);
       return;
     }
-    if( chunkStoreFindBranch(cs, zBranch, &probe)!=SQLITE_OK
+    if( iEndOptions!=0
+     && chunkStoreFindBranch(cs, zBranch, &probe)!=SQLITE_OK
      && doltliteResolveRef(db, zBranch, &probe)==SQLITE_OK ){
       checkoutDetachedHeadError(ctx, db);
       return;
