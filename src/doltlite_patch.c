@@ -19,7 +19,6 @@ typedef struct PatchSchema PatchSchema;
 typedef struct PatchValue PatchValue;
 
 struct PatchRow {
-  int iOrder;
   char *zTable;
   char *zType;
   char *zSql;
@@ -106,7 +105,6 @@ static int patchAppendRow(
   if( rc!=SQLITE_OK ) return rc;
   p = &pCur->aRow[pCur->nRow];
   memset(p, 0, sizeof(*p));
-  p->iOrder = pCur->nRow + 1;
   p->zTable = sqlite3_mprintf("%s", zTable ? zTable : "");
   p->zType = sqlite3_mprintf("%s", zType ? zType : "");
   p->zSql = patchStatement(zSql);
@@ -1726,7 +1724,7 @@ static int patchColumn(sqlite3_vtab_cursor *p, sqlite3_context *ctx, int iCol){
   PatchCursor *c=(PatchCursor*)p;
   PatchRow *r=&c->aRow[c->iRow];
   switch(iCol){
-    case 0: sqlite3_result_int64(ctx,r->iOrder); break;
+    case 0: sqlite3_result_int64(ctx,c->iRow+1); break;
     case 1: sqlite3_result_text(ctx,c->zFrom,-1,SQLITE_TRANSIENT); break;
     case 2: sqlite3_result_text(ctx,c->zTo,-1,SQLITE_TRANSIENT); break;
     case 3: sqlite3_result_text(ctx,r->zTable,-1,SQLITE_TRANSIENT); break;

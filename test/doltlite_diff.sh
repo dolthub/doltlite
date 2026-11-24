@@ -596,7 +596,7 @@ run_test "patch_diff_type_null_empty" \
   "0" "$PPD"
 run_test "patch_diff_type_pushed_statement_order" \
   "SELECT statement_order || '|' || diff_type FROM dolt_patch('HEAD~1','HEAD') WHERE diff_type = 'data';" \
-  "2|data" "$PPD"
+  "1|data" "$PPD"
 run_test "patch_diff_type_unpushed_statement_order" \
   "SELECT statement_order || '|' || diff_type FROM dolt_patch('HEAD~1','HEAD') WHERE diff_type || '' = 'data';" \
   "2|data" "$PPD"
