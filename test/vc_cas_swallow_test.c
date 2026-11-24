@@ -1210,6 +1210,99 @@ static void test_virtual_base_restore(void){
   }
 }
 
+static void test_merge_uncommitted_ws_cas(void){
+  static const struct {
+    const char *zName;
+    const char *zSql;
+    int bFastForward;
+  } aCase[] = {
+    { "nocommit", "SELECT dolt_merge('--no-commit','feat')", 0 },
+    { "squash_nocommit", "SELECT dolt_merge('--squash','--no-commit','feat')", 0 },
+    { "ff_squash", "SELECT dolt_merge('--squash','ff')", 1 },
+  };
+  int i;
+  for(i=0; i<(int)(sizeof(aCase)/sizeof(aCase[0])); i++){
+    char zPath[256];
+    sqlite3 *db1 = 0, *db2 = 0;
+    char *zErr = 0;
+    int rc, nCnt = -1, nPeer = -1, nFeat = -1;
+
+    snprintf(zPath, sizeof(zPath), DOLTLITE_TEST_TMPDIR "/cas_ws_%s_%d.db",
+             aCase[i].zName, (int)getpid());
+    db1 = openDb(zPath);
+    check("ws_cas: open", db1!=0);
+    if( !db1 ) continue;
+    check("ws_cas: setup", exec(db1,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+      "INSERT INTO t VALUES(1,'base');"
+      "SELECT dolt_commit('-Am','base');"
+      "SELECT dolt_checkout('-b','ff');"
+      "INSERT INTO t VALUES(2,'ff');"
+      "SELECT dolt_commit('-Am','ff');"
+      "SELECT dolt_checkout('main');"
+      "SELECT dolt_branch('feat');")==SQLITE_OK);
+    if( !aCase[i].bFastForward ){
+      check("ws_cas: diverge", exec(db1,
+        "SELECT dolt_checkout('feat');"
+        "INSERT INTO t VALUES(3,'feat');"
+        "SELECT dolt_commit('-Am','feat');"
+        "SELECT dolt_checkout('main');"
+        "INSERT INTO t VALUES(4,'main');"
+        "SELECT dolt_commit('-Am','main');")==SQLITE_OK);
+    }
+
+    check("ws_cas: peer open", sqlite3_open(zPath, &db2)==SQLITE_OK);
+    sqlite3_busy_timeout(db2, 5000);
+    check("ws_cas: begin read", exec(db1, "BEGIN")==SQLITE_OK);
+    check("ws_cas: snapshot", queryInt(db1, "SELECT count(*) FROM t", &nCnt)==SQLITE_OK);
+    check("ws_cas: peer write", exec(db2, "INSERT INTO t VALUES(99,'peer')")==SQLITE_OK);
+
+    rc = execQuiet(db1, aCase[i].zSql, &zErr);
+    check("ws_cas: merge returned busy", (rc&0xff)==SQLITE_BUSY);
+    sqlite3_free(zErr);
+    zErr = 0;
+    sqlite3_exec(db1, "ROLLBACK", 0, 0, 0);
+
+    check("ws_cas: peer row kept",
+          queryInt(db2, "SELECT count(*) FROM t WHERE id=99", &nPeer)==SQLITE_OK
+          && nPeer==1);
+    check("ws_cas: merged row not applied",
+          queryInt(db2, "SELECT count(*) FROM t WHERE id IN (2,3)", &nFeat)==SQLITE_OK
+          && nFeat==0);
+    sqlite3_close(db2);
+    closeRm(db1, zPath);
+
+    db1 = openDb(zPath);
+    check("ws_cas_txn: open", db1!=0);
+    if( !db1 ) continue;
+    check("ws_cas_txn: setup", exec(db1,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+      "INSERT INTO t VALUES(1,'base');"
+      "SELECT dolt_commit('-Am','base');"
+      "SELECT dolt_checkout('-b','ff');"
+      "INSERT INTO t VALUES(2,'ff');"
+      "SELECT dolt_commit('-Am','ff');"
+      "SELECT dolt_checkout('main');"
+      "SELECT dolt_branch('feat');")==SQLITE_OK);
+    if( !aCase[i].bFastForward ){
+      check("ws_cas_txn: diverge", exec(db1,
+        "SELECT dolt_checkout('feat');"
+        "INSERT INTO t VALUES(3,'feat');"
+        "SELECT dolt_commit('-Am','feat');"
+        "SELECT dolt_checkout('main');"
+        "INSERT INTO t VALUES(4,'main');"
+        "SELECT dolt_commit('-Am','main');")==SQLITE_OK);
+    }
+    check("ws_cas_txn: begin", exec(db1, "BEGIN")==SQLITE_OK);
+    check("ws_cas_txn: merge", exec(db1, aCase[i].zSql)==SQLITE_OK);
+    check("ws_cas_txn: commit", exec(db1, "COMMIT")==SQLITE_OK);
+    check("ws_cas_txn: merged row applied",
+          queryInt(db1, "SELECT count(*) FROM t WHERE id IN (2,3)", &nFeat)==SQLITE_OK
+          && nFeat==1);
+    closeRm(db1, zPath);
+  }
+}
+
 int main(void){
   sqlite3_initialize();
   test_named_commit_failure();
@@ -1234,6 +1327,7 @@ int main(void){
   test_ff_interrupt_after_advance();
   test_apply_publish_failure_is_atomic();
   test_replay_finish_failure_is_atomic();
+  test_merge_uncommitted_ws_cas();
   printf("vc_cas_swallow_test: %d passed, %d failed\n", nPass, nFail);
   return nFail ? 1 : 0;
 }
