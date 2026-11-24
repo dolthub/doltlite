@@ -147,5 +147,11 @@ SELECT dolt_tag('feat');
 SELECT dolt_checkout('feat');" \
   "does not support a detached head state" "$DB6"
 
+run_test "tag_empty_long_message_does_not_steal_name" \
+  "SELECT dolt_tag('--message=','empty-msg');
+SELECT tag_name || '|' || length(message) FROM dolt_tags WHERE tag_name='empty-msg';" \
+  "0
+empty-msg|0" "$DB4"
+
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6"
 dltest_finish

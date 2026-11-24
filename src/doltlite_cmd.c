@@ -1066,7 +1066,7 @@ static int cmdSetOption(
     if( pOption->pSeen ) *pOption->pSeen = 1;
     return SQLITE_OK;
   }
-  if( zAttached && zAttached[0] ){
+  if( zAttached ){
     zValue = zAttached;
   }else if( *pI+1<argc ){
     rc = cmdValueText(ctx, argv[++*pI], &zValue);
@@ -1176,7 +1176,8 @@ int doltliteCmdParseArgs(
         }
         rc = cmdSetOption(ctx, pOption,
             pOption->zLong ? pOption->zLong : zOpt,
-            pOption->eType==DOLTLITE_CMD_OPTION_VALUE ? zArg+j+1 : 0,
+            (pOption->eType==DOLTLITE_CMD_OPTION_VALUE && zArg[j+1])
+                ? zArg+j+1 : 0,
             argc, argv, &i);
         if( rc!=SQLITE_OK ){
           doltliteCmdArgsClear(pArgs);
