@@ -279,15 +279,50 @@ static int framedTakeRowid(const i64 *aRowid, u8 *aUsed, int nRowid, i64 iRowid)
   return 0;
 }
 
-int dlFramedDeleteRow(
-  const u8 *data, int nData,
-  const DlFramedCodec *pCodec,
-  const char *zTableName,
-  i64 deleteRowid,
-  u8 **ppOut, int *pnOut, int *pnOutTables, int *pDeleted
-){
-  return dlFramedDeleteRows(data, nData, pCodec, zTableName, &deleteRowid, 1,
-                            ppOut, pnOut, pnOutTables, pDeleted);
+int dlRowDeletesQueue(void **ppDeletes, const char *zTableName, i64 iRowid){
+  DlRowDeletes *pDel = (DlRowDeletes*)*ppDeletes;
+  DlRowDeleteBatch *pBatch;
+  int i;
+  if( !pDel ){
+    pDel = sqlite3_malloc(sizeof(*pDel));
+    if( !pDel ) return SQLITE_NOMEM;
+    memset(pDel, 0, sizeof(*pDel));
+    *ppDeletes = pDel;
+  }
+  for(i=0; i<pDel->n; i++){
+    if( strcmp(pDel->a[i].zTableName, zTableName)==0 ) break;
+  }
+  if( i==pDel->n ){
+    DlRowDeleteBatch *a = sqlite3_realloc64(pDel->a,
+        (sqlite3_uint64)(pDel->n+1)*sizeof(*a));
+    if( !a ) return SQLITE_NOMEM;
+    pDel->a = a;
+    memset(&a[i], 0, sizeof(a[i]));
+    a[i].zTableName = sqlite3_mprintf("%s", zTableName);
+    if( !a[i].zTableName ) return SQLITE_NOMEM;
+    pDel->n++;
+  }
+  pBatch = &pDel->a[i];
+  if( pBatch->nRowid==pBatch->nAlloc ){
+    int nAlloc = pBatch->nAlloc ? pBatch->nAlloc*2 : 64;
+    i64 *a = sqlite3_realloc64(pBatch->aRowid, (sqlite3_uint64)nAlloc*sizeof(i64));
+    if( !a ) return SQLITE_NOMEM;
+    pBatch->aRowid = a;
+    pBatch->nAlloc = nAlloc;
+  }
+  pBatch->aRowid[pBatch->nRowid++] = iRowid;
+  return SQLITE_OK;
+}
+
+void dlRowDeletesFree(DlRowDeletes *pDel){
+  int i;
+  if( !pDel ) return;
+  for(i=0; i<pDel->n; i++){
+    sqlite3_free(pDel->a[i].zTableName);
+    sqlite3_free(pDel->a[i].aRowid);
+  }
+  sqlite3_free(pDel->a);
+  sqlite3_free(pDel);
 }
 
 int dlFramedDeleteRows(

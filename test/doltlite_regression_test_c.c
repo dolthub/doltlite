@@ -9938,6 +9938,52 @@ static void run_working_set_blob_size_validation(void){
   }
 }
 
+/* A statement that deletes many violation rows rewrites the violations
+** catalog once, not once per row. */
+static void run_violation_delete_writes_once(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  long long before, after;
+
+  printf("=== Violation Delete Writes Once Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_violation_delete_writes");
+  removeDbFiles(dbpath);
+  check("vdw_open", open_db(dbpath, &db)==SQLITE_OK);
+  check("vdw_seed", execSql(db,
+    "CREATE TABLE p(id INTEGER PRIMARY KEY);"
+    "CREATE TABLE ch(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES p(id));"
+    "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<2000)"
+    " INSERT INTO p SELECT x FROM c;"
+    "INSERT INTO ch SELECT id, id FROM p;"
+    "SELECT dolt_commit('-Am','base');"
+    "PRAGMA foreign_keys=off;"
+    "DELETE FROM p;"
+    "SELECT dolt_verify_constraints('--all');")==SQLITE_OK);
+  check("vdw_violations", strcmp(queryScalarText(db,
+      "SELECT count(*) FROM dolt_constraint_violations_ch"), "2000")==0);
+  before = atoll(queryScalarText(db,
+      "SELECT value FROM dolt_engine_stats WHERE name='chunk_write'"));
+  check("vdw_delete_some", execSql(db,
+      "DELETE FROM dolt_constraint_violations_ch WHERE id%2=0")==SQLITE_OK);
+  after = atoll(queryScalarText(db,
+      "SELECT value FROM dolt_engine_stats WHERE name='chunk_write'"));
+  printf("  chunk writes for 1000 deletes: %lld\n", after-before);
+  check("vdw_writes_once", after-before < 100);
+  check("vdw_half_left", strcmp(queryScalarText(db,
+      "SELECT count(*)||','||sum(id%2) FROM dolt_constraint_violations_ch"),
+      "1000,1000")==0);
+  check("vdw_rollback", execSql(db,
+      "BEGIN; DELETE FROM dolt_constraint_violations_ch; ROLLBACK;")==SQLITE_OK);
+  check("vdw_rollback_kept", strcmp(queryScalarText(db,
+      "SELECT count(*) FROM dolt_constraint_violations_ch"), "1000")==0);
+  check("vdw_delete_rest", execSql(db,
+      "DELETE FROM dolt_constraint_violations_ch")==SQLITE_OK);
+  check("vdw_none_left", strcmp(queryScalarText(db,
+      "SELECT count(*) FROM dolt_constraint_violations"), "0")==0);
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_open_ignores_stale_working_set(void){
   sqlite3 *db = 0;
   sqlite3 *db2 = 0;
@@ -21425,6 +21471,7 @@ static const RegressionCase aCases[] = {
   { "open_rejects_corrupt_working_set", "Open Rejects Corrupt Working Set Test", run_open_rejects_corrupt_working_set },
   { "working_set_blob_size_validation", "Working Set Blob Size Validation Test", run_working_set_blob_size_validation },
   { "open_ignores_stale_working_set", "Open Ignores Stale Working Set Test", run_open_ignores_stale_working_set },
+  { "violation_delete_writes_once", "Violation Delete Writes Once Test", run_violation_delete_writes_once },
   { "diff_stat_requires_refs", "Diff Stat Requires Refs Test", run_diff_stat_requires_refs },
   { "diff_stat_wide_modified_rows", "Diff Stat Wide Modified Rows Test", run_diff_stat_wide_modified_rows },
   { "diff_table_deep_history_map", "Diff Table Deep History Map Test", run_diff_table_deep_history_map },

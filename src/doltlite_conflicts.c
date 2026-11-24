@@ -1145,59 +1145,10 @@ static int cfrBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
   return SQLITE_OK;
 }
 
-typedef struct CfDeleteBatch CfDeleteBatch;
-struct CfDeleteBatch {
-  char *zTableName;
-  i64 *aRowid;
-  int nRowid;
-  int nAlloc;
-};
-
-typedef struct CfDeletes CfDeletes;
-struct CfDeletes {
-  CfDeleteBatch *a;
-  int n;
-};
-
 /* Each delete rewrites the whole conflict catalog, so a statement's deletes
 ** are applied together when it halts, like dolt_workspace changes. */
-static int cfQueueDelete(Vdbe *pStmt, const char *zTableName, i64 iRowid){
-  CfDeletes *pDel = (CfDeletes*)pStmt->pConflictDeletes;
-  CfDeleteBatch *pBatch;
-  int i;
-  if( !pDel ){
-    pDel = sqlite3_malloc(sizeof(*pDel));
-    if( !pDel ) return SQLITE_NOMEM;
-    memset(pDel, 0, sizeof(*pDel));
-    pStmt->pConflictDeletes = pDel;
-  }
-  for(i=0; i<pDel->n; i++){
-    if( strcmp(pDel->a[i].zTableName, zTableName)==0 ) break;
-  }
-  if( i==pDel->n ){
-    CfDeleteBatch *a = sqlite3_realloc64(pDel->a,
-        (sqlite3_uint64)(pDel->n+1)*sizeof(*a));
-    if( !a ) return SQLITE_NOMEM;
-    pDel->a = a;
-    memset(&a[i], 0, sizeof(a[i]));
-    a[i].zTableName = sqlite3_mprintf("%s", zTableName);
-    if( !a[i].zTableName ) return SQLITE_NOMEM;
-    pDel->n++;
-  }
-  pBatch = &pDel->a[i];
-  if( pBatch->nRowid==pBatch->nAlloc ){
-    int nAlloc = pBatch->nAlloc ? pBatch->nAlloc*2 : 64;
-    i64 *a = sqlite3_realloc64(pBatch->aRowid, (sqlite3_uint64)nAlloc*sizeof(i64));
-    if( !a ) return SQLITE_NOMEM;
-    pBatch->aRowid = a;
-    pBatch->nAlloc = nAlloc;
-  }
-  pBatch->aRowid[pBatch->nRowid++] = iRowid;
-  return SQLITE_OK;
-}
-
 void doltliteConflictsFinishStatement(Vdbe *pStmt){
-  CfDeletes *pDel = (CfDeletes*)pStmt->pConflictDeletes;
+  DlRowDeletes *pDel = (DlRowDeletes*)pStmt->pConflictDeletes;
   sqlite3 *db = pStmt->db;
   int i, rc = SQLITE_OK;
   if( pStmt->rc==SQLITE_OK ){
@@ -1215,12 +1166,7 @@ void doltliteConflictsFinishStatement(Vdbe *pStmt){
       pStmt->errorAction = OE_Abort;
     }
   }
-  for(i=0; i<pDel->n; i++){
-    sqlite3_free(pDel->a[i].zTableName);
-    sqlite3_free(pDel->a[i].aRowid);
-  }
-  sqlite3_free(pDel->a);
-  sqlite3_free(pDel);
+  dlRowDeletesFree(pDel);
   pStmt->pConflictDeletes = 0;
 }
 
@@ -1240,7 +1186,8 @@ static int cfrUpdate(
     return SQLITE_ERROR;
   }
   if( !pStmt ) return SQLITE_MISUSE_BKPT;
-  return cfQueueDelete(pStmt, v->zTableName, sqlite3_value_int64(apArg[0]));
+  return dlRowDeletesQueue(&pStmt->pConflictDeletes, v->zTableName,
+                           sqlite3_value_int64(apArg[0]));
 }
 
 static sqlite3_module cfRowModule = {

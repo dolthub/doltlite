@@ -1311,13 +1311,20 @@ int dlFramedLoadNamed(
   const char *zTableName,
   char **pzName, int *pnRows, void **ppRows, int *pFound
 );
-int dlFramedDeleteRow(
-  const u8 *data, int nData,
-  const DlFramedCodec *pCodec,
-  const char *zTableName,
-  i64 deleteRowid,
-  u8 **ppOut, int *pnOut, int *pnOutTables, int *pDeleted
-);
+typedef struct DlRowDeleteBatch DlRowDeleteBatch;
+struct DlRowDeleteBatch {
+  char *zTableName;
+  i64 *aRowid;
+  int nRowid;
+  int nAlloc;
+};
+typedef struct DlRowDeletes DlRowDeletes;
+struct DlRowDeletes {
+  DlRowDeleteBatch *a;
+  int n;
+};
+int dlRowDeletesQueue(void **ppDeletes, const char *zTableName, i64 iRowid);
+void dlRowDeletesFree(DlRowDeletes *pDel);
 int dlFramedDeleteRows(
   const u8 *data, int nData,
   const DlFramedCodec *pCodec,
