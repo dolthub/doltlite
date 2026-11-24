@@ -31,6 +31,38 @@ static int resetFindTableIndex(struct TableEntry *aTables, int nTables,
   return -1;
 }
 
+static int resetSchemaIsVtab(const SchemaEntry *p){
+  return p && p->zType && strcmp(p->zType, "table")==0
+      && doltliteCheckoutSqlIsVtab(p->zSql);
+}
+
+static SchemaEntry *resetFindVtabSchema(
+  SchemaEntry *aSchema,
+  int nSchema,
+  const char *zName
+){
+  SchemaEntry *p = findSchemaEntry(aSchema, nSchema, zName);
+  return resetSchemaIsVtab(p) ? p : 0;
+}
+
+static int resetCatalogHasVtab(
+  sqlite3 *db,
+  ChunkStore *cs,
+  const ProllyHash *pHash,
+  const char *zName,
+  int *pFound
+){
+  SchemaEntry *aSchema = 0;
+  int nSchema = 0;
+  int rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), pHash,
+                                 &aSchema, &nSchema);
+  if( rc==SQLITE_OK ){
+    *pFound = resetFindVtabSchema(aSchema, nSchema, zName)!=0;
+    freeSchemaEntries(aSchema, nSchema);
+  }
+  return rc;
+}
+
 /* True when zName is a table in live schema, staged, or HEAD. A table
 ** beats a same-named ref: dolt_reset('x') must not rewind HEAD. */
 static int resetNameIsTablePath(
@@ -41,13 +73,16 @@ static int resetNameIsTablePath(
   int *pFound
 ){
   struct TableEntry *aCat = 0;
+  Table *pLive;
   ProllyHash hash;
   Pgno iLive = 0;
   int nCat = 0;
   int rc;
 
   *pFound = 0;
+  pLive = sqlite3FindTable(db, zName, "main");
   if( sqlite3_stricmp(zName, "dolt_database")==0
+   || (pLive && IsVirtual(pLive))
    || doltliteResolveTableName(db, zName, &iLive)==SQLITE_OK ){
     *pFound = 1;
     return SQLITE_OK;
@@ -63,6 +98,12 @@ static int resetNameIsTablePath(
       if( *pFound ) return SQLITE_OK;
       aCat = 0;
       nCat = 0;
+      rc = resetCatalogHasVtab(db, cs, &hash, zName, pFound);
+      if( rc!=SQLITE_OK ){
+        if( doltliteCmdSourceResultError(context, cs, &rc) ) return rc;
+      }else if( *pFound ){
+        return SQLITE_OK;
+      }
     }
   }
   rc = doltliteGetHeadCatalogHash(db, &hash);
@@ -77,6 +118,12 @@ static int resetNameIsTablePath(
     }else{
       *pFound = resetFindTableIndex(aCat, nCat, zName)>=0;
       doltliteFreeCatalog(aCat, nCat);
+      if( !*pFound ){
+        rc = resetCatalogHasVtab(db, cs, &hash, zName, pFound);
+        if( rc!=SQLITE_OK ){
+          if( doltliteCmdSourceResultError(context, cs, &rc) ) return rc;
+        }
+      }
     }
   }
   return SQLITE_OK;
@@ -130,67 +177,193 @@ static int resetPathUnchanged(
   return nH==nS;
 }
 
-static int resetAppendPath(const char ***paz, int *pn, const char *z){
-  const char **azNew = sqlite3_realloc64(*paz, sizeof(char*)*(*pn+1));
+static int resetAppendNameUnique(
+  char ***paz,
+  int *pn,
+  const char *zName,
+  int bCaseSensitive
+){
+  char **azNew;
+  char *zDup;
+  int i;
+  if( !zName ) return SQLITE_OK;
+  for(i=0; i<*pn; i++){
+    int match = bCaseSensitive ? strcmp((*paz)[i], zName)==0
+                               : sqlite3_stricmp((*paz)[i], zName)==0;
+    if( match ) return SQLITE_OK;
+  }
+  azNew = sqlite3_realloc64(*paz, (sqlite3_uint64)(*pn + 1) * sizeof(char*));
   if( !azNew ) return SQLITE_NOMEM;
-  azNew[(*pn)++] = z;
   *paz = azNew;
+  zDup = sqlite3_mprintf("%s", zName);
+  if( !zDup ) return SQLITE_NOMEM;
+  (*paz)[(*pn)++] = zDup;
   return SQLITE_OK;
 }
 
-/* A virtual table is staged as its shadow tables, so its name unstages all
-** of them and one shadow table named on its own is refused. An error
-** returned here is already set on context. */
-static int resetExpandVtabPaths(
-  sqlite3_context *context,
+static int resetCollectVtabShadows(
   sqlite3 *db,
-  const char ***pazPaths,
-  int *pnPaths,
-  char ***pazShadow,
-  int *pnShadow
+  Table *pLiveVtab,
+  int bUseLiveMatch,
+  const char *zVtab,
+  SchemaEntry *aSchema,
+  int nSchema,
+  struct TableEntry *aCatalog,
+  int nCatalog,
+  char ***pazShadows,
+  int *pnShadows
 ){
-  const char **azOut = 0;
-  int nOut = 0;
-  int rc = SQLITE_OK;
+  size_t nPrefix;
   int i;
-  for(i=0; i<*pnPaths; i++){
-    const char *zPath = (*pazPaths)[i];
-    Table *pTab;
-    int nBefore = nOut;
-    if( doltliteRefuseShadowTableArg(context, db, zPath) ){
-      sqlite3_free(azOut);
-      return SQLITE_ERROR;
+  if( !zVtab || !aSchema ) return SQLITE_OK;
+  nPrefix = strlen(zVtab);
+  for(i=0; i<nSchema; i++){
+    const char *zName = aSchema[i].zName;
+    int isShadow;
+    if( !aSchema[i].zType || strcmp(aSchema[i].zType, "table")!=0
+     || aSchema[i].iRootpage<=1 || !zName ){
+      continue;
     }
-    pTab = sqlite3FindTable(db, zPath, "main");
-    if( pTab && IsVirtual(pTab) ){
-      HashElem *k;
-      for(k=sqliteHashFirst(&db->aDb[0].pSchema->tblHash);
-          k && rc==SQLITE_OK; k=sqliteHashNext(k)){
-        Table *pShadow = (Table*)sqliteHashData(k);
-        char **azDup;
-        char *zDup;
-        if( !sqlite3IsShadowTableOf(db, pTab, pShadow->zName) ) continue;
-        azDup = sqlite3_realloc64(*pazShadow, sizeof(char*)*(*pnShadow+1));
-        if( !azDup ){ rc = SQLITE_NOMEM; break; }
-        *pazShadow = azDup;
-        zDup = sqlite3_mprintf("%s", pShadow->zName);
-        if( !zDup ){ rc = SQLITE_NOMEM; break; }
-        azDup[(*pnShadow)++] = zDup;
-        rc = resetAppendPath(&azOut, &nOut, zDup);
-      }
+    if( resetFindTableIndex(aCatalog, nCatalog, zName)<0 ) continue;
+    if( bUseLiveMatch && pLiveVtab ){
+      isShadow = sqlite3IsShadowTableOf(db, pLiveVtab, zName);
+    }else{
+      isShadow = sqlite3_strnicmp(zName, zVtab, (int)nPrefix)==0
+              && zName[nPrefix]=='_';
     }
-    if( rc==SQLITE_OK && nOut==nBefore ){
-      rc = resetAppendPath(&azOut, &nOut, zPath);
-    }
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(azOut);
-      sqlite3_result_error_nomem(context);
-      return rc;
+    if( isShadow ){
+      int rc = resetAppendNameUnique(pazShadows, pnShadows, zName, 0);
+      if( rc!=SQLITE_OK ) return rc;
     }
   }
-  sqlite3_free(*pazPaths);
-  *pazPaths = azOut;
-  *pnPaths = nOut;
+  return SQLITE_OK;
+}
+
+static int resetOneTableEntry(
+  sqlite3 *db,
+  struct TableEntry *aHead, int nHead,
+  SchemaEntry *aHeadSchema, int nHeadSchema,
+  struct TableEntry **paStaged, int *pnStaged,
+  SchemaEntry *aStagedSchema, int nStagedSchema,
+  Pgno *piNextFree,
+  char ***pazReset, int *pnReset,
+  const char *zTable,
+  int *pbChanged
+){
+  int iH = resetFindTableIndex(aHead, nHead, zTable);
+  int iS = resetFindTableIndex(*paStaged, *pnStaged, zTable);
+  const char *zHeadTable = iH>=0 ? aHead[iH].zName : 0;
+  const char *zStagedTable = iS>=0 ? (*paStaged)[iS].zName : 0;
+  char *zDup;
+  int rc;
+
+  if( iH<0 && iS<0 ) return SQLITE_NOTFOUND;
+  if( iH>=0 && iS>=0
+   && resetPathUnchanged(aHead, nHead, aHeadSchema, nHeadSchema, zHeadTable,
+                         *paStaged, *pnStaged, aStagedSchema, nStagedSchema,
+                         zStagedTable) ){
+    return SQLITE_OK;
+  }
+  if( iH<0 ){
+    /* Staged-only: new table, or new name of a staged rename. Dolt keeps
+    ** a staged rename fully staged when its new name is reset; a new table
+    ** leaves with its index entries. */
+    struct TableEntry *pMate = 0;
+    rc = doltliteCatalogRenameMate(db, aHead, nHead, aHead, nHead,
+                                   *paStaged, *pnStaged,
+                                   &(*paStaged)[iS], 0, &pMate);
+    if( rc!=SQLITE_OK ) return rc;
+    if( pMate ) return SQLITE_OK;
+    rc = resetAppendNameUnique(pazReset, pnReset, zStagedTable, 1);
+    if( rc!=SQLITE_OK ) return rc;
+    addRemoveIndexEntriesOfTable(*paStaged, pnStaged,
+                                 aStagedSchema, nStagedSchema, zStagedTable);
+    iS = resetFindTableIndex(*paStaged, *pnStaged, zStagedTable);
+    sqlite3_free((*paStaged)[iS].zName);
+    if( iS+1<*pnStaged ){
+      memmove(&(*paStaged)[iS], &(*paStaged)[iS+1],
+              (*pnStaged-iS-1)*(int)sizeof(struct TableEntry));
+    }
+    (*pnStaged)--;
+  }else if( iS<0 ){
+    /* HEAD-only: staged drop, or old name of a staged rename. Reset a
+    ** rename as one object: retire the staged new-name entry and indexes. */
+    struct TableEntry *pMate = 0;
+    struct TableEntry *aNew;
+    rc = resetAppendNameUnique(pazReset, pnReset, zHeadTable, 1);
+    if( rc!=SQLITE_OK ) return rc;
+    rc = doltliteCatalogRenameMate(db, aHead, nHead, aHead, nHead,
+                                   *paStaged, *pnStaged,
+                                   &aHead[iH], 1, &pMate);
+    if( rc!=SQLITE_OK ) return rc;
+    if( pMate ){
+      char *zMateName = sqlite3_mprintf("%s", pMate->zName);
+      int iM;
+      if( !zMateName ) return SQLITE_NOMEM;
+      rc = resetAppendNameUnique(pazReset, pnReset, zMateName, 1);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(zMateName);
+        return rc;
+      }
+      addRemoveIndexEntriesOfTable(*paStaged, pnStaged,
+                                   aStagedSchema, nStagedSchema, zMateName);
+      iM = resetFindTableIndex(*paStaged, *pnStaged, zMateName);
+      sqlite3_free(zMateName);
+      if( iM>=0 ){
+        sqlite3_free((*paStaged)[iM].zName);
+        if( iM+1<*pnStaged ){
+          memmove(&(*paStaged)[iM], &(*paStaged)[iM+1],
+                  (*pnStaged-iM-1)*(int)sizeof(struct TableEntry));
+        }
+        (*pnStaged)--;
+      }
+    }
+    /* Restoring a staged-dropped table: HEAD numbering/schema do not
+    ** match staged, so give it a fresh number and take the HEAD row. */
+    aNew = sqlite3_realloc(*paStaged,
+        (*pnStaged+1)*(int)sizeof(struct TableEntry));
+    if( !aNew ) return SQLITE_NOMEM;
+    *paStaged = aNew;
+    addRemoveIndexEntriesOfTable(*paStaged, pnStaged,
+                                 aStagedSchema, nStagedSchema, zHeadTable);
+    zDup = aHead[iH].zName ? sqlite3_mprintf("%s", aHead[iH].zName) : 0;
+    if( aHead[iH].zName && !zDup ) return SQLITE_NOMEM;
+    (*paStaged)[*pnStaged] = aHead[iH];
+    (*paStaged)[*pnStaged].zName = zDup;
+    (*paStaged)[*pnStaged].iTable = (*piNextFree)++;
+    (*pnStaged)++;
+    rc = addAppendIndexEntriesOfTable(0, paStaged, pnStaged,
+                                      aHead, nHead,
+                                      aHeadSchema, nHeadSchema,
+                                      zHeadTable);
+    if( rc!=SQLITE_OK ) return rc;
+  }else{
+    /* Take HEAD content under the STAGED number so it still pairs with
+    ** the staged schema row. Replace staged index entries with HEAD's. */
+    Pgno iKeep;
+    rc = resetAppendNameUnique(pazReset, pnReset, zHeadTable, 1);
+    if( rc==SQLITE_OK && strcmp(zHeadTable, zStagedTable)!=0 ){
+      rc = resetAppendNameUnique(pazReset, pnReset, zStagedTable, 1);
+    }
+    if( rc!=SQLITE_OK ) return rc;
+    addRemoveIndexEntriesOfTable(*paStaged, pnStaged,
+                                 aStagedSchema, nStagedSchema,
+                                 zStagedTable);
+    iS = resetFindTableIndex(*paStaged, *pnStaged, zStagedTable);
+    iKeep = (*paStaged)[iS].iTable;
+    zDup = aHead[iH].zName ? sqlite3_mprintf("%s", aHead[iH].zName) : 0;
+    if( aHead[iH].zName && !zDup ) return SQLITE_NOMEM;
+    sqlite3_free((*paStaged)[iS].zName);
+    (*paStaged)[iS] = aHead[iH];
+    (*paStaged)[iS].zName = zDup;
+    (*paStaged)[iS].iTable = iKeep;
+    rc = addAppendIndexEntriesOfTable(0, paStaged, pnStaged,
+                                      aHead, nHead,
+                                      aHeadSchema, nHeadSchema,
+                                      zHeadTable);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  *pbChanged = 1;
   return SQLITE_OK;
 }
 
@@ -208,7 +381,7 @@ static int resetStageNamedPaths(
   int nHead = 0, nStaged = 0, nHeadSchema = 0, nStagedSchema = 0;
   ProllyHash headCatHash, stagedHash;
   Pgno iNextFree = 2;
-  const char **azReset = 0;
+  char **azReset = 0;
   int nReset = 0;
   /* Views and triggers are master rows with no catalog entry; naming the one
   ** name dolt_status reports them under unstages that whole set. */
@@ -254,11 +427,8 @@ static int resetStageNamedPaths(
     const char *zPath = azPaths[p];
     int bSchemas = sqlite3_stricmp(zPath, "dolt_schemas")==0
                 && !sqlite3FindTable(db, zPath, "main");
-    int iH = bSchemas ? -1 : resetFindTableIndex(aHead, nHead, zPath);
-    int iS = bSchemas ? -1 : resetFindTableIndex(aStaged, nStaged, zPath);
-    const char *zHeadTable = iH>=0 ? aHead[iH].zName : 0;
-    const char *zStagedTable = iS>=0 ? aStaged[iS].zName : 0;
-    char *zDup;
+    SchemaEntry *pHeadVtab;
+    SchemaEntry *pStagedVtab;
     if( sqlite3_stricmp(zPath, "dolt_database")==0 ){
       u32 headVersion, headId, stagedVersion, stagedId;
       rc = doltliteCatalogReadMeta(db, &headCatHash, &headVersion, &headId);
@@ -279,121 +449,71 @@ static int resetStageNamedPaths(
       *pbChanged = 1;
       continue;
     }
-    if( iH<0 && iS<0 ){
-      rc = SQLITE_NOTFOUND;
-      goto done;
-    }
-    if( iH>=0 && iS>=0
-     && resetPathUnchanged(aHead, nHead, aHeadSchema, nHeadSchema, zHeadTable,
-                           aStaged, nStaged, aStagedSchema, nStagedSchema,
-                           zStagedTable) ){
+    pHeadVtab = resetFindVtabSchema(aHeadSchema, nHeadSchema, zPath);
+    pStagedVtab = resetFindVtabSchema(aStagedSchema, nStagedSchema, zPath);
+    if( pHeadVtab || pStagedVtab ){
+      Table *pLiveTab = sqlite3FindTable(db, zPath, "main");
+      Table *pLiveVtab = (pLiveTab && IsVirtual(pLiveTab)) ? pLiveTab : 0;
+      int vtabSqlDiffers = (pHeadVtab==0)!=(pStagedVtab==0)
+          || (pHeadVtab && pStagedVtab
+              && ((pHeadVtab->zSql==0)!=(pStagedVtab->zSql==0)
+               || (pHeadVtab->zSql
+                   && strcmp(pHeadVtab->zSql, pStagedVtab->zSql)!=0)
+               || strcmp(pHeadVtab->zName, pStagedVtab->zName)!=0));
+      int bUseLiveMatch = pLiveVtab!=0 && !vtabSqlDiffers;
+      char **azShadows = 0;
+      int nShadows = 0;
+      int s;
+      if( pHeadVtab ){
+        rc = resetCollectVtabShadows(db, pLiveVtab, bUseLiveMatch,
+                                     pHeadVtab->zName,
+                                     aHeadSchema, nHeadSchema, aHead, nHead,
+                                     &azShadows, &nShadows);
+      }
+      if( rc==SQLITE_OK && pStagedVtab ){
+        rc = resetCollectVtabShadows(db, pLiveVtab, bUseLiveMatch,
+                                     pStagedVtab->zName,
+                                     aStagedSchema, nStagedSchema,
+                                     aStaged, nStaged,
+                                     &azShadows, &nShadows);
+      }
+      for(s=0; rc==SQLITE_OK && s<nShadows; s++){
+        rc = resetOneTableEntry(db, aHead, nHead, aHeadSchema, nHeadSchema,
+                                &aStaged, &nStaged,
+                                aStagedSchema, nStagedSchema,
+                                &iNextFree, &azReset, &nReset,
+                                azShadows[s], pbChanged);
+      }
+      doltliteFreeNameList(azShadows, nShadows);
+      if( rc!=SQLITE_OK ) goto done;
+      if( resetFindTableIndex(aHead, nHead, zPath)>=0
+       || resetFindTableIndex(aStaged, nStaged, zPath)>=0 ){
+        rc = resetOneTableEntry(db, aHead, nHead, aHeadSchema, nHeadSchema,
+                                &aStaged, &nStaged,
+                                aStagedSchema, nStagedSchema,
+                                &iNextFree, &azReset, &nReset,
+                                zPath, pbChanged);
+        if( rc!=SQLITE_OK ) goto done;
+      }
+      if( vtabSqlDiffers ){
+        if( pHeadVtab ){
+          rc = resetAppendNameUnique(&azReset, &nReset, pHeadVtab->zName, 1);
+          if( rc!=SQLITE_OK ) goto done;
+        }
+        if( pStagedVtab ){
+          rc = resetAppendNameUnique(&azReset, &nReset, pStagedVtab->zName, 1);
+          if( rc!=SQLITE_OK ) goto done;
+        }
+        *pbChanged = 1;
+      }
       continue;
     }
-    if( iH>=0 ){
-      const char **azNew = sqlite3_realloc(azReset,
-          (nReset+1)*(int)sizeof(const char*));
-      if( !azNew ){ rc = SQLITE_NOMEM; goto done; }
-      azReset = azNew;
-      azReset[nReset++] = zHeadTable;
-    }
-    if( iH<0 ){
-      /* Staged-only: new table, or new name of a staged rename. Dolt keeps
-      ** a staged rename fully staged when its new name is reset; a new table
-      ** leaves with its index entries. */
-      struct TableEntry *pMate = 0;
-      rc = doltliteCatalogRenameMate(db, aHead, nHead, aHead, nHead,
-                                     aStaged, nStaged,
-                                     &aStaged[iS], 0, &pMate);
-      if( rc!=SQLITE_OK ) goto done;
-      if( pMate ) continue;
-      addRemoveIndexEntriesOfTable(aStaged, &nStaged,
-                                   aStagedSchema, nStagedSchema, zStagedTable);
-      iS = resetFindTableIndex(aStaged, nStaged, zStagedTable);
-      sqlite3_free(aStaged[iS].zName);
-      if( iS+1<nStaged ){
-        memmove(&aStaged[iS], &aStaged[iS+1],
-                (nStaged-iS-1)*(int)sizeof(struct TableEntry));
-      }
-      nStaged--;
-    }else if( iS<0 ){
-      /* HEAD-only: staged drop, or old name of a staged rename. Reset a
-      ** rename as one object: retire the staged new-name entry and indexes. */
-      struct TableEntry *pMate = 0;
-      struct TableEntry *aNew;
-      rc = doltliteCatalogRenameMate(db, aHead, nHead, aHead, nHead,
-                                     aStaged, nStaged,
-                                     &aHead[iH], 1, &pMate);
-      if( rc!=SQLITE_OK ) goto done;
-      if( pMate ){
-        char *zMateName = sqlite3_mprintf("%s", pMate->zName);
-        int iM;
-        if( !zMateName ){
-          rc = SQLITE_NOMEM;
-          goto done;
-        }
-        addRemoveIndexEntriesOfTable(aStaged, &nStaged,
-                                     aStagedSchema, nStagedSchema, zMateName);
-        iM = resetFindTableIndex(aStaged, nStaged, zMateName);
-        sqlite3_free(zMateName);
-        if( iM>=0 ){
-          sqlite3_free(aStaged[iM].zName);
-          if( iM+1<nStaged ){
-            memmove(&aStaged[iM], &aStaged[iM+1],
-                    (nStaged-iM-1)*(int)sizeof(struct TableEntry));
-          }
-          nStaged--;
-        }
-      }
-      /* Restoring a staged-dropped table: HEAD numbering/schema do not
-      ** match staged, so give it a fresh number and take the HEAD row. */
-      aNew = sqlite3_realloc(aStaged,
-          (nStaged+1)*(int)sizeof(struct TableEntry));
-      if( !aNew ){
-        rc = SQLITE_NOMEM;
-        goto done;
-      }
-      aStaged = aNew;
-      addRemoveIndexEntriesOfTable(aStaged, &nStaged,
-                                   aStagedSchema, nStagedSchema, zHeadTable);
-      zDup = aHead[iH].zName ? sqlite3_mprintf("%s", aHead[iH].zName) : 0;
-      if( aHead[iH].zName && !zDup ){
-        rc = SQLITE_NOMEM;
-        goto done;
-      }
-      aStaged[nStaged] = aHead[iH];
-      aStaged[nStaged].zName = zDup;
-      aStaged[nStaged].iTable = iNextFree++;
-      nStaged++;
-      rc = addAppendIndexEntriesOfTable(0, &aStaged, &nStaged,
-                                        aHead, nHead,
-                                        aHeadSchema, nHeadSchema,
-                                        zHeadTable);
-      if( rc!=SQLITE_OK ) goto done;
-    }else{
-      /* Take HEAD content under the STAGED number so it still pairs with
-      ** the staged schema row. Replace staged index entries with HEAD's. */
-      Pgno iKeep;
-      addRemoveIndexEntriesOfTable(aStaged, &nStaged,
-                                   aStagedSchema, nStagedSchema,
-                                   zStagedTable);
-      iS = resetFindTableIndex(aStaged, nStaged, zStagedTable);
-      iKeep = aStaged[iS].iTable;
-      zDup = aHead[iH].zName ? sqlite3_mprintf("%s", aHead[iH].zName) : 0;
-      if( aHead[iH].zName && !zDup ){
-        rc = SQLITE_NOMEM;
-        goto done;
-      }
-      sqlite3_free(aStaged[iS].zName);
-      aStaged[iS] = aHead[iH];
-      aStaged[iS].zName = zDup;
-      aStaged[iS].iTable = iKeep;
-      rc = addAppendIndexEntriesOfTable(0, &aStaged, &nStaged,
-                                        aHead, nHead,
-                                        aHeadSchema, nHeadSchema,
-                                        zHeadTable);
-      if( rc!=SQLITE_OK ) goto done;
-    }
-    *pbChanged = 1;
+    rc = resetOneTableEntry(db, aHead, nHead, aHeadSchema, nHeadSchema,
+                            &aStaged, &nStaged,
+                            aStagedSchema, nStagedSchema,
+                            &iNextFree, &azReset, &nReset,
+                            zPath, pbChanged);
+    if( rc!=SQLITE_OK ) goto done;
   }
 
   if( !*pbChanged ) goto done;
@@ -407,13 +527,16 @@ static int resetStageNamedPaths(
     struct TableEntry *pHeadMaster = doltliteFindTableByNumber(aHead, nHead, 1);
     struct TableEntry *pStagedMaster =
         doltliteFindTableByNumber(aStaged, nStaged, 1);
-    if( pHeadMaster && pStagedMaster ){
+    if( pStagedMaster ){
+      ProllyHash emptyMaster;
       ProllyHash composedRoot;
+      memset(&emptyMaster, 0, sizeof(emptyMaster));
       rc = doltliteBuildNamedStageMasterRoot(db,
-              &pHeadMaster->root, pHeadMaster->flags,
+              pHeadMaster ? &pHeadMaster->root : &emptyMaster,
+              pHeadMaster ? pHeadMaster->flags : pStagedMaster->flags,
               &pStagedMaster->root, pStagedMaster->flags,
-              azReset, nReset, aStaged, nStaged, resetSchemas, &composedRoot,
-              pzErr);
+              (const char**)azReset, nReset, aStaged, nStaged, resetSchemas,
+              &composedRoot, pzErr);
       if( rc!=SQLITE_OK ) goto done;
       pStagedMaster->root = composedRoot;
     }
@@ -436,7 +559,7 @@ static int resetStageNamedPaths(
   }
 
 done:
-  sqlite3_free((void*)azReset);
+  doltliteFreeNameList(azReset, nReset);
   doltliteFreeCatalog(aHead, nHead);
   doltliteFreeCatalog(aStaged, nStaged);
   if( aHeadSchema ){
@@ -950,8 +1073,6 @@ static void doltliteResetFunc(
   if( nPaths>0 ){
     int changed = 0;
     char *zStageErr = 0;
-    char **azShadow = 0;
-    int nShadow = 0;
     if( isHard || isSoft || zRef ){
       sqlite3_result_error(context,
         "table paths cannot be combined with --hard / --soft or a target ref", -1);
@@ -969,19 +1090,17 @@ static void doltliteResetFunc(
         goto reset_cleanup;
       }
     }
-    rc = resetExpandVtabPaths(context, db, &azPaths, &nPaths, &azShadow,
-                              &nShadow);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(azPaths);
-      azPaths = 0;
-      doltliteFreeNameList(azShadow, nShadow);
-      goto reset_cleanup;
+    for(i=0; i<nPaths; i++){
+      if( doltliteRefuseShadowTableArg(context, db, azPaths[i]) ){
+        sqlite3_free(azPaths);
+        azPaths = 0;
+        goto reset_cleanup;
+      }
     }
     reloadWorking = db->autoCommit;
     rc = resetStageNamedPaths(db, cs, azPaths, nPaths, &changed, &zStageErr);
     sqlite3_free(azPaths);
     azPaths = 0;
-    doltliteFreeNameList(azShadow, nShadow);
     if( rc==SQLITE_NOTFOUND ){
       sqlite3_result_error(context, "table not found", -1);
       goto reset_cleanup;
