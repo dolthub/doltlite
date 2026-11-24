@@ -165,6 +165,19 @@ struct DoltlitePkRange {
   int isEmpty;            /* NULL bound: scan matches nothing. */
 };
 
+static SQLITE_INLINE int doltlitePkRangeIsEmptyIntKey(
+  const DoltlitePkRange *pRange
+){
+  if( pRange->isEmpty ) return 1;
+  if( pRange->hasPkLo && pRange->pkLoStrict && pRange->pkLo==LARGEST_INT64 ){
+    return 1;
+  }
+  if( pRange->hasPkHi && pRange->pkHiStrict && pRange->pkHi==SMALLEST_INT64 ){
+    return 1;
+  }
+  return 0;
+}
+
 static SQLITE_INLINE int doltlitePkRangeMatchesUpper(
   const DoltlitePkRange *pRange,
   i64 k

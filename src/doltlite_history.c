@@ -155,6 +155,11 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
               && (c->idxNum & HIST_IDX_PK_ANY) != 0
               && doltliteSideColsMatchIntPk(&c->side, &v->cols);
 
+  if( c->pkSeekable && doltlitePkRangeIsEmptyIntKey(&c->pkRange) ){
+    prollyCursorClose(&c->common.tblCur);
+    return SQLITE_OK;
+  }
+
   if( c->pkSeekable && (c->idxNum & HIST_IDX_PK_EQ) && c->pkRange.hasPkLo ){
     rc = prollyCursorSeekInt(&c->common.tblCur, c->pkRange.pkLo, &res);
     if( rc!=SQLITE_OK ){

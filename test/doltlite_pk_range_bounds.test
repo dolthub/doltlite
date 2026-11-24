@@ -1,0 +1,188 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set testprefix doltlite_pk_range_bounds
+
+do_test 1.0 {
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO t VALUES
+      (-9223372036854775808, 'min'),
+      (1, 'one'),
+      (9223372036854775807, 'max');
+    SELECT dolt_commit('-Am', 'c1');
+    UPDATE t SET v='one_v2' WHERE id=1;
+    SELECT dolt_commit('-am', 'c2');
+  }
+  expr {[db one {SELECT count(*) FROM dolt_log}] >= 2}
+} {1}
+
+do_execsql_test 1.1 {
+  SELECT id, v FROM dolt_at_t('HEAD') WHERE id > 9223372036854775807 ORDER BY id;
+} {}
+
+do_execsql_test 1.2 {
+  SELECT id, v FROM dolt_at_t('HEAD') WHERE id >= 9223372036854775807 ORDER BY id;
+} {9223372036854775807 max}
+
+do_execsql_test 1.3 {
+  SELECT id, v FROM dolt_at_t('HEAD') WHERE id = 9223372036854775807 ORDER BY id;
+} {9223372036854775807 max}
+
+do_execsql_test 1.4 {
+  SELECT id, v FROM dolt_at_t('HEAD') WHERE id < 9223372036854775807 ORDER BY id;
+} {-9223372036854775808 min 1 one_v2}
+
+do_execsql_test 1.5 {
+  SELECT id, v FROM dolt_at_t('HEAD') WHERE id < -9223372036854775808 ORDER BY id;
+} {}
+
+do_execsql_test 1.6 {
+  SELECT id, v FROM dolt_at_t('HEAD') WHERE id <= -9223372036854775808 ORDER BY id;
+} {-9223372036854775808 min}
+
+do_execsql_test 1.7 {
+  SELECT id, v FROM dolt_at_t('HEAD') WHERE id = -9223372036854775808 ORDER BY id;
+} {-9223372036854775808 min}
+
+do_execsql_test 1.8 {
+  SELECT id, v FROM dolt_at_t('HEAD') WHERE id > -9223372036854775808 ORDER BY id;
+} {1 one_v2 9223372036854775807 max}
+
+do_execsql_test 1.9 {
+  SELECT id, v FROM dolt_at_t('HEAD')
+   WHERE id >= 9223372036854775807 AND id > 9223372036854775807;
+} {}
+
+do_execsql_test 1.10 {
+  SELECT id, v FROM dolt_at_t('HEAD')
+   WHERE id <= -9223372036854775808 AND id < -9223372036854775808;
+} {}
+
+do_execsql_test 2.1 {
+  SELECT id, v FROM dolt_history_t WHERE id > 9223372036854775807 ORDER BY id;
+} {}
+
+do_execsql_test 2.2 {
+  SELECT count(*), min(id), max(id) FROM dolt_history_t WHERE id >= 9223372036854775807;
+} {2 9223372036854775807 9223372036854775807}
+
+do_execsql_test 2.3 {
+  SELECT count(*), min(id), max(id) FROM dolt_history_t WHERE id = 9223372036854775807;
+} {2 9223372036854775807 9223372036854775807}
+
+do_execsql_test 2.4 {
+  SELECT count(*) FROM dolt_history_t WHERE id < 9223372036854775807;
+} {4}
+
+do_execsql_test 2.5 {
+  SELECT id, v FROM dolt_history_t WHERE id < -9223372036854775808 ORDER BY id;
+} {}
+
+do_execsql_test 2.6 {
+  SELECT count(*), min(id), max(id) FROM dolt_history_t WHERE id <= -9223372036854775808;
+} {2 -9223372036854775808 -9223372036854775808}
+
+do_execsql_test 2.7 {
+  SELECT count(*), min(id), max(id) FROM dolt_history_t WHERE id = -9223372036854775808;
+} {2 -9223372036854775808 -9223372036854775808}
+
+do_execsql_test 2.8 {
+  SELECT count(*) FROM dolt_history_t WHERE id > -9223372036854775808;
+} {4}
+
+do_execsql_test 3.1 {
+  SELECT id, message FROM dolt_blame_t WHERE id > 9223372036854775807 ORDER BY id;
+} {}
+
+do_execsql_test 3.2 {
+  SELECT id, message FROM dolt_blame_t WHERE id >= 9223372036854775807 ORDER BY id;
+} {9223372036854775807 c1}
+
+do_execsql_test 3.3 {
+  SELECT id, message FROM dolt_blame_t WHERE id = 9223372036854775807 ORDER BY id;
+} {9223372036854775807 c1}
+
+do_execsql_test 3.4 {
+  SELECT id, message FROM dolt_blame_t WHERE id < 9223372036854775807 ORDER BY id;
+} {-9223372036854775808 c1 1 c2}
+
+do_execsql_test 3.5 {
+  SELECT id, message FROM dolt_blame_t WHERE id < -9223372036854775808 ORDER BY id;
+} {}
+
+do_execsql_test 3.6 {
+  SELECT id, message FROM dolt_blame_t WHERE id <= -9223372036854775808 ORDER BY id;
+} {-9223372036854775808 c1}
+
+do_execsql_test 3.7 {
+  SELECT id, message FROM dolt_blame_t WHERE id = -9223372036854775808 ORDER BY id;
+} {-9223372036854775808 c1}
+
+do_execsql_test 3.8 {
+  SELECT id, message FROM dolt_blame_t WHERE id > -9223372036854775808 ORDER BY id;
+} {1 c2 9223372036854775807 c1}
+
+do_test 4.0 {
+  execsql {
+    CREATE TABLE s(id TEXT PRIMARY KEY, v TEXT);
+    INSERT INTO s VALUES('abc', 'text_row');
+    SELECT dolt_commit('-Am', 'text_pk');
+    DROP TABLE s;
+    CREATE TABLE s(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO s VALUES(1, 'int_row');
+    SELECT dolt_commit('-Am', 'int_pk');
+  }
+  expr {[db one {SELECT count(*) FROM dolt_log}] >= 4}
+} {1}
+
+do_execsql_test 4.1 {
+  SELECT id, v FROM dolt_at_s('HEAD~1') WHERE id > 9223372036854775807;
+} {abc text_row}
+
+do_execsql_test 4.2 {
+  SELECT id, v FROM dolt_history_s WHERE id > 9223372036854775807;
+} {abc text_row}
+
+testvfs range_reads
+range_reads filter xRead
+range_reads script range_read
+proc range_read {method filename args} {
+  incr ::range_reads
+  return SQLITE_OK
+}
+
+reset_db
+execsql {
+  CREATE TABLE big(id INTEGER PRIMARY KEY, v TEXT);
+  WITH RECURSIVE c(x) AS (
+    VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<10000
+  ) INSERT INTO big SELECT x, printf('%080d', x) FROM c;
+  SELECT dolt_commit('-Am', 'big');
+}
+
+foreach {name sql} {
+  at_gt_max     {SELECT count(*) FROM dolt_at_big('HEAD') WHERE id > 9223372036854775807}
+  at_lt_min     {SELECT count(*) FROM dolt_at_big('HEAD') WHERE id < -9223372036854775808}
+  hist_gt_max   {SELECT count(*) FROM dolt_history_big WHERE id > 9223372036854775807}
+  hist_lt_min   {SELECT count(*) FROM dolt_history_big WHERE id < -9223372036854775808}
+  blame_gt_max  {SELECT count(*) FROM dolt_blame_big WHERE id > 9223372036854775807}
+  blame_lt_min  {SELECT count(*) FROM dolt_blame_big WHERE id < -9223372036854775808}
+} {
+  db close
+  set ::range_reads 0
+  sqlite3 db test.db -vfs range_reads
+  do_test 5.$name {
+    set ::range_reads 0
+    set result [db eval $sql]
+    if {$::range_reads > 20} {
+      error "$name scanned table ($::range_reads file reads)"
+    }
+    set result
+  } {0}
+}
+
+db close
+range_reads delete
+sqlite3 db test.db
+finish_test
