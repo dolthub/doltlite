@@ -43,6 +43,10 @@ extern char **environ;
 #define SERVER_DEFAULT_TIMEOUT_MS 30000
 #define SERVER_HEADER_TIMEOUT_MS 2000
 #define SERVER_DB_CACHE_MAX 32
+/* A push asks about every child of each node it sends, and those hashes
+** land on index pages at random. The cache grows only as far as a store's
+** index needs, and every cached store holds one. */
+#define SERVER_INDEX_CACHE_BYTES ((i64)16*1024*1024)
 #define SERVER_HOOK_TIMEOUT_MS 10000
 #define SERVER_HOOK_MESSAGE_MAX 160
 #define MAX_HEADER_SIZE 4096
@@ -1309,6 +1313,8 @@ static int remoteDbHandleOpenStore(
   memset(&h->store, 0, sizeof(h->store));
   rc = chunkStoreOpen(&h->store, pVfs, zPath, flags);
   if( rc==SQLITE_OK ){
+    csIndexCacheSetBudget(&h->store,
+        csIndexCacheBudgetFor(&h->store, SERVER_INDEX_CACHE_BYTES));
     h->bOpen = 1;
     h->bWritable = bWritable ? 1 : 0;
   }
