@@ -1,6 +1,7 @@
 #include "prolly_btree_int.h"
 #include "chunk_store_int.h"
 #include "doltlite_remote.h"
+#include "doltlite_remotesrv.h"
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -1110,6 +1111,75 @@ static void testBulkUpdateReadsOnce(sqlite3 *db){
   execSql(db, "DROP TABLE bulk_update; PRAGMA cache_size=-65536");
 }
 
+static sqlite3_vfs countVfs;
+static sqlite3_vfs *pCountBase;
+static sqlite3_io_methods countMethods;
+
+static int countOpen(
+  sqlite3_vfs *pVfs, sqlite3_filename zName, sqlite3_file *pFile,
+  int flags, int *pOutFlags
+){
+  int rc = pCountBase->xOpen(pCountBase, zName, pFile, flags, pOutFlags);
+  (void)pVfs;
+  if( rc==SQLITE_OK && pFile->pMethods && (flags & SQLITE_OPEN_MAIN_DB) ){
+    pReadMethods = pFile->pMethods;
+    countMethods = *pReadMethods;
+    countMethods.xRead = countedRead;
+    pFile->pMethods = &countMethods;
+  }
+  return rc;
+}
+
+/* A push asks the server whether it has each chunk, and those hashes land
+** on index pages at random: the server must not re-read a page per lookup. */
+static void testServerCachesPagedIndex(const char *zPath){
+  DoltliteServer *pSrv;
+  DoltliteRemote *pRemote = 0;
+  const char *zName = strrchr(zPath, '/');
+  char zUrl[256];
+  ProllyHash aHash[256];
+  u8 aHas[256];
+  int nLookup = 0;
+  int i, j;
+
+  pCountBase = sqlite3_vfs_find(0);
+  countVfs = *pCountBase;
+  countVfs.zName = "prolly-count-reads";
+  countVfs.xOpen = countOpen;
+  check("register counting vfs", sqlite3_vfs_register(&countVfs, 1)==SQLITE_OK);
+  iReadContentEnd = LARGEST_INT64;
+  pSrv = doltliteServeAsync(DOLTLITE_TEST_TMPDIR, 0, "127.0.0.1");
+  check("start server", pSrv!=0 && zName!=0);
+  if( pSrv && zName ){
+    sqlite3_snprintf(sizeof(zUrl), zUrl, "http://127.0.0.1:%d%s",
+                     doltliteServerPort(pSrv), zName);
+    pRemote = doltliteHttpRemoteOpen(zUrl);
+    check("open http remote", pRemote!=0);
+  }
+  if( pRemote ){
+    int rc = SQLITE_OK;
+    for(j=0; j<256; j++){
+      sqlite3_randomness((int)sizeof(aHash[j]), &aHash[j]);
+    }
+    rc = pRemote->xHasChunks(pRemote, aHash, 256, aHas);
+    nRead = 0;
+    for(i=0; i<16 && rc==SQLITE_OK; i++){
+      for(j=0; j<256; j++){
+        sqlite3_randomness((int)sizeof(aHash[j]), &aHash[j]);
+      }
+      rc = pRemote->xHasChunks(pRemote, aHash, 256, aHas);
+      nLookup += 256;
+    }
+    check("server answers has-chunk lookups", rc==SQLITE_OK);
+    printf("  server reads for %d index lookups: %d\n", nLookup, nRead);
+    check("server caches its paged index", nRead<nLookup/4);
+    pRemote->xClose(pRemote);
+  }
+  if( pSrv ) doltliteServerStop(pSrv);
+  sqlite3_vfs_unregister(&countVfs);
+  sqlite3_vfs_register(pCountBase, 1);
+}
+
 static void testIndexCacheSizedByIndex(void){
   char zPath[160];
   sqlite3 *db = 0;
@@ -1164,6 +1234,7 @@ static void testIndexCacheSizedByIndex(void){
       pRemote->base.xClose(&pRemote->base);
     }
   }
+  testServerCachesPagedIndex(zPath);
   unlink(zPath);
 }
 
