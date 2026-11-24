@@ -2024,6 +2024,7 @@ static int gFailAccessOnce = 0;
 static int gFailHasMovedOnce = 0;
 static int gFailFileSizeOnce = 0;
 static int gFailOpenMainOnce = 0;
+static int gMainOpens = 0;
 static int gFailHits = 0;
 static int gFailPresenceHits = 0;
 static int gFailExclusiveBusy;
@@ -2276,6 +2277,9 @@ static int failOpen(sqlite3_vfs *pVfs, const char *zName, sqlite3_file *pFile,
   }
   rc = gBaseVfs->xOpen(gBaseVfs, zName, pReal, flags, pOutFlags);
   if( rc!=SQLITE_OK ) return rc;
+  if( (flags & SQLITE_OPEN_MAIN_DB)!=0 && !isGcTmp && !isDoltLiteLock ){
+    gMainOpens++;
+  }
 
   p->pReal = pReal;
   p->isMainDb = (flags & SQLITE_OPEN_MAIN_DB)!=0;
@@ -4205,6 +4209,61 @@ static void run_remote_refs_corruption(void){
   removeDbFiles(remotePath);
   removeDbFiles(localPath);
   removeDbFiles(clonePath);
+}
+
+static void run_fetch_opens_remote_once(void){
+  char remotePath[512];
+  char localPath[512];
+  char sql[1024];
+  sqlite3 *remoteDb = 0;
+  sqlite3 *localDb = 0;
+  int nOpenOne;
+
+  printf("=== Fetch Opens Remote Once Test ===\n\n");
+  make_dbpath(remotePath, sizeof(remotePath), "test_fetch_opens_remote");
+  make_dbpath(localPath, sizeof(localPath), "test_fetch_opens_local");
+  removeDbFiles(remotePath);
+  removeDbFiles(localPath);
+
+  check("open_remote_db", open_db(remotePath, &remoteDb)==SQLITE_OK);
+  check("setup_remote_branches", execSql(remoteDb,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+  sqlite3_close(remoteDb);
+  remoteDb = 0;
+
+  check("register_fail_vfs_for_fetch", registerFailVfs()==SQLITE_OK);
+  check("open_local_fail_db", open_fail_db(localPath, &localDb)==SQLITE_OK);
+  snprintf(sql, sizeof(sql),
+    "CREATE TABLE seed(x INTEGER);"
+    "SELECT dolt_commit('-A', '-m', 'seed');"
+    "SELECT dolt_remote('add','origin','file://%s');", remotePath);
+  check("setup_local_remote", execSql(localDb, sql)==SQLITE_OK);
+
+  gMainOpens = 0;
+  check("fetch_one_branch",
+        execSql(localDb, "SELECT dolt_fetch('origin')")==SQLITE_OK);
+  nOpenOne = gMainOpens;
+  check("fetch_one_branch_opens_remote", nOpenOne>0);
+
+  check("reopen_remote_db", open_db(remotePath, &remoteDb)==SQLITE_OK);
+  check("add_remote_branches", execSql(remoteDb,
+    "SELECT dolt_branch('b1');"
+    "SELECT dolt_branch('b2');"
+    "SELECT dolt_branch('b3');")==SQLITE_OK);
+  sqlite3_close(remoteDb);
+
+  gMainOpens = 0;
+  check("fetch_all_branches",
+        execSql(localDb, "SELECT dolt_fetch('origin')")==SQLITE_OK);
+  check("fetch_opens_do_not_grow_with_branches", gMainOpens==nOpenOne);
+  check("fetch_tracks_every_branch", strcmp(queryScalarText(localDb,
+        "SELECT count(*) FROM dolt_remote_branches"), "4")==0);
+
+  sqlite3_close(localDb);
+  removeDbFiles(remotePath);
+  removeDbFiles(localPath);
 }
 
 /* Fetch commits chunks before any ref roots them; install must verify the graph or GC orphans it. */
@@ -20928,6 +20987,7 @@ static const RegressionCase aCases[] = {
   { "refs_merge_keeps_peer_sequence_drop", "Refs Merge Keeps Peer Sequence Drop Test", run_refs_merge_keeps_peer_sequence_drop },
   { "refs_commit_conflicting_peer_ref_fails", "Refs Commit Conflicting Peer Ref Fails Test", run_refs_commit_conflicting_peer_ref_fails },
   { "remote_refs_corruption", "Remote Refs Corruption Test", run_remote_refs_corruption },
+  { "fetch_opens_remote_once", "Fetch Opens Remote Once Test", run_fetch_opens_remote_once },
   { "fetch_ref_install_survives_window_gc", "Fetch Ref Install Survives Window GC Test", run_fetch_ref_install_survives_window_gc },
   { "push_validation_reads_new_chunks", "Push Validation Reads New Chunks Test", run_push_validation_reads_new_chunks },
   { "fetch_validation_reads_new_chunks", "Fetch Validation Reads New Chunks Test", run_fetch_validation_reads_new_chunks },

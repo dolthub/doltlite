@@ -1174,12 +1174,14 @@ static int mutatePruneTracking(sqlite3 *db, ChunkStore *cs, void *pArg){
   }
 }
 
-/* One fetch of zBranch into zRemoteName/zTrack over a fresh connection to
-** zUrl. On failure *pzErr is a message the caller frees, or NULL when the
-** caller should use its own generic text. Does not set the SQL result. */
+/* One fetch of zBranch into zRemoteName/zTrack over pOpen, or over a fresh
+** connection to zUrl when pOpen is NULL. On failure *pzErr is a message the
+** caller frees, or NULL when the caller should use its own generic text.
+** Does not set the SQL result. */
 static int remoteSqlFetchBranch(
   sqlite3 *db,
   ChunkStore *cs,
+  DoltliteRemote *pOpen,
   const char *zUrl,
   const char *zRemoteName,
   const char *zBranch,
@@ -1187,8 +1189,8 @@ static int remoteSqlFetchBranch(
   int *pbMissingBranch,
   char **pzErr
 ){
-  DoltliteRemote *pRemote =
-      openRemoteByUrl(db, chunkFileGetVfs(&cs->file), zUrl, 0);
+  DoltliteRemote *pRemote = pOpen ? pOpen
+      : openRemoteByUrl(db, chunkFileGetVfs(&cs->file), zUrl, 0);
   int rc;
   int missingBranch = 0;
   if( pbMissingBranch ) *pbMissingBranch = 0;
@@ -1210,7 +1212,7 @@ static int remoteSqlFetchBranch(
       *pzErr = sqlite3_mprintf("fetch failed");
     }
   }
-  pRemote->xClose(pRemote);
+  if( !pOpen ) pRemote->xClose(pRemote);
   return rc;
 }
 
@@ -1220,6 +1222,7 @@ static int remoteSqlFetchOne(
   sqlite3_context *ctx,
   sqlite3 *db,
   ChunkStore *cs,
+  DoltliteRemote *pOpen,
   const char *zUrl,
   const char *zRemoteName,
   const char *zBranch,
@@ -1227,8 +1230,8 @@ static int remoteSqlFetchOne(
   int *pbMissingBranch
 ){
   char *zErr = 0;
-  int rc = remoteSqlFetchBranch(db, cs, zUrl, zRemoteName, zBranch, zTrack,
-                                pbMissingBranch, &zErr);
+  int rc = remoteSqlFetchBranch(db, cs, pOpen, zUrl, zRemoteName, zBranch,
+                                zTrack, pbMissingBranch, &zErr);
   if( rc!=SQLITE_OK && !(pbMissingBranch && *pbMissingBranch) ){
     (void)doltliteVcSealSavepointError(db);
     remoteSqlResultError(ctx, rc, zErr ? zErr
@@ -1482,7 +1485,6 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     sqlite3_free(zOwned);
     return;
   }
-  pRemote->xClose(pRemote);
 
   /* zUrl points into cs->refs.aRemotes, which a fetch may reallocate. */
   zUrlOwned = sqlite3_mprintf("%s", zUrl);
@@ -1553,7 +1555,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
           break;
         }
         zBranch = remoteSqlStripPrefix(zSrc, REMOTE_HEADS_PREFIX);
-        rc = remoteSqlFetchOne(ctx, db, cs, zUrlOwned, zRemoteName,
+        rc = remoteSqlFetchOne(ctx, db, cs, pRemote, zUrlOwned, zRemoteName,
                                zBranch, zBranch, 0);
         sqlite3_free(zSrc);
         continue;
@@ -1578,13 +1580,13 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
             sqlite3_result_error_nomem(ctx);
             break;
           }
-          rc = remoteSqlFetchOne(ctx, db, cs, zUrlOwned, zTrackRemote,
+          rc = remoteSqlFetchOne(ctx, db, cs, pRemote, zUrlOwned, zTrackRemote,
                                  azNames[k], zTrack, &missing);
           if( missing ) rc = SQLITE_OK;
           sqlite3_free(zTrack);
         }
       }else{
-        rc = remoteSqlFetchOne(ctx, db, cs, zUrlOwned, zTrackRemote,
+        rc = remoteSqlFetchOne(ctx, db, cs, pRemote, zUrlOwned, zTrackRemote,
                                zSrcPat, zDstPat, 0);
       }
       sqlite3_free(zTrackRemote);
@@ -1594,7 +1596,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }else{
     for(i=0; i<nNames && rc==SQLITE_OK; i++){
       int missing = 0;
-      rc = remoteSqlFetchOne(ctx, db, cs, zUrlOwned, zRemoteName,
+      rc = remoteSqlFetchOne(ctx, db, cs, pRemote, zUrlOwned, zRemoteName,
                              azNames[i], azNames[i], &missing);
       if( missing ){
         sqlite3_free(azNames[i]);
@@ -1615,6 +1617,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   if( rc==SQLITE_OK ) sqlite3_result_int(ctx, 0);
 
 fetch_done:
+  pRemote->xClose(pRemote);
   /* installFetchedRefs reloaded disk under the lock. A peer commit on
   ** this branch is in that reload, and the change signal is gone. */
   doltliteNoteSessionMissedDiskTip(db);
@@ -1909,7 +1912,7 @@ static void doltPullParsed(
       char *zFetchErr = 0;
       int missing = 0;
       if( !azKeep[i] ) continue;
-      rc = remoteSqlFetchBranch(db, cs, zUrlOwned, zRemoteName,
+      rc = remoteSqlFetchBranch(db, cs, 0, zUrlOwned, zRemoteName,
                                 azKeep[i], azKeep[i], &missing, &zFetchErr);
       if( missing && strcmp(azKeep[i], zRemoteBranch)!=0 ){
         sqlite3_free(zFetchErr);
