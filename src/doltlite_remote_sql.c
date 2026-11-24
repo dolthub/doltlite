@@ -41,7 +41,7 @@ static const char *remoteSqlNormalizeName(
 }
 
 static int remoteSqlNameIsValid(const char *zName){
-  return strpbrk(zName,
+  return zName && zName[0]!=0 && strpbrk(zName,
     " \t\n\r./\\!@#$%^&*(){}[],.<>'\"?=+|")==0;
 }
 
@@ -2193,7 +2193,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       doltliteCmdArgsClear(&args);
       return;
     }
-    if( !zRemoteName[0] || !remoteSqlNameIsValid(zRemoteName) ){
+    if( !remoteSqlNameIsValid(zRemoteName) ){
       sqlite3_free(zRemoteOwned);
       doltliteCmdArgsClear(&args);
       doltliteVcResultError(ctx, db, "remote name invalid");
