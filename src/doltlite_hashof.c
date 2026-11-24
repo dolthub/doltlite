@@ -36,7 +36,7 @@ static int hashofResolveRef(
   int nRef, i, rc;
 
   if( !cs ) return SQLITE_ERROR;
-  if( nBase==4 && sqlite3_strnicmp(zRef, "HEAD", 4)==0 ){
+  if( nBase==4 && (strncmp(zRef, "HEAD", 4)==0 || strncmp(zRef, "head", 4)==0) ){
     zName = "HEAD";
   }else{
     rc = chunkStoreEnsureRefsFresh(cs);

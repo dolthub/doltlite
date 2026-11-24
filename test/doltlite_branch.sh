@@ -447,13 +447,13 @@ run_test "checkout_B_other_in_savepoint_other_clean" "SELECT count(*) FROM t;" "
 
 DB28=/tmp/test_branch_head_case_$$.db
 rm -f "$DB28"
-echo "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-Am','init');" | $DOLTLITE "$DB28" > /dev/null 2>&1
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-Am','c1'); INSERT INTO t VALUES(2); SELECT dolt_commit('-am','c2');" | $DOLTLITE "$DB28" > /dev/null 2>&1
 run_test_error_match "branch_HEAD_rejected" "SELECT dolt_branch('HEAD');" "invalid branch name" "$DB28"
 run_test_error_match "branch_head_rejected" "SELECT dolt_branch('head');" "invalid branch name" "$DB28"
-run_test_error_match "branch_Head_rejected" "SELECT dolt_branch('Head');" "invalid branch name" "$DB28"
-run_test_error_match "branch_HeAd_rejected" "SELECT dolt_branch('HeAd');" "invalid branch name" "$DB28"
-run_test_error_match "checkout_b_Head_rejected" "SELECT dolt_checkout('-b','Head');" "invalid branch name" "$DB28"
-run_test_error_match "branch_copy_Head_rejected" "SELECT dolt_branch('-c','main','Head');" "invalid branch name" "$DB28"
+run_test "mixed_head_fallback_when_no_branch" "SELECT dolt_hashof('HeAd') = dolt_hashof('HEAD');" "1" "$DB28"
+run_test "branch_Head_allowed_and_not_shadowed" "SELECT dolt_branch('Head', 'HEAD~1'); SELECT dolt_branch('from_head', 'Head'); SELECT dolt_hashof('Head') = dolt_hashof('HEAD~1'), dolt_hashof('from_head') = dolt_hashof('HEAD~1'), dolt_hashof('Head') = dolt_hashof('HEAD');" "0
+0
+1|1|0" "$DB28"
 run_test "branch_header_allowed" "SELECT dolt_branch('header');" "0" "$DB28"
 run_test "branch_my_head_allowed" "SELECT dolt_branch('my_head');" "0" "$DB28"
 
