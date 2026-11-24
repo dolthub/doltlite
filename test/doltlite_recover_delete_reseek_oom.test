@@ -1,0 +1,67 @@
+# An OOM or I/O error during BTREE_SAVEPOSITION re-seek after an immediate
+# flush in prollyBtCursorDelete must propagate rather than turning into
+# SQLITE_OK + CURSOR_INVALID (EOF), which leaves subsequent matching rows
+# undeleted while reporting success.
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+
+set testprefix doltlite_recover_delete_reseek_oom
+
+set had_drain_env [info exists ::env(DOLTLITE_MUTMAP_DRAIN_BYTES)]
+if {$had_drain_env} {
+  set saved_drain_env $::env(DOLTLITE_MUTMAP_DRAIN_BYTES)
+}
+set ::env(DOLTLITE_MUTMAP_DRAIN_BYTES) 1
+
+do_execsql_test 1.0 {
+  CREATE TABLE wr(k TEXT PRIMARY KEY, v TEXT) WITHOUT ROWID;
+  INSERT INTO wr VALUES('k1', 'drop');
+  INSERT INTO wr VALUES('k2', 'keep');
+  INSERT INTO wr VALUES('k3', 'drop');
+  INSERT INTO wr VALUES('k4', 'drop');
+  INSERT INTO wr VALUES('k5', 'keep');
+
+  CREATE TABLE ri(id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO ri VALUES(1, 'drop');
+  INSERT INTO ri VALUES(2, 'keep');
+  INSERT INTO ri VALUES(3, 'drop');
+  INSERT INTO ri VALUES(4, 'drop');
+  INSERT INTO ri VALUES(5, 'keep');
+}
+faultsim_save_and_close
+
+# WITHOUT ROWID one-pass DELETE: immediate flush + blob re-seek under OOM.
+# If DELETE succeeds, zero 'drop' rows may remain.
+do_faultsim_test 1.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db eval { DELETE FROM wr WHERE v = 'drop' }
+  db eval { SELECT k FROM wr ORDER BY k }
+} -test {
+  faultsim_test_result {0 {k2 k5}} \
+      {1 {out of memory}} {1 {disk I/O error}}
+  faultsim_integrity_check
+}
+
+# Rowid one-pass DELETE: immediate flush + integer re-seek under OOM.
+# If DELETE succeeds, zero 'drop' rows may remain.
+do_faultsim_test 1.2 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db eval { DELETE FROM ri WHERE v = 'drop' }
+  db eval { SELECT id FROM ri ORDER BY id }
+} -test {
+  faultsim_test_result {0 {2 5}} \
+      {1 {out of memory}} {1 {disk I/O error}}
+  faultsim_integrity_check
+}
+
+if {$had_drain_env} {
+  set ::env(DOLTLITE_MUTMAP_DRAIN_BYTES) $saved_drain_env
+} else {
+  unset -nocomplain ::env(DOLTLITE_MUTMAP_DRAIN_BYTES)
+}
+
+finish_test
