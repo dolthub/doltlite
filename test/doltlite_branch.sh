@@ -369,18 +369,6 @@ SELECT dolt_commit('-Am','init');
 SELECT dolt_tag('v1');
 SELECT dolt_tag('tagonly');
 SQL
-run_test "checkout_dashdash_current_branch_table" "
-UPDATE main SET v='dirty' WHERE id=1;
-SELECT dolt_checkout('--','main');
-SELECT v FROM main WHERE id=1;
-" "0
-orig_main" "$DB23"
-run_test "checkout_dashdash_tag_named_table" "
-UPDATE v1 SET v='dirty' WHERE id=1;
-SELECT dolt_checkout('--','v1');
-SELECT v FROM v1 WHERE id=1;
-" "0
-orig_v1" "$DB23"
 run_test "checkout_dashdash_head_named_table" "
 UPDATE HEAD SET v='dirty' WHERE id=1;
 SELECT dolt_checkout('--','HEAD');
@@ -393,6 +381,8 @@ SELECT dolt_checkout('main','--','main');
 SELECT v FROM main WHERE id=1;
 " "0
 orig_main" "$DB23"
+run_test_error_match "checkout_dashdash_tag_named_table_matches_dolt" \
+  "SELECT dolt_checkout('--','v1');" "detached head" "$DB23"
 run_test_error_match "checkout_tag_only_still_errors" \
   "SELECT dolt_checkout('tagonly');" "detached head" "$DB23"
 
