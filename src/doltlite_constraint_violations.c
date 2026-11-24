@@ -4,6 +4,7 @@
 #include "doltlite_vtab_util.h"
 #include "doltlite_internal.h"
 #include "doltlite_constraint_violations.h"
+#include "vdbeInt.h"
 
 #include <string.h>
 
@@ -290,11 +291,12 @@ static int storeViolationBytes(
   return doltlitePersistOrSaveWorkingSet(db);
 }
 
-static int deleteViolationRowFromCatalog(
+static int deleteViolationRowsFromCatalog(
   sqlite3 *db,
   ChunkStore *cs,
   const char *zTableName,
-  i64 deleteRowid
+  const i64 *aRowid,
+  int nRowid
 ){
   ProllyHash hash;
   u8 *data = 0;
@@ -308,8 +310,8 @@ static int deleteViolationRowFromCatalog(
 
   rc = chunkStoreGet(cs, &hash, &data, &nData);
   if( rc!=SQLITE_OK ) return rc;
-  rc = dlFramedDeleteRow(data, nData, violationCodec(), zTableName, deleteRowid,
-                         &out, &nOut, &nOutTables, &deleted);
+  rc = dlFramedDeleteRows(data, nData, violationCodec(), zTableName,
+                          aRowid, nRowid, &out, &nOut, &nOutTables, &deleted);
   sqlite3_free(data);
   if( rc==SQLITE_OK && deleted ){
     rc = storeViolationBytes(db, cs, out, nOut, nOutTables);
@@ -774,6 +776,31 @@ static int cvrBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
   return SQLITE_OK;
 }
 
+/* Each delete rewrites the whole violations catalog, so a statement's
+** deletes are applied together when it halts. */
+void doltliteConstraintViolationsFinishStatement(Vdbe *pStmt){
+  DlRowDeletes *pDel = (DlRowDeletes*)pStmt->pViolationDeletes;
+  sqlite3 *db = pStmt->db;
+  int i, rc = SQLITE_OK;
+  if( pStmt->rc==SQLITE_OK ){
+    ChunkStore *cs = doltliteGetChunkStore(db);
+    ProllyHash before;
+    doltliteGetSessionConstraintViolationsCatalog(db, &before);
+    for(i=0; i<pDel->n && rc==SQLITE_OK; i++){
+      rc = deleteViolationRowsFromCatalog(db, cs, pDel->a[i].zTableName,
+                                          pDel->a[i].aRowid, pDel->a[i].nRowid);
+    }
+    if( rc!=SQLITE_OK ){
+      doltliteSetSessionConstraintViolationsCatalog(db, &before);
+      sqlite3VdbeError(pStmt, "%s", sqlite3ErrStr(rc));
+      pStmt->rc = rc;
+      pStmt->errorAction = OE_Abort;
+    }
+  }
+  dlRowDeletesFree(pDel);
+  pStmt->pViolationDeletes = 0;
+}
+
 static int cvrUpdate(
   sqlite3_vtab *pVtab,
   int nArg,
@@ -781,8 +808,7 @@ static int cvrUpdate(
   sqlite3_int64 *pRowid
 ){
   CvRowVtab *v = (CvRowVtab*)pVtab;
-  ChunkStore *cs = doltliteGetChunkStore(v->db);
-  i64 deleteRowid;
+  Vdbe *pStmt = v->db->pWorkspaceStatement;
   (void)pRowid;
 
   if( nArg != 1 ){
@@ -790,8 +816,9 @@ static int cvrUpdate(
         "only DELETE is supported on dolt_constraint_violations_<table>");
     return SQLITE_ERROR;
   }
-  deleteRowid = sqlite3_value_int64(apArg[0]);
-  return deleteViolationRowFromCatalog(v->db, cs, v->zTableName, deleteRowid);
+  if( !pStmt ) return SQLITE_MISUSE_BKPT;
+  return dlRowDeletesQueue(&pStmt->pViolationDeletes, v->zTableName,
+                           sqlite3_value_int64(apArg[0]));
 }
 
 static sqlite3_module cvRowModule = {
