@@ -6641,6 +6641,57 @@ static void run_clone_post_commit_io_failure(void){
   removeDbFiles(remotePath);
 }
 
+/* Taking theirs writes each tree once for the whole table, not once per
+** conflicting row. */
+static void run_resolve_theirs_writes_once(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  long long before, after;
+
+  printf("=== Resolve Theirs Writes Once Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_resolve_theirs_writes");
+  removeDbFiles(dbpath);
+  check("rtw_open", open_db(dbpath, &db)==SQLITE_OK);
+  check("rtw_seed", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, k INTEGER);"
+    "CREATE INDEX ik ON t(k);"
+    "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<8000)"
+    " INSERT INTO t SELECT x, 'base_'||x, x FROM c;"
+    "SELECT dolt_commit('-Am','base');"
+    "SELECT dolt_branch('feat');"
+    "UPDATE t SET v='main_'||id, k=id+100000 WHERE id%4=0;"
+    "SELECT dolt_commit('-am','main');"
+    "SELECT dolt_checkout('feat');"
+    "UPDATE t SET v='feat_'||id, k=id+200000 WHERE id%4=0;"
+    "DELETE FROM t WHERE id=8;"
+    "SELECT dolt_commit('-am','feat');"
+    "SELECT dolt_checkout('main');"
+    "BEGIN;")==SQLITE_OK);
+  execSqlSilent(db, "SELECT dolt_merge('feat')");
+  check("rtw_conflicts", strcmp(queryScalarText(db,
+      "SELECT count(*) FROM dolt_conflicts_t"), "2000")==0);
+  before = atoll(queryScalarText(db,
+      "SELECT value FROM dolt_engine_stats WHERE name='chunk_write'"));
+  check("rtw_resolve", execSql(db,
+      "SELECT dolt_conflicts_resolve('--theirs','t')")==SQLITE_OK);
+  after = atoll(queryScalarText(db,
+      "SELECT value FROM dolt_engine_stats WHERE name='chunk_write'"));
+  printf("  chunk writes for 2000 conflicts: %lld\n", after-before);
+  check("rtw_writes_scale_with_tree", after-before < 2000);
+  check("rtw_commit", execSql(db,
+      "SELECT dolt_commit('-am','resolved'); COMMIT;")==SQLITE_OK);
+  check("rtw_rows", strcmp(queryScalarText(db,
+      "SELECT count(*)||','||sum(v LIKE 'feat_%')||','||sum(v LIKE 'main_%')"
+      " FROM t"), "7999,1999,0")==0);
+  check("rtw_index", strcmp(queryScalarText(db,
+      "SELECT count(*)||','||sum(k>200000)||','||sum(k BETWEEN 100001 AND 200000)"
+      " FROM t INDEXED BY ik WHERE k>0"), "7999,1999,0")==0);
+  check("rtw_integrity", strcmp(queryScalarText(db,
+      "PRAGMA integrity_check"), "ok")==0);
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_resolve_ref_non_commit(void){
   sqlite3 *db = 0;
   ChunkStore *cs = 0;
@@ -21314,6 +21365,7 @@ static const RegressionCase aCases[] = {
   { "clone_post_commit_io_failure", "Clone Post-Commit IO Failure Test",
     run_clone_post_commit_io_failure },
   { "resolve_ref_non_commit", "Resolve Ref Non-Commit Test", run_resolve_ref_non_commit },
+  { "resolve_theirs_writes_once", "Resolve Theirs Writes Once Test", run_resolve_theirs_writes_once },
   { "commit_parent_limit", "Commit Parent Limit Test", run_commit_parent_limit },
   { "commit_am_many_tables", "Commit -am Many Tables Test", run_commit_am_many_tables },
   { "blame_all_parents_merge_base", "Blame All-Parents Merge Base Test", run_blame_all_parents_merge_base },
