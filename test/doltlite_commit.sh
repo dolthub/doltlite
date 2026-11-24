@@ -988,6 +988,23 @@ run_test "commit_short_group_attached_value_logged" \
   "SELECT message FROM dolt_log LIMIT 1;" \
   "attached msg" "$DB3"
 
-rm -f "$DB" "$DB_DUP" "$DB2" "$DB3" "$DB_BOTH" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB26" "$DB27" "$DB28" "$DB29" "$DB30" "$DB31" "$DB32"
+DB33=/tmp/test_dolt_commit_vtab_references_col_$$.db; rm -f "$DB33"
+run_test_match "commit_vtab_references_col_trailing" \
+  "CREATE VIRTUAL TABLE papers USING fts5(title, references); SELECT dolt_commit('-A', '-m', 'add papers');" \
+  "^[0-9a-f]{40}$" "$DB33"
+
+run_test_match "commit_vtab_references_col_leading" \
+  "CREATE VIRTUAL TABLE papers2 USING fts5(references, title); SELECT dolt_commit('-A', '-m', 'add papers2');" \
+  "^[0-9a-f]{40}$" "$DB33"
+
+run_test_match "commit_normal_table_quoted_references_col" \
+  "CREATE TABLE notes(id INTEGER PRIMARY KEY, \"references\" TEXT); SELECT dolt_commit('-A', '-m', 'add notes');" \
+  "^[0-9a-f]{40}$" "$DB33"
+
+run_test_error_match "commit_normal_table_missing_fk_still_rejected" \
+  "CREATE TABLE bad_child(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES missing_parent(id)); SELECT dolt_commit('-A', '-m', 'bad fk');" \
+  "foreign key on table \`bad_child\` requires the referenced table \`missing_parent\`" "$DB33"
+
+rm -f "$DB" "$DB_DUP" "$DB2" "$DB3" "$DB_BOTH" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB26" "$DB27" "$DB28" "$DB29" "$DB30" "$DB31" "$DB32" "$DB33"
 
 dltest_finish

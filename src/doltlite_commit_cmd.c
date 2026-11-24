@@ -813,6 +813,25 @@ static int doltliteCommitNextForeignKeyParent(
   return SQLITE_DONE;
 }
 
+static int doltliteCommitSqlIsVirtualTable(const char *zSql){
+  static const int aWant[3] = { TK_CREATE, TK_VIRTUAL, TK_TABLE };
+  const char *z = zSql;
+  int i;
+  if( !z ) return 0;
+  for(i=0; i<3; i++){
+    int type = 0;
+    int n;
+    do{
+      if( !*z ) return 0;
+      n = sqlite3GetToken((const u8*)z, &type);
+      if( n<=0 || type==TK_ILLEGAL ) return 0;
+      z += n;
+    }while( type==TK_SPACE || type==TK_COMMENT );
+    if( type!=aWant[i] ) return 0;
+  }
+  return 1;
+}
+
 static int doltliteCommitFindMissingForeignKeyParent(
   sqlite3 *db,
   const ProllyHash *pCatalogHash,
@@ -829,7 +848,8 @@ static int doltliteCommitFindMissingForeignKeyParent(
     char *zParent = 0;
     int rc;
     if( !aSchema[i].zType || sqlite3_stricmp(aSchema[i].zType, "table")!=0
-     || !aSchema[i].zSql || !aSchema[i].zName ){
+     || !aSchema[i].zSql || !aSchema[i].zName
+     || doltliteCommitSqlIsVirtualTable(aSchema[i].zSql) ){
       continue;
     }
     z = aSchema[i].zSql;
