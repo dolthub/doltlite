@@ -272,6 +272,8 @@ static int htBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
   int iCommitCol = vt->cols.nCol;
   int iStartRefCol = vt->cols.nCol + 3;
 
+  if( !doltliteVtabArgUsable(p, iStartRefCol) ) return SQLITE_CONSTRAINT;
+
   p->estimatedCost = 100000.0;
   p->estimatedRows = 100000;
 
