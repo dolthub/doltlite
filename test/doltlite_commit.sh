@@ -872,6 +872,90 @@ run_test "begin_failed_commit_all_A_reopen_unstaged" \
   "SELECT table_name || '|' || staged || '|' || status FROM dolt_status;" \
   "t|0|new table" "$DB31"
 
-rm -f "$DB" "$DB_DUP" "$DB2" "$DB3" "$DB_BOTH" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB26" "$DB27" "$DB28" "$DB29" "$DB30" "$DB31"
+DB32=/tmp/test_dolt_commit_all_sibling_opts_$$.db; rm -f "$DB32"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-A', '-m', 'init');
+SELECT dolt_branch('feat');" | $DOLTLITE "$DB32" > /dev/null 2>&1
+
+run_test_match "commit_all_sibling_explicit_date" \
+  "ATTACH '$DB32/feat' AS feat;
+BEGIN;
+INSERT INTO feat.t VALUES(2);
+SELECT dolt_commit_all('-A', '-m', 'sib-date', '--date', '2024-06-15');" \
+  '^\{.*"feat":"[0-9a-f]{40}".*\}$' "$DB32"
+
+run_test "commit_all_sibling_explicit_date_logged" \
+  "SELECT date || '|' || message FROM dolt_log('feat') LIMIT 1;" \
+  "2024-06-15 00:00:00|sib-date" "$DB32"
+
+run_test_match "commit_all_both_explicit_date" \
+  "ATTACH '$DB32/feat' AS feat;
+BEGIN;
+INSERT INTO t VALUES(10);
+INSERT INTO feat.t VALUES(11);
+SELECT dolt_commit_all('-A', '-m', 'both-date', '--date', '2024-07-20T08:09:10Z');" \
+  '^\{.*"feat":"[0-9a-f]{40}".*"main":"[0-9a-f]{40}".*\}$' "$DB32"
+
+run_test "commit_all_both_explicit_date_logged" \
+  "SELECT date || '|' || message FROM dolt_log('main') LIMIT 1;
+SELECT date || '|' || message FROM dolt_log('feat') LIMIT 1;" \
+  "2024-07-20 08:09:10|both-date
+2024-07-20 08:09:10|both-date" "$DB32"
+
+run_test_error_match "commit_all_sibling_invalid_date" \
+  "ATTACH '$DB32/feat' AS feat;
+BEGIN;
+INSERT INTO feat.t VALUES(3);
+SELECT dolt_commit_all('-A', '-m', 'bad-date', '--date', 'not-a-date');" \
+  "could not parse --date" "$DB32"
+
+run_test_error_match "commit_all_sibling_missing_message" \
+  "ATTACH '$DB32/feat' AS feat;
+BEGIN;
+INSERT INTO feat.t VALUES(3);
+SELECT dolt_commit_all('-A');" \
+  "dolt_commit requires a message" "$DB32"
+
+run_test_error_match "commit_all_sibling_empty_message" \
+  "ATTACH '$DB32/feat' AS feat;
+BEGIN;
+INSERT INTO feat.t VALUES(3);
+SELECT dolt_commit_all('-A', '-m', '');" \
+  "dolt_commit requires a message" "$DB32"
+
+run_test_error_match "commit_all_sibling_whitespace_message" \
+  "ATTACH '$DB32/feat' AS feat;
+BEGIN;
+INSERT INTO feat.t VALUES(3);
+SELECT dolt_commit_all('-A', '-m', '   ');" \
+  "dolt_commit requires a non-empty message" "$DB32"
+
+run_test_error_match "commit_all_sibling_empty_author_email" \
+  "ATTACH '$DB32/feat' AS feat;
+BEGIN;
+INSERT INTO feat.t VALUES(3);
+SELECT dolt_commit_all('-A', '-m', 'bad-email', '--author', 'Alice <>');" \
+  "Aborting commit due to empty author email" "$DB32"
+
+run_test_error_match "commit_all_sibling_malformed_author" \
+  "ATTACH '$DB32/feat' AS feat;
+BEGIN;
+INSERT INTO feat.t VALUES(3);
+SELECT dolt_commit_all('-A', '-m', 'bad-author', '--author', 'badauthor');" \
+  "Author not formatted correctly" "$DB32"
+
+run_test_match "commit_all_sibling_amend_without_message" \
+  "ATTACH '$DB32/feat' AS feat;
+BEGIN;
+INSERT INTO feat.t VALUES(12);
+SELECT dolt_commit_all('-A', '--amend', '--date', '2025-01-02T03:04:05Z', '--author', 'Alice <alice@example.com>');" \
+  '^\{.*"feat":"[0-9a-f]{40}".*\}$' "$DB32"
+
+run_test "commit_all_sibling_amend_without_message_logged" \
+  "SELECT committer || '|' || email || '|' || date || '|' || message FROM dolt_log('feat') LIMIT 1;" \
+  "Alice|alice@example.com|2025-01-02 03:04:05|both-date" "$DB32"
+
+rm -f "$DB" "$DB_DUP" "$DB2" "$DB3" "$DB_BOTH" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB26" "$DB27" "$DB28" "$DB29" "$DB30" "$DB31" "$DB32"
 
 dltest_finish
