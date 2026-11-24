@@ -542,4 +542,39 @@ run_test "diff_commit_eq_merge_second_parent" \
   "SELECT table_name FROM dolt_diff WHERE commit_hash='$RC2';" "t" "$RDB"
 rm -f "$RDB"
 
+PCM=/tmp/test_patch_comment_$$.db
+PCMR=/tmp/test_patch_comment_replay_$$.db
+rm -f "$PCM" "$PCMR"
+dltest_require "patch_line_comment_setup" "$PCM" "
+SELECT dolt_commit('--allow-empty','-m','init');
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+CREATE VIEW v1 AS SELECT id FROM t -- trailing comment
+;
+CREATE VIEW v2 AS SELECT id + 1 FROM t;
+CREATE VIEW v3 AS SELECT id + 2 FROM t -- trailing;
+;
+INSERT INTO t VALUES(1);
+SELECT dolt_commit('-Am','add views with comments');
+"
+run_test "patch_line_comment_ordinary_no_newline" \
+  "SELECT instr(statement, char(10)) FROM dolt_patch('HEAD~1','HEAD') WHERE table_name='t' AND diff_type='schema';" \
+  "0" "$PCM"
+run_test "patch_line_comment_v1_newline_before_semi" \
+  "SELECT substr(statement, -2) = char(10) || ';' FROM dolt_patch('HEAD~1','HEAD') WHERE table_name='v1';" \
+  "1" "$PCM"
+run_test "patch_line_comment_v2_no_newline" \
+  "SELECT instr(statement, char(10)) FROM dolt_patch('HEAD~1','HEAD') WHERE table_name='v2';" \
+  "0" "$PCM"
+run_test "patch_line_comment_v3_newline_before_semi" \
+  "SELECT substr(statement, -2) = char(10) || ';' FROM dolt_patch('HEAD~1','HEAD') WHERE table_name='v3';" \
+  "1" "$PCM"
+patch_sql=$(dltest_run_sql \
+  "SELECT group_concat(statement, char(10)) FROM (SELECT statement FROM dolt_patch('HEAD~1','HEAD') ORDER BY statement_order);" \
+  "$PCM" bail)
+printf '%s\n' "$patch_sql" | "$DOLTLITE" -bail "$PCMR" >/dev/null
+run_test "patch_line_comment_replay_v1" "SELECT id FROM v1;" "1" "$PCMR"
+run_test "patch_line_comment_replay_v2" "SELECT * FROM v2;" "2" "$PCMR"
+run_test "patch_line_comment_replay_v3" "SELECT * FROM v3;" "3" "$PCMR"
+rm -f "$PCM" "$PCMR"
+
 dltest_finish
