@@ -1891,6 +1891,10 @@ int doltliteApplyRawRowMutation(sqlite3 *db, const char *zTable,
                                 const u8 *pKey, int nKey, i64 intKey,
                                 const u8 *pVal, int nVal,
                                 int checkUnique, Index **ppUniqueViolation);
+typedef struct DoltliteRawRow DoltliteRawRow;
+int doltliteApplyRawRowMutations(sqlite3 *db, const char *zTable,
+                                 const DoltliteRawRow *aRow, int nRow,
+                                 int checkUnique, Index **ppUniqueViolation);
 
 typedef struct DoltliteConflictRow DoltliteConflictRow;
 struct DoltliteConflictRow {
@@ -1934,6 +1938,24 @@ int doltliteSchemasRowDiff(
   const ProllyHash *pNewRoot, u8 newFlags,
   int *pOldCount, int *pNewCount,
   int *pAdded, int *pDeleted, int *pModified
+);
+int doltliteIndexAccumRowDelta(
+  sqlite3 *db,
+  Index *pIdx,
+  ProllyMutMap *pMap,
+  int iPKey, i64 intKey,
+  const u8 *pOldVal, int nOldVal,
+  const u8 *pNewVal, int nNewVal
+);
+int doltliteIndexFlushDelta(
+  sqlite3 *db,
+  ChunkStore *cs,
+  ProllyCache *cache,
+  ProllyHash *pIdxRoot,
+  u8 idxFlags,
+  Index *pIdx,
+  ProllyMutMap *pMap,
+  int checkUnique
 );
 int doltliteIndexApplyRowDeltaChecked(
   sqlite3 *db,

@@ -95,6 +95,14 @@ static SQLITE_INLINE int prollyMutMapOrderPhys(const ProllyMutMap *mm, int idx){
   return mm->aOrder[idx + (idx>=mm->iOrderGap ? mm->nAlloc-mm->nEntries : 0)];
 }
 
+/* One row edit by tree key; a NULL pVal deletes. */
+typedef struct DoltliteRawRow DoltliteRawRow;
+struct DoltliteRawRow {
+  const u8 *pKey; int nKey;
+  i64 intKey;
+  const u8 *pVal; int nVal;
+};
+
 int prollyMutMapInit(ProllyMutMap *mm, u8 isIntKey);
 int prollyMutMapInitMode(ProllyMutMap *mm, u8 isIntKey, u8 keepSorted);
 

@@ -949,6 +949,66 @@ done:
   return rc;
 }
 
+int doltliteIndexAccumRowDelta(
+  sqlite3 *db,
+  Index *pIdx,
+  ProllyMutMap *pMap,
+  int iPKey, i64 intKey,
+  const u8 *pOldVal, int nOldVal,
+  const u8 *pNewVal, int nNewVal
+){
+  KeyInfo *pKeyInfo;
+  int rc;
+  if( (!pOldVal || nOldVal<=0) && (!pNewVal || nNewVal<=0) ) return SQLITE_OK;
+  pKeyInfo = doltliteKeyInfoOfIndex(db, pIdx);
+  if( !pKeyInfo ) return SQLITE_NOMEM;
+  rc = doltliteIndexMutMapRowDelta(
+      db, pIdx, pMap, pIdx->aiColumn, pIdx->nKeyCol, pKeyInfo,
+      iPKey, intKey, 0, 0,
+      pOldVal, nOldVal, pNewVal, nNewVal, 0);
+  sqlite3KeyInfoUnref(pKeyInfo);
+  return rc;
+}
+
+int doltliteIndexFlushDelta(
+  sqlite3 *db,
+  ChunkStore *cs,
+  ProllyCache *cache,
+  ProllyHash *pIdxRoot,
+  u8 idxFlags,
+  Index *pIdx,
+  ProllyMutMap *pMap,
+  int checkUnique
+){
+  KeyInfo *pKeyInfo = 0;
+  ProllyMutator mut;
+  int rc;
+
+  if( !cs || !cache || !pIdxRoot || !pIdx ) return SQLITE_MISUSE;
+  if( prollyMutMapIsEmpty(pMap) ) return SQLITE_OK;
+  memset(&mut, 0, sizeof(mut));
+  mut.pStore = cs;
+  mut.pCache = cache;
+  mut.oldRoot = *pIdxRoot;
+  mut.pEdits = pMap;
+  mut.flags = idxFlags ? idxFlags : (u8)PROLLY_NODE_BLOBKEY;
+  rc = prollyMutateFlush(&mut);
+  if( rc==SQLITE_OK && checkUnique && IsUniqueIndex(pIdx) ){
+    int i;
+    pKeyInfo = doltliteKeyInfoOfIndex(db, pIdx);
+    if( !pKeyInfo ) rc = SQLITE_NOMEM;
+    for(i=0; i<pMap->nEntries && rc==SQLITE_OK; i++){
+      if( pMap->aEntries[i].op==PROLLY_EDIT_INSERT ){
+        rc = indexCheckUniqueInsert(db, cs, cache, &mut.newRoot,
+            mut.flags, pIdx, pKeyInfo, &pMap->aEntries[i]);
+      }
+    }
+    if( pKeyInfo ) sqlite3KeyInfoUnref(pKeyInfo);
+  }
+  if( rc==SQLITE_OK ) *pIdxRoot = mut.newRoot;
+  return rc;
+}
+
 int doltliteIndexApplyRowDeltaChecked(
   sqlite3 *db,
   ChunkStore *cs,
@@ -962,49 +1022,21 @@ int doltliteIndexApplyRowDeltaChecked(
   const u8 *pNewVal, int nNewVal,
   int checkUnique
 ){
-  KeyInfo *pKeyInfo = 0;
   ProllyMutMap mm;
-  ProllyMutator mut;
   int rc;
 
+  UNUSED_PARAMETER(pTreeKey);
+  UNUSED_PARAMETER(nTreeKey);
   if( !cs || !cache || !pIdxRoot || !pIdx ) return SQLITE_MISUSE;
-  if( (!pOldVal || nOldVal<=0) && (!pNewVal || nNewVal<=0) ) return SQLITE_OK;
-
-  pKeyInfo = doltliteKeyInfoOfIndex(db, pIdx);
-  if( !pKeyInfo ) return SQLITE_NOMEM;
-
   rc = prollyMutMapInit(&mm, 0);
-  if( rc!=SQLITE_OK ){
-    sqlite3KeyInfoUnref(pKeyInfo);
-    return rc;
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteIndexAccumRowDelta(db, pIdx, &mm, iPKey, intKey,
+      pOldVal, nOldVal, pNewVal, nNewVal);
+  if( rc==SQLITE_OK ){
+    rc = doltliteIndexFlushDelta(db, cs, cache, pIdxRoot, idxFlags, pIdx,
+        &mm, checkUnique);
   }
-
-  rc = doltliteIndexMutMapRowDelta(
-      db, pIdx, &mm, pIdx->aiColumn, pIdx->nKeyCol, pKeyInfo,
-      iPKey, intKey, pTreeKey, nTreeKey,
-      pOldVal, nOldVal, pNewVal, nNewVal, 0);
-  if( rc==SQLITE_OK && !prollyMutMapIsEmpty(&mm) ){
-    memset(&mut, 0, sizeof(mut));
-    mut.pStore = cs;
-    mut.pCache = cache;
-    mut.oldRoot = *pIdxRoot;
-    mut.pEdits = &mm;
-    mut.flags = idxFlags ? idxFlags : (u8)PROLLY_NODE_BLOBKEY;
-    rc = prollyMutateFlush(&mut);
-    if( rc==SQLITE_OK && checkUnique && IsUniqueIndex(pIdx) ){
-      int i;
-      for(i=0; i<mm.nEntries && rc==SQLITE_OK; i++){
-        if( mm.aEntries[i].op==PROLLY_EDIT_INSERT ){
-          rc = indexCheckUniqueInsert(db, cs, cache, &mut.newRoot,
-              mut.flags, pIdx, pKeyInfo, &mm.aEntries[i]);
-        }
-      }
-    }
-    if( rc==SQLITE_OK ) *pIdxRoot = mut.newRoot;
-  }
-
   prollyMutMapFree(&mm);
-  sqlite3KeyInfoUnref(pKeyInfo);
   return rc;
 }
 

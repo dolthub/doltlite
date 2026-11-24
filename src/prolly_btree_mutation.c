@@ -2319,19 +2319,31 @@ default_cleanup:
 }
 
 /* Forward-declared: doltlite_internal.h redefines TableEntry incompatibly. */
-extern int doltliteIndexApplyRowDeltaChecked(
+extern int doltliteIndexAccumRowDelta(
+  sqlite3 *db,
+  Index *pIdx,
+  ProllyMutMap *pMap,
+  int iPKey, i64 intKey,
+  const u8 *pOldVal, int nOldVal,
+  const u8 *pNewVal, int nNewVal
+);
+extern int doltliteIndexFlushDelta(
   sqlite3 *db,
   ChunkStore *cs,
   ProllyCache *cache,
   ProllyHash *pIdxRoot,
   u8 idxFlags,
   Index *pIdx,
-  int iPKey, i64 intKey,
-  const u8 *pTreeKey, int nTreeKey,
-  const u8 *pOldVal, int nOldVal,
-  const u8 *pNewVal, int nNewVal,
+  ProllyMutMap *pMap,
   int checkUnique
 );
+
+typedef struct RawRowIndex RawRowIndex;
+struct RawRowIndex {
+  Index *pIdx;
+  struct TableEntry *pTE;
+  ProllyMutMap mm;
+};
 
 /* Allocated copy of the tree value at pKey/intKey, or NULL if absent. */
 static int readRowValue(
@@ -2369,25 +2381,59 @@ static int readRowValue(
   return rc;
 }
 
-int doltliteApplyRawRowMutation(
+static int rawRowsFlush(
+  sqlite3 *db,
+  BtShared *pBt,
+  struct TableEntry *pTE,
+  ProllyMutMap *pRows,
+  RawRowIndex *aIdx, int nIdx,
+  int checkUnique, Index **ppUniqueViolation
+){
+  int rc = SQLITE_OK;
+  int i;
+  if( !prollyMutMapIsEmpty(pRows) ){
+    ProllyMutator mut;
+    memset(&mut, 0, sizeof(mut));
+    mut.pStore = pBt->pStore;
+    mut.pCache = &pBt->cache;
+    memcpy(&mut.oldRoot, &pTE->root, sizeof(ProllyHash));
+    mut.pEdits = pRows;
+    mut.flags = pTE->flags;
+    rc = prollyMutateFlush(&mut);
+    if( rc==SQLITE_OK ) memcpy(&pTE->root, &mut.newRoot, sizeof(ProllyHash));
+    prollyMutMapClear(pRows);
+  }
+  for(i=0; i<nIdx && rc==SQLITE_OK; i++){
+    rc = doltliteIndexFlushDelta(db, pBt->pStore, &pBt->cache,
+        &aIdx[i].pTE->root, aIdx[i].pTE->flags, aIdx[i].pIdx,
+        &aIdx[i].mm, checkUnique);
+    if( rc==SQLITE_CONSTRAINT_UNIQUE && ppUniqueViolation ){
+      *ppUniqueViolation = aIdx[i].pIdx;
+    }
+    prollyMutMapClear(&aIdx[i].mm);
+  }
+  return rc;
+}
+
+/* Old values are read from the tree, so a key seen twice is flushed before
+** its second edit; the index entries otherwise come from a stale row. */
+int doltliteApplyRawRowMutations(
   sqlite3 *db,
   const char *zTable,
-  const u8 *pKey, int nKey, i64 intKey,
-  const u8 *pVal, int nVal,
+  const DoltliteRawRow *aRow, int nRow,
   int checkUnique, Index **ppUniqueViolation
 ){
   Btree *pBtree;
   BtShared *pBt;
-  struct TableEntry *pTE;
+  struct TableEntry *pTE = 0;
   ProllyMutMap mm;
-  ProllyMutator mut;
-  u8 *pOldVal = 0;
-  int nOldVal = 0;
-  u8 *pIdxNew = 0;
-  int nIdxNew = 0;
+  RawRowIndex *aIdx = 0;
+  int nIdx = 0;
+  int nIdxInit = 0;
   Table *pTab = 0;
+  Index *pIdx;
   int rc;
-  u8 isIntKey;
+  int i, r;
 
   if( ppUniqueViolation ) *ppUniqueViolation = 0;
   if( !db || !zTable ) return SQLITE_MISUSE;
@@ -2398,15 +2444,11 @@ int doltliteApplyRawRowMutation(
   rc = doltliteEnsureWriteTxnAndSavepoints(db);
   if( rc!=SQLITE_OK ) return rc;
 
-  {
-    int i;
-    pTE = 0;
-    for(i=0; i<pBtree->cat.n; i++){
-      if( pBtree->cat.a[i].zName
-       && sqlite3_stricmp(pBtree->cat.a[i].zName, zTable)==0 ){
-        pTE = &pBtree->cat.a[i];
-        break;
-      }
+  for(i=0; i<pBtree->cat.n; i++){
+    if( pBtree->cat.a[i].zName
+     && sqlite3_stricmp(pBtree->cat.a[i].zName, zTable)==0 ){
+      pTE = &pBtree->cat.a[i];
+      break;
     }
   }
   if( !pTE ) return SQLITE_NOTFOUND;
@@ -2415,84 +2457,105 @@ int doltliteApplyRawRowMutation(
   if( rc!=SQLITE_OK ) return rc;
 
   pTab = sqlite3FindTable(db, zTable, "main");
-  if( pTab && pTab->pIndex ){
-    rc = readRowValue(pBt, pTE, pKey, nKey, intKey, &pOldVal, &nOldVal);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(pOldVal);
-      return rc;
+  for(pIdx=pTab ? pTab->pIndex : 0; pIdx; pIdx=pIdx->pNext) nIdx++;
+  if( nIdx>0 ){
+    aIdx = sqlite3_malloc64(sizeof(RawRowIndex)*(u64)nIdx);
+    if( !aIdx ) return SQLITE_NOMEM;
+    nIdx = 0;
+  }
+  for(pIdx=pTab ? pTab->pIndex : 0; pIdx && rc==SQLITE_OK; pIdx=pIdx->pNext){
+    struct TableEntry *pIdxTE = 0;
+    /* WITHOUT ROWID PK is a pseudo-index on the table root; skip. */
+    if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY && !HasRowid(pTab) ) continue;
+    for(i=0; i<pBtree->cat.n; i++){
+      if( pBtree->cat.a[i].iTable==(Pgno)pIdx->tnum ){
+        pIdxTE = &pBtree->cat.a[i];
+        break;
+      }
+    }
+    if( !pIdxTE ) continue;
+    rc = flushPendingForTable(pBtree, pBt, pIdxTE, 0);
+    if( rc==SQLITE_OK ) rc = prollyMutMapInit(&aIdx[nIdx].mm, 0);
+    if( rc==SQLITE_OK ){
+      aIdx[nIdx].pIdx = pIdx;
+      aIdx[nIdx].pTE = pIdxTE;
+      nIdx++;
+      nIdxInit = nIdx;
     }
   }
-
-  isIntKey = (pTE->flags & PROLLY_NODE_INTKEY) ? 1 : 0;
-  rc = prollyMutMapInit(&mm, isIntKey);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(pOldVal);
-    return rc;
-  }
-
-  if( pVal ){
-    rc = prollyMutMapInsert(&mm, pKey, nKey, intKey, pVal, nVal);
-  }else{
-    rc = prollyMutMapDelete(&mm, pKey, nKey, intKey);
-  }
-  if( rc!=SQLITE_OK ){
-    prollyMutMapFree(&mm);
-    sqlite3_free(pOldVal);
-    return rc;
-  }
-
-  memset(&mut, 0, sizeof(mut));
-  mut.pStore = pBt->pStore;
-  mut.pCache = &pBt->cache;
-  memcpy(&mut.oldRoot, &pTE->root, sizeof(ProllyHash));
-  mut.pEdits = &mm;
-  mut.flags = pTE->flags;
-
-  rc = prollyMutateFlush(&mut);
   if( rc==SQLITE_OK ){
-    memcpy(&pTE->root, &mut.newRoot, sizeof(ProllyHash));
+    rc = prollyMutMapInit(&mm, (pTE->flags & PROLLY_NODE_INTKEY) ? 1 : 0);
+  }
+  if( rc!=SQLITE_OK ){
+    for(i=0; i<nIdxInit; i++) prollyMutMapFree(&aIdx[i].mm);
+    sqlite3_free(aIdx);
+    return rc;
+  }
+
+  for(r=0; r<nRow && rc==SQLITE_OK; r++){
+    const DoltliteRawRow *p = &aRow[r];
+    ProllyMutMapEntry *pSeen = 0;
+    u8 *pOldVal = 0;
+    int nOldVal = 0;
+    u8 *pIdxNew = 0;
+    int nIdxNew = 0;
+
+    rc = prollyMutMapFindRc(&mm, p->pKey, p->nKey, p->intKey, &pSeen);
+    if( rc==SQLITE_OK && pSeen ){
+      rc = rawRowsFlush(db, pBt, pTE, &mm, aIdx, nIdx,
+                        checkUnique, ppUniqueViolation);
+    }
+    if( rc==SQLITE_OK && pTab && pTab->pIndex ){
+      rc = readRowValue(pBt, pTE, p->pKey, p->nKey, p->intKey,
+                        &pOldVal, &nOldVal);
+    }
+    if( rc==SQLITE_OK ){
+      if( p->pVal ){
+        rc = prollyMutMapInsert(&mm, p->pKey, p->nKey, p->intKey,
+                                p->pVal, p->nVal);
+      }else{
+        rc = prollyMutMapDelete(&mm, p->pKey, p->nKey, p->intKey);
+      }
+    }
+    /* Secondary indexes: KeyInfo path so NOCASE/RTRIM match VDBE encoding.
+    ** An empty clustered value still carries the key columns for an insert. */
+    if( rc==SQLITE_OK && nIdx>0 && p->pVal && p->nVal<=0 ){
+      rc = doltliteRecordFromClusteredKey(db, zTable, p->pKey, p->nKey,
+                                          &pIdxNew, &nIdxNew);
+    }
+    for(i=0; i<nIdx && rc==SQLITE_OK; i++){
+      rc = doltliteIndexAccumRowDelta(db, aIdx[i].pIdx, &aIdx[i].mm,
+          pTab->iPKey, p->intKey, pOldVal, nOldVal,
+          pIdxNew ? pIdxNew : p->pVal, pIdxNew ? nIdxNew : p->nVal);
+    }
+    sqlite3_free(pIdxNew);
+    sqlite3_free(pOldVal);
+  }
+  if( rc==SQLITE_OK ){
+    rc = rawRowsFlush(db, pBt, pTE, &mm, aIdx, nIdx,
+                      checkUnique, ppUniqueViolation);
   }
   prollyMutMapFree(&mm);
-
-  /* Secondary indexes: KeyInfo path so NOCASE/RTRIM match VDBE encoding.
-  ** An empty clustered value still carries the key columns for an insert. */
-  if( rc==SQLITE_OK && pVal && nVal<=0 ){
-    rc = doltliteRecordFromClusteredKey(db, zTable, pKey, nKey,
-                                        &pIdxNew, &nIdxNew);
-  }
-  if( rc==SQLITE_OK && pTab && pTab->pIndex
-   && (nOldVal>0 || (pIdxNew ? nIdxNew : nVal)>0) ){
-    Index *pIdx;
-    int iPKey = pTab->iPKey;
-    const u8 *pIndexNew = pIdxNew ? pIdxNew : pVal;
-    int nIndexNew = pIdxNew ? nIdxNew : nVal;
-    for(pIdx=pTab->pIndex; pIdx && rc==SQLITE_OK; pIdx=pIdx->pNext){
-      struct TableEntry *pIdxTE = 0;
-      int j;
-      /* WITHOUT ROWID PK is a pseudo-index on the table root; skip. */
-      if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY && !HasRowid(pTab) ) continue;
-      for(j=0; j<pBtree->cat.n; j++){
-        if( pBtree->cat.a[j].iTable==(Pgno)pIdx->tnum ){
-          pIdxTE = &pBtree->cat.a[j];
-          break;
-        }
-      }
-      if( !pIdxTE ) continue;
-      rc = flushPendingForTable(pBtree, pBt, pIdxTE, 0);
-      if( rc!=SQLITE_OK ) break;
-      rc = doltliteIndexApplyRowDeltaChecked(
-          db, pBt->pStore, &pBt->cache, &pIdxTE->root, pIdxTE->flags,
-          pIdx, iPKey, intKey, pKey, nKey,
-          pOldVal, nOldVal, pIndexNew, nIndexNew, checkUnique);
-      if( rc==SQLITE_CONSTRAINT_UNIQUE && ppUniqueViolation ){
-        *ppUniqueViolation = pIdx;
-      }
-    }
-  }
-
-  sqlite3_free(pIdxNew);
-  sqlite3_free(pOldVal);
+  for(i=0; i<nIdx; i++) prollyMutMapFree(&aIdx[i].mm);
+  sqlite3_free(aIdx);
   return rc;
+}
+
+int doltliteApplyRawRowMutation(
+  sqlite3 *db,
+  const char *zTable,
+  const u8 *pKey, int nKey, i64 intKey,
+  const u8 *pVal, int nVal,
+  int checkUnique, Index **ppUniqueViolation
+){
+  DoltliteRawRow row;
+  row.pKey = pKey;
+  row.nKey = nKey;
+  row.intKey = intKey;
+  row.pVal = pVal;
+  row.nVal = nVal;
+  return doltliteApplyRawRowMutations(db, zTable, &row, 1,
+                                      checkUnique, ppUniqueViolation);
 }
 
 int doltliteEnsureWriteTxnAndSavepoints(sqlite3 *db){

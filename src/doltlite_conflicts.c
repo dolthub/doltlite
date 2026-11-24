@@ -1688,11 +1688,23 @@ static void conflictsResolveParsedFunc(
           freeConflictTable(&table);
           goto resolve_error;
         }
-        for(j=0; j<table.nConflicts; j++){
-          DoltliteConflictRow *cr = &table.aRows[j];
-          rc = doltliteApplyRawRowMutation(db, azTables[i],
-                                           cr->pKey, cr->nKey, cr->intKey,
-                                           cr->pTheirVal, cr->nTheirVal, 0, 0);
+        {
+          DoltliteRawRow *aRow = sqlite3_malloc64(
+              sizeof(DoltliteRawRow)*(u64)(table.nConflicts+1));
+          rc = aRow ? SQLITE_OK : SQLITE_NOMEM;
+          for(j=0; aRow && j<table.nConflicts; j++){
+            DoltliteConflictRow *cr = &table.aRows[j];
+            aRow[j].pKey = cr->pKey;
+            aRow[j].nKey = cr->nKey;
+            aRow[j].intKey = cr->intKey;
+            aRow[j].pVal = cr->pTheirVal;
+            aRow[j].nVal = cr->nTheirVal;
+          }
+          if( rc==SQLITE_OK ){
+            rc = doltliteApplyRawRowMutations(db, azTables[i],
+                                              aRow, table.nConflicts, 0, 0);
+          }
+          sqlite3_free(aRow);
           if( rc!=SQLITE_OK ){
             freeConflictTable(&table);
             conflictsFreeFkCounts(aFkBefore, nFkBefore);
