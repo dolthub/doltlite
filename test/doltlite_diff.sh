@@ -577,4 +577,32 @@ run_test "patch_line_comment_replay_v2" "SELECT * FROM v2;" "2" "$PCMR"
 run_test "patch_line_comment_replay_v3" "SELECT * FROM v3;" "3" "$PCMR"
 rm -f "$PCM" "$PCMR"
 
+PPD=/tmp/test_patch_pushdown_$$.db
+rm -f "$PPD"
+dltest_require "patch_diff_type_pushdown_setup" "$PPD" "
+SELECT dolt_commit('--allow-empty','-m','init');
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-Am','add t');
+"
+run_test "patch_diff_type_nul_empty" \
+  "SELECT count(*) FROM dolt_patch('HEAD~1','HEAD') WHERE diff_type = char(0);" \
+  "0" "$PPD"
+run_test "patch_diff_type_data_nul_empty" \
+  "SELECT count(*) FROM dolt_patch('HEAD~1','HEAD') WHERE diff_type = 'data' || char(0);" \
+  "0" "$PPD"
+run_test "patch_diff_type_null_empty" \
+  "SELECT count(*) FROM dolt_patch('HEAD~1','HEAD') WHERE diff_type = NULL;" \
+  "0" "$PPD"
+run_test "patch_diff_type_pushed_statement_order" \
+  "SELECT statement_order || '|' || diff_type FROM dolt_patch('HEAD~1','HEAD') WHERE diff_type = 'data';" \
+  "2|data" "$PPD"
+run_test "patch_diff_type_unpushed_statement_order" \
+  "SELECT statement_order || '|' || diff_type FROM dolt_patch('HEAD~1','HEAD') WHERE diff_type || '' = 'data';" \
+  "2|data" "$PPD"
+run_test_error_match "patch_tvf_arg_nul_still_errors" \
+  "SELECT count(*) FROM dolt_patch('HEAD~1','HEAD','t' || char(0)) WHERE diff_type = 'data';" \
+  "contains a NUL byte" "$PPD"
+rm -f "$PPD"
+
 dltest_finish

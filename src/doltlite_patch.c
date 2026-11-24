@@ -19,6 +19,7 @@ typedef struct PatchSchema PatchSchema;
 typedef struct PatchValue PatchValue;
 
 struct PatchRow {
+  int iOrder;
   char *zTable;
   char *zType;
   char *zSql;
@@ -105,6 +106,7 @@ static int patchAppendRow(
   if( rc!=SQLITE_OK ) return rc;
   p = &pCur->aRow[pCur->nRow];
   memset(p, 0, sizeof(*p));
+  p->iOrder = pCur->nRow + 1;
   p->zTable = sqlite3_mprintf("%s", zTable ? zTable : "");
   p->zType = sqlite3_mprintf("%s", zType ? zType : "");
   p->zSql = patchStatement(zSql);
@@ -1596,7 +1598,7 @@ static int patchFilter(sqlite3_vtab_cursor *pCursor, int idxNum,
   struct TableEntry *aFromTable=0,*aToTable=0;
   PatchTable *aTable=0;
   int nFromSchema=0,nToSchema=0,nFromTable=0,nToTable=0,nTable=0;
-  int iArg=0,i,ePhase,found=0,rc=SQLITE_OK;
+  int iArg=0,nTvArgs=0,i,ePhase,found=0,rc=SQLITE_OK;
   int bTypeFilter=(idxNum&8)!=0;
   ChunkStore *cs=doltliteGetChunkStore(pVtab->db);
   ProllyCache *pCache=doltliteGetCache(pVtab->db);
@@ -1606,12 +1608,19 @@ static int patchFilter(sqlite3_vtab_cursor *pCursor, int idxNum,
   if( (idxNum&1) && iArg<argc ) zArg1=(const char*)sqlite3_value_text(argv[iArg++]);
   if( (idxNum&2) && iArg<argc ) zArg2=(const char*)sqlite3_value_text(argv[iArg++]);
   if( (idxNum&4) && iArg<argc ) zArg3=(const char*)sqlite3_value_text(argv[iArg++]);
-  if( (idxNum&8) && iArg<argc ) zTypeFilter=(const char*)sqlite3_value_text(argv[iArg++]);
+  nTvArgs=iArg;
+  if( (idxNum&8) && iArg<argc ){
+    sqlite3_value *pTypeVal=argv[iArg++];
+    if( sqlite3_value_type(pTypeVal)!=SQLITE_NULL
+     && !doltliteValueHasNul(pTypeVal) ){
+      zTypeFilter=(const char*)sqlite3_value_text(pTypeVal);
+    }
+  }
   if( !zArg1 || ((idxNum&2) && !zArg2) || ((idxNum&4) && !zArg3) ){
     patchSetError(&pVtab->base,"dolt_patch: invalid arguments%s","");
     return SQLITE_ERROR;
   }
-  for(i=0; i<argc; i++){
+  for(i=0; i<nTvArgs; i++){
     if( doltliteValueHasNul(argv[i]) ){
       patchSetError(&pVtab->base,
           "dolt_patch: invalid argument: contains a NUL byte%s", "");
@@ -1717,7 +1726,7 @@ static int patchColumn(sqlite3_vtab_cursor *p, sqlite3_context *ctx, int iCol){
   PatchCursor *c=(PatchCursor*)p;
   PatchRow *r=&c->aRow[c->iRow];
   switch(iCol){
-    case 0: sqlite3_result_int64(ctx,c->iRow+1); break;
+    case 0: sqlite3_result_int64(ctx,r->iOrder); break;
     case 1: sqlite3_result_text(ctx,c->zFrom,-1,SQLITE_TRANSIENT); break;
     case 2: sqlite3_result_text(ctx,c->zTo,-1,SQLITE_TRANSIENT); break;
     case 3: sqlite3_result_text(ctx,r->zTable,-1,SQLITE_TRANSIENT); break;
