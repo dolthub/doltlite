@@ -589,8 +589,11 @@ static int syncChunks(
             rc = syncMissingChunk(pSrc, &pB->aFetch[i]);
             break;
           }
-          rc = syncVerifyFetchedChunk(&pB->aFetch[i], pB->apData[i], pB->anData[i]);
-          if( rc!=SQLITE_OK ) break;
+          if( !pB->aPut[i] || !pDst->bPutVerifies ){
+            rc = syncVerifyFetchedChunk(&pB->aFetch[i], pB->apData[i],
+                                        pB->anData[i]);
+            if( rc!=SQLITE_OK ) break;
+          }
           if( pB->aPut[i] ){
             rc = pDst->xPutChunk(pDst, &pB->aFetch[i],
                                  pB->apData[i], pB->anData[i]);
@@ -610,7 +613,9 @@ static int syncChunks(
             rc = syncMissingChunk(pSrc, &pB->aFetch[i]);
           }
           if( rc!=SQLITE_OK ) break;
-          rc = syncVerifyFetchedChunk(&pB->aFetch[i], data, nData);
+          if( !pB->aPut[i] || !pDst->bPutVerifies ){
+            rc = syncVerifyFetchedChunk(&pB->aFetch[i], data, nData);
+          }
           if( rc!=SQLITE_OK ){
             sqlite3_free(data);
             break;
@@ -909,6 +914,7 @@ static DoltliteRemote *fsRemoteOpen(
   p->base.xGetChunk = remoteGetChunk;
   p->base.xGetChunks = remoteGetChunks;
   p->base.xPutChunk = fsPutChunk;
+  p->base.bPutVerifies = 1;
   p->base.xHasChunks = remoteHasChunks;
   p->base.xGetRefs = fsGetRefs;
   p->base.xSetRefs = fsSetRefs;
@@ -1209,6 +1215,7 @@ static DoltliteRemote *doltliteLocalAsRemote(ChunkStore *pLocal,
   p->base.xGetChunk = remoteGetChunk;
   p->base.xGetChunks = remoteGetChunks;
   p->base.xPutChunk = localPutChunk;
+  p->base.bPutVerifies = 1;
   p->base.xHasChunks = remoteHasChunks;
   p->base.xGetRefs = remoteGetRefs;
   p->base.xSetRefs = localSetRefs;

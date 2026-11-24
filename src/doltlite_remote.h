@@ -33,6 +33,8 @@ struct DoltliteRemote {
   ** rescans below chunks it already has. */
   int bForceResumeScan;
   int bCacheForChunkSource;
+  /* xPutChunk rejects data that does not hash to the name it is given. */
+  int bPutVerifies;
   /* Lock waits on a file-backed remote consult the opening connection's busy
   ** handler. Without one, a contended remote gives up on a fixed schedule
   ** instead of honouring busy_timeout. */
