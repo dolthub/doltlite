@@ -134,4 +134,52 @@ foreach {layout pk} {rowid INTEGER clustered INT} {
   }
 }
 
+# Shape change across >BLAME_DIFF_BUDGET rows (rowid <-> WITHOUT ROWID)
+# must blame all rows at the recreating commit and never match across key types.
+reset_db
+execsql {
+  CREATE TABLE t(a INT, id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO t VALUES(5, 0, NULL);
+  WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<=200)
+    INSERT INTO t SELECT x+1000, x, 'old' FROM c;
+  SELECT dolt_commit('-Am', 'c1');
+  DROP TABLE t;
+  CREATE TABLE t(id INT PRIMARY KEY, v TEXT) WITHOUT ROWID;
+  INSERT INTO t VALUES(5, NULL);
+  WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<=200)
+    INSERT INTO t SELECT x+1000, 'new' FROM c;
+}
+do_execsql_test shape-change-rowid-to-wor.working {
+  SELECT count(*) FROM dolt_blame_t;
+  SELECT count(*) FROM dolt_blame_t WHERE id=5;
+} {0 0}
+execsql {SELECT dolt_commit('-Am', 'c2')}
+do_execsql_test shape-change-rowid-to-wor.committed {
+  SELECT id, message FROM dolt_blame_t WHERE id=5;
+  SELECT message, count(*) FROM dolt_blame_t GROUP BY message;
+} {5 c2 c2 202}
+
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT) WITHOUT ROWID;
+  INSERT INTO t VALUES(0, 'old');
+  WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<=200)
+    INSERT INTO t SELECT x, 'old' FROM c;
+  SELECT dolt_commit('-Am', 'c1');
+  DROP TABLE t;
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO t VALUES(0, 'old');
+  WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<=200)
+    INSERT INTO t SELECT x, 'new' FROM c;
+}
+do_execsql_test shape-change-wor-to-rowid.working {
+  SELECT count(*) FROM dolt_blame_t;
+  SELECT count(*) FROM dolt_blame_t WHERE id=0;
+} {0 0}
+execsql {SELECT dolt_commit('-Am', 'c2')}
+do_execsql_test shape-change-wor-to-rowid.committed {
+  SELECT id, message FROM dolt_blame_t WHERE id=0;
+  SELECT message, count(*) FROM dolt_blame_t GROUP BY message;
+} {0 c2 c2 202}
+
 finish_test
