@@ -564,6 +564,8 @@ int mergeColDefaultsLoad(const char *zSql, const char *zTable,
                          int bTrackKnown, MergeColDefaults *pOut);
 int mergeColBackfillKnown(sqlite3 *db, Table *pTab, int iCol, int *pbKnown);
 int doltliteColumnIsVirtual(const Table *pTab, int iCol);
+int doltliteColumnDefaultSerialValue(sqlite3 *db, Table *pTab, int iCol,
+                                     DoltliteSerialValue *pOut, u8 **ppKeep);
 int doltliteBindColumnDefault(sqlite3 *db, sqlite3_stmt *pStmt, int iParam,
                               Table *pTab, int iCol);
 int doltlitePrepareIndexExpr(sqlite3 *db, Table *pTab, Expr *pExpr,

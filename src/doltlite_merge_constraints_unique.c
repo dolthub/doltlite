@@ -357,6 +357,7 @@ static int uniqueStoredField(Table *pTab, int iColumn){
 }
 
 static int uniqueBindStoredColumn(
+  sqlite3 *db,
   sqlite3_stmt *pStmt,
   int iParam,
   const u8 *pRecord,
@@ -370,7 +371,7 @@ static int uniqueBindStoredColumn(
   int rc;
   iField = uniqueStoredField(pTab, iColumn);
   if( iField<0 || iField>=pInfo->nField ){
-    return sqlite3_bind_null(pStmt, iParam);
+    return doltliteBindColumnDefault(db, pStmt, iParam, pTab, iColumn);
   }
   rc = doltliteSerialValueFromField(pRecord, nRecord, pInfo, iField, &v);
   if( rc!=SQLITE_OK ) return rc;
@@ -390,6 +391,7 @@ static int uniqueBindStoredColumn(
 ** stored columns instead. Earlier VIRTUAL columns are projected too,
 ** so a generated column may refer to one declared before it. */
 static int uniqueEvalVirtualColumn(
+  sqlite3 *db,
   Table *pTab,
   int iCol,
   const u8 *pRecord,
@@ -475,7 +477,7 @@ static int uniqueEvalVirtualColumn(
   sqlite3_free(zSql);
   for(i=0; i<nBind && rc==SQLITE_OK; i++){
     rc = uniqueBindStoredColumn(
-        pStmt, i+1, pRecord, nRecord, pInfo, pTab, aBind[i]);
+        db, pStmt, i+1, pRecord, nRecord, pInfo, pTab, aBind[i]);
   }
   sqlite3_free(aBind);
   if( rc==SQLITE_OK ) rc = sqlite3_step(pStmt);
@@ -517,6 +519,7 @@ static int uniqueEvalVirtualColumn(
 }
 
 static int uniqueRecordFromTableRow(
+  sqlite3 *db,
   const u8 *pRecord,
   int nRecord,
   const DoltliteRecordInfo *pInfo,
@@ -555,13 +558,14 @@ static int uniqueRecordFromTableRow(
 #ifndef SQLITE_OMIT_GENERATED_COLUMNS
     if( (pTab->aCol[iColumn].colFlags & COLFLAG_VIRTUAL)!=0 ){
       rc = uniqueEvalVirtualColumn(
-          pTab, iColumn, pRecord, nRecord, pInfo, &aValue[i], &apOwned[i]);
+          db, pTab, iColumn, pRecord, nRecord, pInfo, &aValue[i], &apOwned[i]);
     }else
 #endif
     {
       iRecord = uniqueStoredField(pTab, iColumn);
       if( iRecord>=pInfo->nField ){
-        aValue[i].eType = SQLITE_NULL;
+        rc = doltliteColumnDefaultSerialValue(
+            db, pTab, iColumn, &aValue[i], &apOwned[i]);
       }else{
         rc = doltliteSerialValueFromField(
             pRecord, nRecord, pInfo, iRecord, &aValue[i]);
@@ -897,12 +901,12 @@ static int detectUniqueViolationsForIndexWithoutRowid(
     }
     if( rc==SQLITE_OK ){
       rc = uniqueRecordFromTableRow(
-          pRecord, nRecord, &info, pIdx, pIdx->nKeyCol,
+          db, pRecord, nRecord, &info, pIdx, pIdx->nKeyCol,
           &entry.pKey, &entry.nKey, &hasNull);
     }
     if( rc==SQLITE_OK && !hasNull ){
       rc = uniqueRecordFromTableRow(
-          pRecord, nRecord, &info, pPkIdx, pPkIdx->nKeyCol,
+          db, pRecord, nRecord, &info, pPkIdx, pPkIdx->nKeyCol,
           &entry.pPk, &entry.nPk, 0);
     }
     sqlite3_free(pOwnedRecord);
