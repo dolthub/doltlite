@@ -817,6 +817,119 @@ check "short_default_types" "0
 0
 ok" "$out"
 
+DB="$TMPROOT/short_default_unique_without_rowid.db"
+out=$("$DOLTLITE" "$DB" <<'EOF' 2>/dev/null
+.dbconfig defensive off
+CREATE TABLE t(id INT PRIMARY KEY, a INT) WITHOUT ROWID;
+INSERT INTO t VALUES (1, 10);
+PRAGMA writable_schema=ON;
+UPDATE sqlite_master SET sql='CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT DEFAULT 42) WITHOUT ROWID' WHERE name='t';
+PRAGMA writable_schema=RESET;
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES (2, 20, 42);
+SELECT dolt_commit('-Am', 'main adds row 2 with b=42');
+SELECT dolt_checkout('feat');
+CREATE UNIQUE INDEX idx_b ON t(b);
+SELECT dolt_commit('-Am', 'feat adds unique index on b');
+SELECT dolt_checkout('main');
+BEGIN;
+SELECT dolt_merge('feat');
+.headers off
+.mode list
+SELECT 'M|' || "table" || '|' || num_violations FROM dolt_constraint_violations;
+SELECT 'MR|' || id || '|' || b FROM dolt_constraint_violations_t ORDER BY id;
+DELETE FROM dolt_constraint_violations_t;
+SELECT 'V|' || dolt_verify_constraints('--all');
+SELECT 'VA|' || "table" || '|' || num_violations FROM dolt_constraint_violations;
+ROLLBACK;
+EOF
+)
+out=$(printf '%s\n' "$out" | grep -E '^(M|MR|V|VA)\|')
+check "short_default_unique_without_rowid" "M|t|2
+MR|1|42
+MR|2|42
+V|1
+VA|t|2" "$out"
+
+DB="$TMPROOT/short_default_unique_without_rowid_types.db"
+out=$("$DOLTLITE" "$DB" <<'EOF' 2>/dev/null
+.dbconfig defensive off
+CREATE TABLE t(k TEXT PRIMARY KEY, a INT) WITHOUT ROWID;
+INSERT INTO t VALUES ('k1', 10);
+PRAGMA writable_schema=ON;
+UPDATE sqlite_master SET sql='CREATE TABLE t(k TEXT PRIMARY KEY, a INT, ni INT DEFAULT -7, r REAL DEFAULT 42, tx TEXT DEFAULT ''hello'', bl BLOB DEFAULT x''deadbeef'', af TEXT DEFAULT 123, nl INT DEFAULT NULL) WITHOUT ROWID' WHERE name='t';
+PRAGMA writable_schema=RESET;
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES ('k2', 20, -7, 42.0, 'hello', x'deadbeef', '123', NULL);
+SELECT dolt_commit('-Am', 'main adds colliding row');
+SELECT dolt_checkout('feat');
+CREATE UNIQUE INDEX idx_ni ON t(ni);
+CREATE UNIQUE INDEX idx_r ON t(r);
+CREATE UNIQUE INDEX idx_tx ON t(tx);
+CREATE UNIQUE INDEX idx_bl ON t(bl);
+CREATE UNIQUE INDEX idx_af ON t(af);
+CREATE UNIQUE INDEX idx_nl ON t(nl);
+SELECT dolt_commit('-Am', 'feat adds unique indexes');
+SELECT dolt_checkout('main');
+BEGIN;
+SELECT dolt_merge('feat');
+.headers off
+.mode list
+SELECT 'M|' || "table" || '|' || num_violations FROM dolt_constraint_violations;
+SELECT 'MI|' || json_extract(violation_info, '$.Name') || '|' || count(*) FROM dolt_constraint_violations_t GROUP BY json_extract(violation_info, '$.Name') ORDER BY 1;
+DELETE FROM dolt_constraint_violations_t;
+SELECT 'V|' || dolt_verify_constraints('--all');
+SELECT 'VA|' || "table" || '|' || num_violations FROM dolt_constraint_violations;
+ROLLBACK;
+EOF
+)
+out=$(printf '%s\n' "$out" | grep -E '^(M|MI|V|VA)\|')
+check "short_default_unique_without_rowid_types" "M|t|10
+MI|idx_af|2
+MI|idx_bl|2
+MI|idx_ni|2
+MI|idx_r|2
+MI|idx_tx|2
+V|1
+VA|t|10" "$out"
+
+DB="$TMPROOT/short_default_unique_without_rowid_virtual.db"
+out=$("$DOLTLITE" "$DB" <<'EOF' 2>/dev/null
+.dbconfig defensive off
+CREATE TABLE t(id INT PRIMARY KEY, a INT) WITHOUT ROWID;
+INSERT INTO t VALUES (1, 10);
+PRAGMA writable_schema=ON;
+UPDATE sqlite_master SET sql='CREATE TABLE t(id INT PRIMARY KEY, a INT, b INT DEFAULT 42, v INT AS (b + 1) VIRTUAL) WITHOUT ROWID' WHERE name='t';
+PRAGMA writable_schema=RESET;
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feat');
+INSERT INTO t(id, a, b) VALUES (2, 20, 42);
+SELECT dolt_commit('-Am', 'main adds row 2 with b=42');
+SELECT dolt_checkout('feat');
+CREATE UNIQUE INDEX idx_v ON t(v);
+SELECT dolt_commit('-Am', 'feat adds unique index on v');
+SELECT dolt_checkout('main');
+BEGIN;
+SELECT dolt_merge('feat');
+.headers off
+.mode list
+SELECT 'M|' || "table" || '|' || num_violations FROM dolt_constraint_violations;
+SELECT 'MR|' || id || '|' || b FROM dolt_constraint_violations_t ORDER BY id;
+DELETE FROM dolt_constraint_violations_t;
+SELECT 'V|' || dolt_verify_constraints('--all');
+SELECT 'VA|' || "table" || '|' || num_violations FROM dolt_constraint_violations;
+ROLLBACK;
+EOF
+)
+out=$(printf '%s\n' "$out" | grep -E '^(M|MR|V|VA)\|')
+check "short_default_unique_without_rowid_virtual" "M|t|2
+MR|1|42
+MR|2|42
+V|1
+VA|t|2" "$out"
+
 echo
 echo "doltlite_merge_index_conflict: $pass passed, $fail failed"
 if [ "$fail" -gt 0 ]; then

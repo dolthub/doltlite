@@ -154,7 +154,7 @@ static int indexRecordField(Table *pTab, int iCol){
   return sqlite3TableColumnToIndex(sqlite3PrimaryKeyIndex(pTab), iCol);
 }
 
-static int columnDefaultSerialValue(
+int doltliteColumnDefaultSerialValue(
   sqlite3 *db,
   Table *pTab,
   int iCol,
@@ -473,7 +473,7 @@ static int doltliteBuildIndexEntryWithExpr(
         rc = doltliteSerialValueFromField(pRec, nRec, &info, iStore, &aMem[nOut]);
         if( rc!=SQLITE_OK ) goto expr_fail;
       }else{
-        rc = columnDefaultSerialValue(db, pTab, col, &aMem[nOut], &apKeep[nOut]);
+        rc = doltliteColumnDefaultSerialValue(db, pTab, col, &aMem[nOut], &apKeep[nOut]);
         if( rc!=SQLITE_OK ) goto expr_fail;
       }
       nOut++;
@@ -506,7 +506,7 @@ static int doltliteBuildIndexEntryWithExpr(
               pRec, nRec, &info, iStore, &aMem[nOut]);
           if( rc!=SQLITE_OK ) goto expr_fail;
         }else{
-          rc = columnDefaultSerialValue(db, pTab, col, &aMem[nOut], &apKeep[nOut]);
+          rc = doltliteColumnDefaultSerialValue(db, pTab, col, &aMem[nOut], &apKeep[nOut]);
           if( rc!=SQLITE_OK ) goto expr_fail;
         }
       }
