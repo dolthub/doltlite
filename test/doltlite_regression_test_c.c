@@ -14227,6 +14227,62 @@ static void run_rebase_abort_retry_after_claim_commit_error(void){
   removeDbFiles(dbpath);
 }
 
+static sqlite3_int64 regressionNowMs(void){
+  sqlite3_vfs *pVfs = sqlite3_vfs_find(0);
+  sqlite3_int64 t = 0;
+  pVfs->xCurrentTimeInt64(pVfs, &t);
+  return t;
+}
+
+/* Ordering the replayed commits ranks every ancestor of HEAD by generation,
+** so it must stay cheap next to writing that history in the first place. */
+static void run_rebase_deep_history_ordering(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char zSql[160];
+  sqlite3_int64 t0, tBuild, tRebase;
+  int rc;
+  int i;
+
+  printf("=== Rebase Deep History Ordering Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_rebase_deep_history");
+  removeDbFiles(dbpath);
+  check("rdh_open", open_db(dbpath, &db)==SQLITE_OK);
+  t0 = regressionNowMs();
+  rc = execSql(db,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);"
+      "INSERT INTO t VALUES(1,0),(2,0),(3,0);"
+      "SELECT dolt_commit('-Am','base');");
+  for(i=1; rc==SQLITE_OK && i<=4000; i++){
+    sqlite3_snprintf(sizeof(zSql), zSql,
+        "UPDATE t SET v=%d WHERE id=1; SELECT dolt_commit('-am','c%d');", i, i);
+    rc = execSqlSilent(db, zSql);
+    if( rc==SQLITE_OK && i==3990 ) rc = execSql(db, "SELECT dolt_branch('side')");
+  }
+  tBuild = regressionNowMs() - t0;
+  check("rdh_history", rc==SQLITE_OK);
+  check("rdh_side_commits", execSql(db,
+      "SELECT dolt_checkout('side');"
+      "UPDATE t SET v=1 WHERE id=2; SELECT dolt_commit('-am','first');"
+      "UPDATE t SET v=1 WHERE id=3; SELECT dolt_commit('-am','second');"
+      )==SQLITE_OK);
+  t0 = regressionNowMs();
+  rc = execSql(db, "SELECT dolt_rebase('main')");
+  tRebase = regressionNowMs() - t0;
+  check("rdh_rebase", rc==SQLITE_OK);
+  printf("  build %lld ms, rebase %lld ms\n",
+         (long long)tBuild, (long long)tRebase);
+  check("rdh_rebase_cheaper_than_history", tRebase<tBuild);
+  check("rdh_order", strcmp(queryScalarText(db,
+      "SELECT group_concat(message, ',') FROM"
+      " (SELECT message FROM dolt_log LIMIT 3)"),
+      "second,first,c4000")==0);
+  check("rdh_rows", strcmp(queryScalarText(db,
+      "SELECT group_concat(v, ',') FROM t"), "4000,1,1")==0);
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_rebase_main_table_schema_guard(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -21211,6 +21267,7 @@ static const RegressionCase aCases[] = {
   { "rebase_finish_failure_keeps_rebase", "Rebase Finish Failure Keeps Rebase Test", run_rebase_finish_failure_keeps_rebase },
   { "rebase_concurrent_peer_commit_is_preserved", "Rebase Concurrent Peer Commit Preservation Test", run_rebase_concurrent_peer_commit_is_preserved },
   { "rebase_continue_keeps_peer_branch", "Rebase Continue Keeps Peer Branch Test", run_rebase_continue_keeps_peer_branch },
+  { "rebase_deep_history_ordering", "Rebase Deep History Ordering Test", run_rebase_deep_history_ordering },
   { "rebase_main_table_schema_guard", "Rebase Main Table Schema Guard Test", run_rebase_main_table_schema_guard },
   { "rebase_temp_shadow_ignored", "Rebase Temp Shadow Ignored Test", run_rebase_temp_shadow_ignored },
   { "remote_add_duplicate_preserves_durable_state", "Remote Add Duplicate Preserves Durable State Test", run_remote_add_duplicate_preserves_durable_state },
