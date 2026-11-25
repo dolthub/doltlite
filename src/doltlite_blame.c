@@ -324,6 +324,11 @@ static int blameCollectLiveRows(
                   && pPkBlob && nPkBlob>0;
 
   if( prollyHashIsEmpty(pRoot) ) return SQLITE_OK;
+  if( pushIntKey
+   && ((hasPkLo && pkLoStrict && pkLo==LARGEST_INT64)
+    || (hasPkHi && pkHiStrict && pkHi==SMALLEST_INT64)) ){
+    return SQLITE_OK;
+  }
   prollyCursorInit(&cur, cs, pCache, pRoot, flags);
 
   if( pushBlob ){
