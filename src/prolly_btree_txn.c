@@ -446,6 +446,30 @@ int snapshotPendingForFlush(Btree *pBtree, Pgno iTable,
   return SQLITE_OK;
 }
 
+void undoSnapshotPendingForFlush(Btree *pBtree, Pgno iTable,
+                                 ProllyMutMap **ppPending,
+                                 ProllyMutMap *pFlushMap){
+  int i;
+  assert( pBtree!=0 && ppPending!=0 && pFlushMap!=0 );
+  for(i = pBtree->nSavepoint - 1; i >= 0; i--){
+    struct SavepointTableState *pState = &pBtree->aSavepointTables[i];
+    int j = findPendingSnapshotIndex(pState, iTable);
+    if( j >= 0 && pState->aPendingSnapshot[j].pPending==pFlushMap ){
+      pState->nPendingSnapshot--;
+      if( j < pState->nPendingSnapshot ){
+        pState->aPendingSnapshot[j] =
+            pState->aPendingSnapshot[pState->nPendingSnapshot];
+      }
+      break;
+    }
+  }
+  if( *ppPending && *ppPending!=pFlushMap ){
+    prollyMutMapFree(*ppPending);
+    sqlite3_free(*ppPending);
+  }
+  *ppPending = pFlushMap;
+}
+
 static int findITableIndex(
   const void *a,
   int n,

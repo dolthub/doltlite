@@ -1,0 +1,97 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+
+set testprefix doltlite_recover_savepoint_flush_oom
+
+do_execsql_test 1.0 {
+  CREATE TABLE t(a INTEGER PRIMARY KEY, b TEXT);
+  INSERT INTO t VALUES(1, 'one'), (2, 'two');
+  SELECT dolt_add('-A');
+  SELECT length(dolt_commit('-m', 'init')) > 0;
+} {0 1}
+faultsim_save_and_close
+
+do_faultsim_test 1.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+  db eval {
+    BEGIN;
+    SAVEPOINT sp1;
+    INSERT INTO t VALUES(3, 'three'), (4, 'four'), (5, 'five');
+  }
+} -body {
+  db eval { SELECT dolt_add('no_such_table') }
+} -test {
+  faultsim_test_result \
+      {1 {table not found: no_such_table}} \
+      {1 {out of memory}} \
+      {1 {failed to flush}} \
+      {1 {failed to load staged catalog}} \
+      {1 {failed to load head catalog}} \
+      {1 {failed to load schema for staging}} \
+      {1 {disk I/O error}}
+  if {$testresult eq "failed to flush" || $testresult eq "table not found: no_such_table"} {
+    if {[sqlite3_get_autocommit db]} {
+      error "transaction unexpectedly rolled back on: $testresult"
+    }
+    set cnt [db eval { SELECT count(*) FROM t }]
+    if {$cnt != 5} {
+      error "pending edits lost after failed flush: count=$cnt"
+    }
+    set rows [db eval { SELECT a, b FROM t ORDER BY a }]
+    if {$rows ne {1 one 2 two 3 three 4 four 5 five}} {
+      error "pending rows lost after failed flush: $rows"
+    }
+    db eval { ROLLBACK TO sp1; RELEASE sp1; }
+    set after_rb [db eval { SELECT count(*) FROM t }]
+    if {$after_rb != 2} {
+      error "rollback to sp1 returned wrong count: $after_rb"
+    }
+  }
+  catchsql ROLLBACK
+  faultsim_integrity_check
+}
+
+do_faultsim_test 1.2 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+  db eval {
+    BEGIN;
+    INSERT INTO t VALUES(3, 'three'), (4, 'four');
+    SAVEPOINT sp1;
+    INSERT INTO t VALUES(5, 'five'), (6, 'six');
+  }
+} -body {
+  db eval { SELECT dolt_add('no_such_table') }
+} -test {
+  faultsim_test_result \
+      {1 {table not found: no_such_table}} \
+      {1 {out of memory}} \
+      {1 {failed to flush}} \
+      {1 {failed to load staged catalog}} \
+      {1 {failed to load head catalog}} \
+      {1 {failed to load schema for staging}} \
+      {1 {disk I/O error}}
+  if {$testresult eq "failed to flush" || $testresult eq "table not found: no_such_table"} {
+    if {[sqlite3_get_autocommit db]} {
+      error "transaction unexpectedly rolled back on: $testresult"
+    }
+    set rows [db eval { SELECT a FROM t ORDER BY a }]
+    if {$rows ne {1 2 3 4 5 6}} {
+      error "pending rows lost after failed flush: $rows"
+    }
+    db eval { ROLLBACK TO sp1; RELEASE sp1; }
+    set after_sp [db eval { SELECT a FROM t ORDER BY a }]
+    if {$after_sp ne {1 2 3 4}} {
+      error "rollback to sp1 returned wrong rows: $after_sp"
+    }
+    db eval { ROLLBACK }
+    set after_rb [db eval { SELECT a FROM t ORDER BY a }]
+    if {$after_rb ne {1 2}} {
+      error "rollback returned wrong rows: $after_rb"
+    }
+  }
+  catchsql ROLLBACK
+  faultsim_integrity_check
+}
+
+finish_test

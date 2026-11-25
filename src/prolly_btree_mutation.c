@@ -470,21 +470,23 @@ static int flushMutMap(BtCursor *pCur){
                                (ProllyMutMap**)&pTE->pPending,
                                &pFlushMap, &captured);
   if( rc!=SQLITE_OK ) return rc;
-  if( captured ){
-    refreshCursorMutMapAliases(pCur->pBtree, pCur->pBt, pCur->pgnoRoot,
-                               (ProllyMutMap*)pTE->pPending);
-  }
   rc = applyMutMapToTableRoot(pCur->pBt, pTE, pFlushMap);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    if( captured ){
+      undoSnapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot,
+                                  (ProllyMutMap**)&pTE->pPending, pFlushMap);
+    }
+    return rc;
+  }
   pCur->pCur.root = pTE->root;
   if( captured ){
     pCur->flushSeekEdits = 0;
   }else{
     prollyMutMapClear((ProllyMutMap*)pTE->pPending);
-    /* Clearing in place leaves every cursor's mmIdx past nEntries. */
-    refreshCursorMutMapAliases(pCur->pBtree, pCur->pBt, pCur->pgnoRoot,
-                               (ProllyMutMap*)pTE->pPending);
   }
+  /* Clearing or swapping leaves every cursor's mmIdx stale. */
+  refreshCursorMutMapAliases(pCur->pBtree, pCur->pBt, pCur->pgnoRoot,
+                             (ProllyMutMap*)pTE->pPending);
 
   return SQLITE_OK;
 }
@@ -512,13 +514,15 @@ int flushPendingForTable(
                                (ProllyMutMap**)&pTE->pPending,
                                &pFlushMap, &captured);
   if( rc!=SQLITE_OK ) return rc;
-  if( captured ){
-    refreshCursorMutMapAliases(pBtree, pBt, pTE->iTable,
-                               (ProllyMutMap*)pTE->pPending);
-  }
 
   rc = applyMutMapToTableRoot(pBt, pTE, pFlushMap);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    if( captured ){
+      undoSnapshotPendingForFlush(pBtree, pTE->iTable,
+                                  (ProllyMutMap**)&pTE->pPending, pFlushMap);
+    }
+    return rc;
+  }
 
   if( pTE->pPending==pMap ){
     if( clearInPlace ){
@@ -530,6 +534,9 @@ int flushPendingForTable(
       pTE->pPending = 0;
       refreshCursorMutMapAliases(pBtree, pBt, pTE->iTable, 0);
     }
+  }else{
+    refreshCursorMutMapAliases(pBtree, pBt, pTE->iTable,
+                               (ProllyMutMap*)pTE->pPending);
   }
   pTE->pendingFlushSeekEdits = 0;
   return SQLITE_OK;
