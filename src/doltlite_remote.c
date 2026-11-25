@@ -134,12 +134,14 @@ typedef struct SyncEnqCtx SyncEnqCtx;
 struct SyncEnqCtx {
   SyncQueue *q;
   ProllyHashSet *seen;
+  int nChild;
 };
 
 static int syncChildCb(void *pCtx, const ProllyHash *pHash){
   SyncEnqCtx *ctx = (SyncEnqCtx*)pCtx;
   int rc;
   if( prollyHashIsEmpty(pHash) ) return SQLITE_OK;
+  ctx->nChild++;
   if( prollyHashSetContains(ctx->seen, pHash) ) return SQLITE_OK;
   rc = prollyHashSetAdd(ctx->seen, pHash);
   if( rc==SQLITE_OK ) rc = syncQueuePush(ctx->q, pHash);
@@ -150,12 +152,17 @@ static int syncEnqueueChildren(
   const u8 *data,
   int nData,
   SyncQueue *q,
-  ProllyHashSet *seen
+  ProllyHashSet *seen,
+  int *pnChild
 ){
   SyncEnqCtx ctx;
+  int rc;
   ctx.q = q;
   ctx.seen = seen;
-  return doltliteEnumerateChunkChildren(data, nData, syncChildCb, &ctx);
+  ctx.nChild = 0;
+  rc = doltliteEnumerateChunkChildren(data, nData, syncChildCb, &ctx);
+  if( pnChild ) *pnChild = ctx.nChild;
+  return rc;
 }
 
 static int remoteValidateGraphEx(
@@ -163,6 +170,7 @@ static int remoteValidateGraphEx(
   const ProllyHash *aRoots,
   int nRoots,
   ProllyHashSet *pTrusted,
+  ProllyHashSet *pLeaves,
   int *pbMissing
 ){
   SyncQueue queue;
@@ -189,27 +197,28 @@ static int remoteValidateGraphEx(
     u8 *pData = 0;
     int nData = 0;
     if( pTrusted && prollyHashSetContains(pTrusted, &hash) ) continue;
+    if( pLeaves && prollyHashSetContains(pLeaves, &hash) ){
+      int has = 0;
+      rc = chunkStoreHas(pStore, &hash, &has);
+      if( rc==SQLITE_OK && !has ){
+        if( pbMissing ) *pbMissing = 1;
+        rc = SQLITE_CORRUPT;
+      }
+      continue;
+    }
     rc = chunkStoreGet(pStore, &hash, &pData, &nData);
     if( rc==SQLITE_NOTFOUND ){
       if( pbMissing ) *pbMissing = 1;
       rc = SQLITE_CORRUPT;
     }
     if( rc==SQLITE_OK ){
-      rc = syncEnqueueChildren(pData, nData, &queue, &seen);
+      rc = syncEnqueueChildren(pData, nData, &queue, &seen, 0);
     }
     sqlite3_free(pData);
   }
   prollyHashSetFree(&seen);
   syncQueueFree(&queue);
   return rc;
-}
-
-static int remoteValidateGraph(
-  ChunkStore *pStore,
-  const ProllyHash *aRoots,
-  int nRoots
-){
-  return remoteValidateGraphEx(pStore, aRoots, nRoots, 0, 0);
 }
 
 /* Hashes whose closure the store already holds complete: every chunk under
@@ -270,7 +279,7 @@ static int remoteBuildTrustedSet(
         break;
       }
       default:
-        rc = syncEnqueueChildren(pData, nData, &queue, pTrusted);
+        rc = syncEnqueueChildren(pData, nData, &queue, pTrusted, 0);
         break;
     }
     sqlite3_free(pData);
@@ -301,7 +310,7 @@ static int remoteValidateGraphWithAnchors(
   }
   if( rc==SQLITE_OK ){
     rc = remoteValidateGraphEx(pStore, aRoots, nRoots,
-                               bTrusted ? &trusted : 0, pbMissing);
+                               bTrusted ? &trusted : 0, 0, pbMissing);
   }
   prollyHashSetFree(&trusted);
   return rc;
@@ -397,7 +406,7 @@ int doltliteStoreGraphIncomplete(ChunkStore *pStore, int *pbMissing){
     aRoots[nRoots++] = aBranch[i].workingSetHash;
   }
   for(i=0; i<nTag; i++) aRoots[nRoots++] = aTag[i].commitHash;
-  rc = remoteValidateGraphEx(pStore, aRoots, nRoots, 0, pbMissing);
+  rc = remoteValidateGraphEx(pStore, aRoots, nRoots, 0, 0, pbMissing);
   sqlite3_free(aRoots);
   sqlite3_free(chunkStoreSourceTakeError(pStore, 0));
   sqlite3_free(chunkStoreTakeMissingChunkError(pStore));
@@ -519,7 +528,8 @@ static int syncChunks(
   DoltliteRemote *pDst,
   ProllyHash *aRoots,
   int nRoots,
-  const ChunkStore *pDstRefs
+  const ChunkStore *pDstRefs,
+  ProllyHashSet *pLeaves
 ){
   SyncQueue queue;
   ProllyHashSet seen;
@@ -612,8 +622,12 @@ static int syncChunks(
                                  pB->apData[i], pB->anData[i]);
           }
           if( rc==SQLITE_OK ){
+            int nChild = 0;
             rc = syncEnqueueChildren(pB->apData[i], pB->anData[i],
-                                     &queue, &seen);
+                                     &queue, &seen, &nChild);
+            if( rc==SQLITE_OK && pLeaves && nChild==0 ){
+              rc = prollyHashSetAdd(pLeaves, &pB->aFetch[i]);
+            }
           }
         }
         for(i=0; i<nFetch; i++) sqlite3_free(pB->apData[i]);
@@ -637,7 +651,11 @@ static int syncChunks(
             rc = pDst->xPutChunk(pDst, &pB->aFetch[i], data, nData);
           }
           if( rc==SQLITE_OK ){
-            rc = syncEnqueueChildren(data, nData, &queue, &seen);
+            int nChild = 0;
+            rc = syncEnqueueChildren(data, nData, &queue, &seen, &nChild);
+            if( rc==SQLITE_OK && pLeaves && nChild==0 ){
+              rc = prollyHashSetAdd(pLeaves, &pB->aFetch[i]);
+            }
           }
           sqlite3_free(data);
         }
@@ -657,7 +675,7 @@ int doltliteSyncChunks(
   ProllyHash *aRoots,
   int nRoots
 ){
-  return syncChunks(pSrc, pDst, aRoots, nRoots, 0);
+  return syncChunks(pSrc, pDst, aRoots, nRoots, 0, 0);
 }
 
 /* FsRemote and LocalAsRemote both start with the vtable then ChunkStore*,
@@ -2314,7 +2332,7 @@ int doltlitePushAs(
         rc = SQLITE_NOMEM;
         goto push_done;
       }
-      rc = syncChunks(pLocalSrc, pRemote, &localCommit, 1, &refs);
+      rc = syncChunks(pLocalSrc, pRemote, &localCommit, 1, &refs, 0);
       pLocalSrc->xClose(pLocalSrc);
       if( rc!=SQLITE_OK ) goto push_done;
       {
@@ -2417,7 +2435,7 @@ int doltlitePushTag(
       break;
     }
     rc = syncChunks(pLocalSrc, pRemote, &tagCommit, 1,
-                              &originalRefs);
+                              &originalRefs, 0);
     pLocalSrc->xClose(pLocalSrc);
     if( rc!=SQLITE_OK ) goto tag_attempt_done;
 
@@ -3170,6 +3188,7 @@ int doltliteClone(
   ProllyHash oldRefsHash;
   ProllyHash oldCommittedRefsHash;
   SavedRefsState savedRefs;
+  ProllyHashSet leaves;
   int refsDetached = 0;
   int locked = 0;
   u8 oldRefsStale;
@@ -3179,6 +3198,7 @@ int doltliteClone(
   memcpy(&oldCommittedRefsHash, &pLocal->refs.committedRefsHash,
          sizeof(ProllyHash));
   memset(&savedRefs, 0, sizeof(savedRefs));
+  memset(&leaves, 0, sizeof(leaves));
   oldRefsStale = pLocal->bRefsStale;
   pRemote->zMissingChunkError[0] = 0;
   if( pbMissingBranch ) *pbMissingBranch = 0;
@@ -3204,7 +3224,12 @@ int doltliteClone(
       return SQLITE_NOMEM;
     }
 
-    rc = doltliteSyncChunks(pRemote, pLocalDst, aRoots, nRoots);
+    /* The sync verified these chunks and found no children under them, so
+    ** the walk under the lock only has to find them still present. */
+    rc = prollyHashSetInit(&leaves, 1024);
+    if( rc==SQLITE_OK ){
+      rc = syncChunks(pRemote, pLocalDst, aRoots, nRoots, 0, &leaves);
+    }
 
     if( rc==SQLITE_OK ) rc = pLocalDst->xCommit(pLocalDst);
     pLocalDst->xClose(pLocalDst);
@@ -3212,6 +3237,7 @@ int doltliteClone(
     ** test drive a sweep in that window. */
     if( rc==SQLITE_OK ) doltliteTestRunBeforeRefInstallHook();
     if( rc!=SQLITE_OK ){
+      prollyHashSetFree(&leaves);
       sqlite3_free(aRoots);
       sqlite3_free(refsData);
       return rc;
@@ -3231,6 +3257,7 @@ int doltliteClone(
     int occupied = doltliteCloneTargetOccupied(pLocal);
     if( occupied ){
       if( pbOccupied ) *pbOccupied = occupied;
+      prollyHashSetFree(&leaves);
       sqlite3_free(aRoots);
       sqlite3_free(refsData);
       if( locked ) chunkStoreUnlock(pLocal);
@@ -3238,7 +3265,7 @@ int doltliteClone(
     }
   }
   if( rc==SQLITE_OK && nRoots>0 ){
-    rc = remoteValidateGraph(pLocal, aRoots, nRoots);
+    rc = remoteValidateGraphEx(pLocal, aRoots, nRoots, 0, &leaves, 0);
     if( rc==SQLITE_NOTFOUND || rc==SQLITE_CORRUPT ){
       /* A miss on a store that already has origin records the lazy-clone
       ** corruption text. This refusal is retryable; that text is not. */
@@ -3246,6 +3273,7 @@ int doltliteClone(
       rc = SQLITE_BUSY_SNAPSHOT;
     }
   }
+  prollyHashSetFree(&leaves);
   sqlite3_free(aRoots);
   aRoots = 0;
   if( rc!=SQLITE_OK ) goto clone_restore_refs;
