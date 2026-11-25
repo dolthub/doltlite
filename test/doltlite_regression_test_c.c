@@ -21914,6 +21914,208 @@ static void run_incrblob_payload_putdata_requireseek(void){
   removeDbFiles(dbpath);
 }
 
+static void run_fast_intleaf_skips_degenerate_schema_rows(void){
+  char dbpath[512];
+  sqlite3 *db = 0;
+  Btree *pBt = 0;
+  BtCursor *pCur = 0;
+  BtreePayload payload;
+  static const u8 placeholderRec[6] = { 6, 0, 0, 0, 0, 0 };
+  int nCur, rc, res = 0;
+  i64 k1 = 0, k2 = 0, k3 = 0;
+
+  printf("=== Fast IntLeaf Skips Degenerate Schema Rows Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_fast_intleaf_schema_skip_c");
+  removeDbFiles(dbpath);
+  check("schema_skip_open", open_db(dbpath, &db)==SQLITE_OK);
+  check("schema_skip_create",
+        execSql(db,
+            "CREATE TABLE t1(id INTEGER PRIMARY KEY);"
+            "CREATE TABLE t2(id INTEGER PRIMARY KEY);")
+        ==SQLITE_OK);
+
+  pBt = db->aDb[0].pBt;
+  check("schema_skip_btree", pBt!=0 && sqlite3BtreeIsDoltliteFormat(pBt));
+  nCur = sqlite3BtreeCursorSize();
+  pCur = sqlite3_malloc(nCur);
+  check("schema_skip_alloc", pCur!=0);
+  if( !pCur ){
+    sqlite3_close(db);
+    removeDbFiles(dbpath);
+    return;
+  }
+
+  /* Part 1: empty-payload rows at middle and end of sqlite_master leaf. */
+  sqlite3BtreeEnter(pBt);
+  rc = sqlite3BtreeBeginTrans(pBt, 1, 0);
+  check("schema_skip_begin1", rc==SQLITE_OK);
+  sqlite3BtreeCursorZero(pCur);
+  rc = sqlite3BtreeCursor(pBt, 1, BTREE_WRCSR, 0, pCur);
+  check("schema_skip_wcur1", rc==SQLITE_OK);
+  rc = sqlite3BtreeFirst(pCur, &res);
+  check("schema_skip_first_id", rc==SQLITE_OK && res==0);
+  k1 = sqlite3BtreeIntegerKey(pCur);
+  rc = sqlite3BtreeNext(pCur, 0);
+  check("schema_skip_second_id", rc==SQLITE_OK);
+  k2 = sqlite3BtreeIntegerKey(pCur);
+  check("schema_skip_ordered_ids", k2 > k1);
+
+  /* Insert empty-payload rows between k1 and k2 (at k2+10 after moving t2?
+  ** Keep k1 and k2 as-is, insert empty row between k2 and k3 and after k3). */
+  sqlite3BtreeCloseCursor(pCur);
+  rc = sqlite3BtreeCommit(pBt);
+  check("schema_skip_commit_noop", rc==SQLITE_OK);
+  sqlite3BtreeLeave(pBt);
+
+  check("schema_skip_create_t3",
+        execSql(db, "CREATE TABLE t3(id INTEGER PRIMARY KEY);")==SQLITE_OK);
+
+  sqlite3BtreeEnter(pBt);
+  rc = sqlite3BtreeBeginTrans(pBt, 1, 0);
+  check("schema_skip_begin2", rc==SQLITE_OK);
+  sqlite3BtreeCursorZero(pCur);
+  rc = sqlite3BtreeCursor(pBt, 1, BTREE_WRCSR, 0, pCur);
+  check("schema_skip_wcur2", rc==SQLITE_OK);
+  rc = sqlite3BtreeLast(pCur, &res);
+  check("schema_skip_last_id", rc==SQLITE_OK && res==0);
+  k3 = sqlite3BtreeIntegerKey(pCur);
+  check("schema_skip_k3_gt_k2", k3 > k2);
+
+  /* Overwrite k2 (middle item idx=1) and insert k3+1 (trailing item) with
+  ** empty payloads so both sit in the committed sqlite_master leaf. */
+  memset(&payload, 0, sizeof(payload));
+  payload.nKey = k2;
+  payload.pData = 0;
+  payload.nData = 0;
+  rc = sqlite3BtreeInsert(pCur, &payload, 0, 0);
+  check("schema_skip_ins_empty_mid", rc==SQLITE_OK);
+  payload.nKey = k3 + 1;
+  rc = sqlite3BtreeInsert(pCur, &payload, 0, 0);
+  check("schema_skip_ins_empty_end", rc==SQLITE_OK);
+  sqlite3BtreeCloseCursor(pCur);
+  rc = sqlite3BtreeCommit(pBt);
+  check("schema_skip_commit_empty", rc==SQLITE_OK);
+  sqlite3BtreeLeave(pBt);
+
+  /* Reopen so sqlite_master has pMutMap == 0 (fast-intleaf path). */
+  sqlite3_close(db);
+  db = 0;
+  check("schema_skip_reopen1", open_db(dbpath, &db)==SQLITE_OK);
+  pBt = db->aDb[0].pBt;
+  check("schema_skip_btree_reopen1", pBt!=0 && sqlite3BtreeIsDoltliteFormat(pBt));
+
+  /* Forward scan on clean committed sqlite_master leaf (pMutMap == 0). */
+  sqlite3BtreeEnter(pBt);
+  rc = sqlite3BtreeBeginTrans(pBt, 0, 0);
+  check("schema_skip_rtxn1", rc==SQLITE_OK);
+  sqlite3BtreeCursorZero(pCur);
+  rc = sqlite3BtreeCursor(pBt, 1, 0, 0, pCur);
+  check("schema_skip_rcur1", rc==SQLITE_OK);
+  rc = sqlite3BtreeFirst(pCur, &res);
+  check("schema_skip_empty_fwd_1",
+        rc==SQLITE_OK && res==0 && sqlite3BtreeIntegerKey(pCur)==k1);
+  rc = sqlite3BtreeNext(pCur, 0);
+  check("schema_skip_empty_fwd_2",
+        rc==SQLITE_OK && sqlite3BtreeIntegerKey(pCur)==k3);
+  rc = sqlite3BtreeNext(pCur, 0);
+  check("schema_skip_empty_fwd_eof",
+        rc==SQLITE_DONE && sqlite3BtreeEof(pCur)!=0);
+
+  /* Backward scan on the same leaf. */
+  rc = sqlite3BtreeLast(pCur, &res);
+  check("schema_skip_empty_bwd_1",
+        rc==SQLITE_OK && res==0 && sqlite3BtreeIntegerKey(pCur)==k3);
+  rc = sqlite3BtreePrevious(pCur, 0);
+  check("schema_skip_empty_bwd_2",
+        rc==SQLITE_OK && sqlite3BtreeIntegerKey(pCur)==k1);
+  rc = sqlite3BtreePrevious(pCur, 0);
+  check("schema_skip_empty_bwd_eof",
+        rc==SQLITE_DONE && sqlite3BtreeEof(pCur)!=0);
+  sqlite3BtreeCloseCursor(pCur);
+  sqlite3BtreeCommit(pBt);
+  sqlite3BtreeLeave(pBt);
+
+  check("schema_skip_empty_sql_count",
+        strcmp(queryScalarText(db, "SELECT count(rowid) FROM sqlite_master"), "2")==0);
+  check("schema_skip_empty_sql_names",
+        strcmp(queryScalarText(db,
+            "SELECT group_concat(name, ',') FROM "
+            "(SELECT name FROM sqlite_master ORDER BY rowid)"),
+            "t1,t3")==0);
+
+  /* Part 2: 6-byte schema placeholder rows filtered after autocommit OOM
+  ** rollback (bFilterSchemaPlaceholders = 1). */
+  sqlite3BtreeEnter(pBt);
+  rc = sqlite3BtreeBeginTrans(pBt, 1, 0);
+  check("schema_skip_begin3", rc==SQLITE_OK);
+  sqlite3BtreeCursorZero(pCur);
+  rc = sqlite3BtreeCursor(pBt, 1, BTREE_WRCSR, 0, pCur);
+  check("schema_skip_wcur3", rc==SQLITE_OK);
+  memset(&payload, 0, sizeof(payload));
+  payload.pData = placeholderRec;
+  payload.nData = (int)sizeof(placeholderRec);
+  payload.nKey = k2;
+  rc = sqlite3BtreeInsert(pCur, &payload, 0, 0);
+  check("schema_skip_ins_ph_mid", rc==SQLITE_OK);
+  payload.nKey = k3 + 1;
+  rc = sqlite3BtreeInsert(pCur, &payload, 0, 0);
+  check("schema_skip_ins_ph_end", rc==SQLITE_OK);
+  sqlite3BtreeCloseCursor(pCur);
+  rc = sqlite3BtreeCommit(pBt);
+  check("schema_skip_commit_ph", rc==SQLITE_OK);
+
+  /* Trigger autocommit OOM rollback to set bFilterSchemaPlaceholders = 1. */
+  rc = sqlite3BtreeBeginTrans(pBt, 1, 0);
+  check("schema_skip_begin_oom", rc==SQLITE_OK);
+  db->autoCommit = 1;
+  db->mallocFailed = 1;
+  rc = sqlite3BtreeRollback(pBt, SQLITE_NOMEM, 1);
+  db->mallocFailed = 0;
+  check("schema_skip_oom_rollback", rc==SQLITE_OK);
+
+  /* Forward scan must skip both 6-byte placeholder rows on committed leaf. */
+  rc = sqlite3BtreeBeginTrans(pBt, 0, 0);
+  check("schema_skip_rtxn2", rc==SQLITE_OK);
+  sqlite3BtreeCursorZero(pCur);
+  rc = sqlite3BtreeCursor(pBt, 1, 0, 0, pCur);
+  check("schema_skip_rcur2", rc==SQLITE_OK);
+  rc = sqlite3BtreeFirst(pCur, &res);
+  check("schema_skip_ph_fwd_1",
+        rc==SQLITE_OK && res==0 && sqlite3BtreeIntegerKey(pCur)==k1);
+  rc = sqlite3BtreeNext(pCur, 0);
+  check("schema_skip_ph_fwd_2",
+        rc==SQLITE_OK && sqlite3BtreeIntegerKey(pCur)==k3);
+  rc = sqlite3BtreeNext(pCur, 0);
+  check("schema_skip_ph_fwd_eof",
+        rc==SQLITE_DONE && sqlite3BtreeEof(pCur)!=0);
+
+  /* Backward scan must also skip both 6-byte placeholder rows. */
+  rc = sqlite3BtreeLast(pCur, &res);
+  check("schema_skip_ph_bwd_1",
+        rc==SQLITE_OK && res==0 && sqlite3BtreeIntegerKey(pCur)==k3);
+  rc = sqlite3BtreePrevious(pCur, 0);
+  check("schema_skip_ph_bwd_2",
+        rc==SQLITE_OK && sqlite3BtreeIntegerKey(pCur)==k1);
+  rc = sqlite3BtreePrevious(pCur, 0);
+  check("schema_skip_ph_bwd_eof",
+        rc==SQLITE_DONE && sqlite3BtreeEof(pCur)!=0);
+  sqlite3BtreeCloseCursor(pCur);
+  sqlite3BtreeCommit(pBt);
+  sqlite3BtreeLeave(pBt);
+
+  check("schema_skip_ph_sql_count",
+        strcmp(queryScalarText(db, "SELECT count(rowid) FROM sqlite_master"), "2")==0);
+  check("schema_skip_ph_sql_names",
+        strcmp(queryScalarText(db,
+            "SELECT group_concat(name, ',') FROM "
+            "(SELECT name FROM sqlite_master ORDER BY rowid)"),
+            "t1,t3")==0);
+
+  sqlite3_free(pCur);
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -22210,7 +22412,8 @@ static const RegressionCase aCases[] = {
   { "opfs_like_vfs", "OPFS-like VFS File Database Test", run_opfs_like_vfs },
   { "opfs_large_transaction", "OPFS Large Transaction Test", run_opfs_large_transaction },
   { "push_refreshes_before_reading_refs", "Push Refreshes Before Reading Refs Test", run_push_refreshes_before_reading_refs },
-  { "incrblob_payload_putdata_requireseek", "Incrblob PayloadChecked/PutData RequireSeek Test", run_incrblob_payload_putdata_requireseek }
+  { "incrblob_payload_putdata_requireseek", "Incrblob PayloadChecked/PutData RequireSeek Test", run_incrblob_payload_putdata_requireseek },
+  { "fast_intleaf_skips_degenerate_schema_rows", "Fast IntLeaf Skips Degenerate Schema Rows Test", run_fast_intleaf_skips_degenerate_schema_rows }
 };
 
 static int run_case_by_name(const char *zName){
