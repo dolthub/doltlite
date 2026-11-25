@@ -525,4 +525,105 @@ run_test "workspace_columns_follow_rolled_back_drop" \
 7" "$STALE_DB"
 rm -f "$STALE_DB"
 
+# Recreating an index shifts its rootpage (including colliding with another
+# table's rootpage in stagedCat); workspace staging must still update the
+# staged index by name rather than by live working rootpage.
+RP_DB=/tmp/doltlite_workspace_rootpage_$$.db
+rm -f "$RP_DB"
+dltest_run_sql "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE INDEX idx_v ON t(v);
+INSERT INTO t VALUES(1,10),(2,20);
+SELECT dolt_commit('-Am','base');
+DROP INDEX idx_v;
+CREATE TABLE filler(id INTEGER PRIMARY KEY, x TEXT);
+INSERT INTO filler VALUES(1,'keep');
+CREATE INDEX idx_v ON t(v);
+UPDATE t SET v=100 WHERE id=1;
+UPDATE dolt_workspace_t SET staged=1 WHERE to_id=1;
+SELECT dolt_commit('-m','stage row');
+SELECT dolt_reset('--hard');
+" "$RP_DB" >/dev/null
+run_test "workspace_recreated_index_rootpage_shift_integrity" \
+  "PRAGMA integrity_check;" "ok" "$RP_DB"
+run_test "workspace_recreated_index_rootpage_shift_lookup" \
+  "SELECT id || '|' || v FROM t INDEXED BY idx_v ORDER BY id;" \
+  $'1|100\n2|20' "$RP_DB"
+rm -f "$RP_DB"
+
+COL_DB=/tmp/doltlite_workspace_rootpage_collide_$$.db
+rm -f "$COL_DB"
+dltest_run_sql "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE INDEX idx_v ON t(v);
+CREATE TABLE other(id INTEGER PRIMARY KEY, x TEXT);
+INSERT INTO t VALUES(1,10),(2,20);
+INSERT INTO other VALUES(1,'keep'),(2,'safe');
+SELECT dolt_commit('-Am','base');
+DROP TABLE other;
+DROP INDEX idx_v;
+CREATE TABLE f1(id INTEGER PRIMARY KEY);
+CREATE TABLE f2(id INTEGER PRIMARY KEY);
+CREATE INDEX idx_v ON t(v);
+UPDATE t SET v=100 WHERE id=1;
+UPDATE dolt_workspace_t SET staged=1 WHERE to_id=1;
+SELECT dolt_commit('-m','stage row');
+SELECT dolt_reset('--hard');
+" "$COL_DB" >/dev/null
+run_test "workspace_recreated_index_rootpage_collision_integrity" \
+  "PRAGMA integrity_check;" "ok" "$COL_DB"
+run_test "workspace_recreated_index_rootpage_collision_lookup" \
+  "SELECT id || '|' || v FROM t INDEXED BY idx_v ORDER BY id;" \
+  $'1|100\n2|20' "$COL_DB"
+run_test "workspace_recreated_index_rootpage_collision_other_table" \
+  "SELECT id || '|' || x FROM other ORDER BY id;" \
+  $'1|keep\n2|safe' "$COL_DB"
+rm -f "$COL_DB"
+
+# Dropping an index in working must refuse row-level workspace staging as a
+# schema change rather than leaving the staged index stale.
+DROP_IDX_DB=/tmp/doltlite_workspace_drop_idx_$$.db
+rm -f "$DROP_IDX_DB"
+dltest_run_sql "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE INDEX idx_v ON t(v);
+INSERT INTO t VALUES(1,10),(2,20);
+SELECT dolt_commit('-Am','base');
+DROP INDEX idx_v;
+UPDATE t SET v=100 WHERE id=1;
+" "$DROP_IDX_DB" >/dev/null
+drop_idx_err=$("$DOLTLITE" "$DROP_IDX_DB" "UPDATE dolt_workspace_t SET staged=1 WHERE to_id=1;" 2>&1 || true)
+if echo "$drop_idx_err" | grep -q "not modifiable due to schema change"; then
+  dltest_pass
+else
+  dltest_fail "workspace_drop_index_refused" "  got: $drop_idx_err"
+fi
+run_test "workspace_drop_index_staged_unchanged" \
+  "SELECT count(*) FROM dolt_workspace_t WHERE staged=1;" "0" "$DROP_IDX_DB"
+dltest_run_sql "SELECT dolt_reset('--hard');" "$DROP_IDX_DB" >/dev/null
+run_test "workspace_drop_index_head_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DROP_IDX_DB"
+rm -f "$DROP_IDX_DB"
+
+# Dropping an index that was added in STAGED (not HEAD) must also refuse
+# row-level staging.
+STAGED_IDX_DB=/tmp/doltlite_workspace_staged_idx_$$.db
+rm -f "$STAGED_IDX_DB"
+dltest_run_sql "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1,10),(2,20);
+SELECT dolt_commit('-Am','base');
+CREATE INDEX idx_v ON t(v);
+SELECT dolt_add('t');
+DROP INDEX idx_v;
+UPDATE t SET v=100 WHERE id=1;
+" "$STAGED_IDX_DB" >/dev/null
+staged_idx_err=$("$DOLTLITE" "$STAGED_IDX_DB" "UPDATE dolt_workspace_t SET staged=1 WHERE to_id=1;" 2>&1 || true)
+if echo "$staged_idx_err" | grep -q "not modifiable due to schema change"; then
+  dltest_pass
+else
+  dltest_fail "workspace_drop_staged_index_refused" "  got: $staged_idx_err"
+fi
+rm -f "$STAGED_IDX_DB"
+
 dltest_finish

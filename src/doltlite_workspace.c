@@ -665,30 +665,93 @@ static int wsCloneEmptyEntry(
   return SQLITE_OK;
 }
 
+static int wsIndexSchemaChangedBetween(
+  sqlite3 *db,
+  const ProllyHash *pCatA,
+  const ProllyHash *pCatB,
+  const char *zTable,
+  int *pChanged
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  SchemaEntry *aA = 0, *aB = 0;
+  int nA = 0, nB = 0;
+  int rc;
+
+  *pChanged = 0;
+  if( prollyHashCompare(pCatA, pCatB)==0 ) return SQLITE_OK;
+  if( !cs || !pCache ) return SQLITE_ERROR;
+  rc = loadSchemaFromCatalog(db, cs, pCache, pCatA, &aA, &nA);
+  if( rc==SQLITE_OK ){
+    rc = loadSchemaFromCatalog(db, cs, pCache, pCatB, &aB, &nB);
+  }
+  if( rc==SQLITE_OK ){
+    *pChanged = doltliteIndexSchemaRowsDifferForTable(aA, nA, aB, nB, zTable);
+  }
+  freeSchemaEntries(aA, nA);
+  freeSchemaEntries(aB, nB);
+  return rc;
+}
+
+static Pgno wsFindStagedIndexRootpage(
+  const SchemaEntry *aSchema,
+  int nSchema,
+  const char *zTable,
+  const char *zIndex
+){
+  int i;
+  for(i=0; i<nSchema; i++){
+    if( aSchema[i].zType && strcmp(aSchema[i].zType, "index")==0
+     && aSchema[i].zTblName && sqlite3_stricmp(aSchema[i].zTblName, zTable)==0
+     && aSchema[i].zName && sqlite3_stricmp(aSchema[i].zName, zIndex)==0 ){
+      return aSchema[i].iRootpage;
+    }
+  }
+  return 0;
+}
+
 static int wsTableSchemaChanged(
   sqlite3 *db, const char *zTable, int *pChanged
 ){
-  ProllyHash headHash, headCat, workCat;
-  ProllyHash headRoot, workRoot, headSchema, workSchema;
-  u8 headFlags = 0, workFlags = 0;
-  int headRc, workRc, rc;
+  ProllyHash headHash, headCat, stagedCat, workCat;
+  ProllyHash headRoot, stagedRoot, workRoot;
+  ProllyHash headSchema, stagedSchema, workSchema;
+  u8 headFlags = 0, stagedFlags = 0, workFlags = 0;
+  int headRc, stagedRc = SQLITE_NOTFOUND, workRc, rc;
+  int hasSeparateStaged;
 
   *pChanged = 0;
   doltliteGetSessionHead(db, &headHash);
   if( prollyHashIsEmpty(&headHash) ) return SQLITE_OK;
   rc = doltliteCommitCatalogHash(db, &headHash, &headCat);
   if( rc!=SQLITE_OK ) return rc;
+  doltliteGetSessionStaged(db, &stagedCat);
+  if( prollyHashIsEmpty(&stagedCat) ) stagedCat = headCat;
+  hasSeparateStaged = (prollyHashCompare(&stagedCat, &headCat)!=0);
   rc = doltliteFlushCatalogToHash(db, &workCat);
   if( rc!=SQLITE_OK ) return rc;
   memset(&headRoot, 0, sizeof(headRoot));
+  memset(&stagedRoot, 0, sizeof(stagedRoot));
   memset(&workRoot, 0, sizeof(workRoot));
   memset(&headSchema, 0, sizeof(headSchema));
+  memset(&stagedSchema, 0, sizeof(stagedSchema));
   memset(&workSchema, 0, sizeof(workSchema));
   headRc = doltliteLoadTableRootByName(
       db, &headCat, zTable, &headRoot, &headFlags, &headSchema);
   workRc = doltliteLoadTableRootByName(
       db, &workCat, zTable, &workRoot, &workFlags, &workSchema);
-  if( headRc==SQLITE_NOTFOUND && workRc==SQLITE_OK ) return SQLITE_OK;
+  if( hasSeparateStaged ){
+    stagedRc = doltliteLoadTableRootByName(
+        db, &stagedCat, zTable, &stagedRoot, &stagedFlags, &stagedSchema);
+    if( stagedRc!=SQLITE_OK && stagedRc!=SQLITE_NOTFOUND ) return stagedRc;
+  }
+  if( headRc==SQLITE_NOTFOUND && workRc==SQLITE_OK ){
+    if( hasSeparateStaged && stagedRc==SQLITE_OK ){
+      return wsIndexSchemaChangedBetween(db, &stagedCat, &workCat, zTable,
+                                         pChanged);
+    }
+    return SQLITE_OK;
+  }
   if( headRc==SQLITE_NOTFOUND && workRc==SQLITE_NOTFOUND ) return SQLITE_OK;
   if( headRc==SQLITE_NOTFOUND || workRc==SQLITE_NOTFOUND ){
     *pChanged = 1;
@@ -696,8 +759,25 @@ static int wsTableSchemaChanged(
   }
   if( headRc!=SQLITE_OK ) return headRc;
   if( workRc!=SQLITE_OK ) return workRc;
-  if( prollyHashCompare(&headSchema, &workSchema)!=0 ) *pChanged = 1;
-  return SQLITE_OK;
+  if( prollyHashCompare(&headSchema, &workSchema)!=0 ){
+    *pChanged = 1;
+    return SQLITE_OK;
+  }
+  rc = wsIndexSchemaChangedBetween(db, &headCat, &workCat, zTable, pChanged);
+  if( rc!=SQLITE_OK || *pChanged ) return rc;
+  if( hasSeparateStaged ){
+    if( stagedRc==SQLITE_NOTFOUND ){
+      *pChanged = 1;
+      return SQLITE_OK;
+    }
+    if( prollyHashCompare(&stagedSchema, &workSchema)!=0 ){
+      *pChanged = 1;
+      return SQLITE_OK;
+    }
+    rc = wsIndexSchemaChangedBetween(db, &stagedCat, &workCat, zTable,
+                                     pChanged);
+  }
+  return rc;
 }
 
 static int wsEnsureEmptyStagedTable(
@@ -876,6 +956,8 @@ static int wsApplyChangesToStaged(
   struct TableEntry *pData;
   Table *pTab;
   Index *pIdx;
+  SchemaEntry *aStagedSchema = 0;
+  int nStagedSchema = 0;
   WorkspaceIndexEdits *aIdx = 0;
   int nIdx = 0;
   ProllyMutMap mm;
@@ -922,6 +1004,11 @@ static int wsApplyChangesToStaged(
   }
 
   pTab = sqlite3FindTable(db, p->zTableName, "main");
+  if( stagedExisted && pTab && pTab->pIndex ){
+    rc = loadSchemaFromCatalog(db, cs, pCache, &stagedCat,
+                               &aStagedSchema, &nStagedSchema);
+    if( rc!=SQLITE_OK ) goto apply_done;
+  }
   for(pIdx=pTab ? pTab->pIndex : 0; pIdx; pIdx=pIdx->pNext) nIdx++;
   if( nIdx>0 ){
     aIdx = sqlite3_malloc64(sizeof(*aIdx)*(sqlite3_uint64)nIdx);
@@ -933,9 +1020,14 @@ static int wsApplyChangesToStaged(
   }
   for(pIdx=pTab ? pTab->pIndex : 0; pIdx && rc==SQLITE_OK; pIdx=pIdx->pNext){
     struct TableEntry *pEntry;
+    Pgno iIdxRoot;
     /* WITHOUT ROWID PK is the table tree, not a secondary index. Rowid-table PK is. */
     if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY && !HasRowid(pTab) ) continue;
-    pEntry = doltliteFindTableByNumber(aTables, nTables, pIdx->tnum);
+    iIdxRoot = stagedExisted
+        ? wsFindStagedIndexRootpage(aStagedSchema, nStagedSchema,
+                                    p->zTableName, pIdx->zName)
+        : pIdx->tnum;
+    pEntry = iIdxRoot ? doltliteFindTableByNumber(aTables, nTables, iIdxRoot) : 0;
     if( !pEntry ) continue;
     rc = prollyMutMapInit(&aIdx[nIdx].mm, 0);
     if( rc==SQLITE_OK ){
@@ -1022,6 +1114,7 @@ apply_done:
   if( mmInit ) prollyMutMapFree(&mm);
   for(i=0; i<nIdx; i++) prollyMutMapFree(&aIdx[i].mm);
   sqlite3_free(aIdx);
+  freeSchemaEntries(aStagedSchema, nStagedSchema);
   doltliteFreeCatalog(aTables, nTables);
   return rc;
 }
