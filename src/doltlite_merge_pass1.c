@@ -1265,14 +1265,15 @@ static int mergePass1BothSides(
       if( rc!=SQLITE_OK ) return rc;
     }
   }
-  if( theirsChanged ){
+  {
     struct TableEntry merged = *pMergeOurs;
-    memcpy(&merged.root, &theirsEntry->root, sizeof(ProllyHash));
-    memcpy(&merged.schemaHash, &theirsEntry->schemaHash, sizeof(ProllyHash));
-    merged.flags = theirsEntry->flags;
+    if( theirsChanged ) merged.root = theirsEntry->root;
+    if( theirsChanged || schemaChoice==SCHEMA_MERGE_THEIRS
+     || (theirSchemaChanged && !ourSchemaChanged) ){
+      merged.schemaHash = theirsEntry->schemaHash;
+      merged.flags = theirsEntry->flags;
+    }
     c->aMerged[(*c->pnMerged)++] = merged;
-  }else{
-    c->aMerged[(*c->pnMerged)++] = *pMergeOurs;
   }
   return SQLITE_OK;
 }

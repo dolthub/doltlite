@@ -3918,4 +3918,92 @@ ok" "$DB"
   rm -f "$DB"
 done
 
+# Theirs-only schema change with no theirs row writes must propagate schemaHash
+# and flags into the merged catalog entry.
+for kind in add_default add_virtual rename_col; do
+  DB=/tmp/test_theirs_schema_only_${kind}_$$.db; rm -f "$DB"
+  case "$kind" in
+    add_default) ALTER_SQL="ALTER TABLE t ADD COLUMN b INT DEFAULT 99;" ;;
+    add_virtual) ALTER_SQL="ALTER TABLE t ADD COLUMN b INT AS (a+1) VIRTUAL;" ;;
+    rename_col)  ALTER_SQL="ALTER TABLE t RENAME COLUMN a TO a2;" ;;
+  esac
+  cat <<EOF | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+CREATE TABLE u(id INTEGER PRIMARY KEY, x INT);
+INSERT INTO t VALUES(1, 10);
+INSERT INTO u VALUES(1, 1);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+INSERT INTO u VALUES(2, 2);
+SELECT dolt_commit('-am','ours u');
+SELECT dolt_checkout('feat');
+$ALTER_SQL
+SELECT dolt_commit('-am','theirs schema only');
+SELECT dolt_checkout('main');
+EOF
+  run_test_match "theirs_schema_only_${kind}_merge" \
+    "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+  run_test "theirs_schema_only_${kind}_diff_feat_head" \
+    "SELECT to_table_name||'|'||diff_type||'|'||data_change||'|'||schema_change FROM dolt_diff_summary('feat', 'HEAD');" \
+    "u|modified|1|0" "$DB"
+  run_test "theirs_schema_only_${kind}_diff_parent_head" \
+    "SELECT to_table_name||'|'||diff_type||'|'||schema_change FROM dolt_diff_summary('HEAD~1', 'HEAD');" \
+    "t|modified|1" "$DB"
+  run_test "theirs_schema_only_${kind}_integrity" \
+    "PRAGMA integrity_check;" "ok" "$DB"
+  rm -f "$DB"
+done
+
+# Theirs-only schema change with ours row modification on the same table.
+DB=/tmp/test_theirs_schema_only_ours_row_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+INSERT INTO t VALUES(1, 10);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES(2, 20);
+SELECT dolt_commit('-am','ours row');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN b INT DEFAULT 99;
+SELECT dolt_commit('-am','theirs add col');
+SELECT dolt_checkout('main');
+EOF
+run_test_match "theirs_schema_only_ours_row_merge" \
+  "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+run_test "theirs_schema_only_ours_row_diff_feat_head" \
+  "SELECT to_table_name||'|'||diff_type||'|'||data_change||'|'||schema_change FROM dolt_diff_summary('feat', 'HEAD');" \
+  "t|modified|1|0" "$DB"
+run_test "theirs_schema_only_ours_row_diff_parent_head" \
+  "SELECT to_table_name||'|'||diff_type||'|'||schema_change FROM dolt_diff_summary('HEAD~1', 'HEAD');" \
+  "t|modified|1" "$DB"
+run_test "theirs_schema_only_ours_row_values" \
+  "SELECT group_concat(id||':'||a||':'||b, ' ') FROM (SELECT * FROM t ORDER BY id);" \
+  "1:10:99 2:20:99" "$DB"
+run_test "theirs_schema_only_ours_row_integrity" \
+  "PRAGMA integrity_check;" "ok" "$DB"
+rm -f "$DB"
+
+# Theirs-only CHECK constraint added with no theirs row writes must catch a
+# violating row inserted on ours.
+DB=/tmp/test_theirs_schema_only_check_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+INSERT INTO t VALUES(1, 10);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES(2, -5);
+SELECT dolt_commit('-am','ours bad row');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN b INT CHECK(a > 0);
+SELECT dolt_commit('-am','theirs add check');
+SELECT dolt_checkout('main');
+EOF
+run_test_error_match "theirs_schema_only_check_autocommit" \
+  "SELECT dolt_merge('feat');" "constraint violations" "$DB"
+run_test_error_lastline "theirs_schema_only_check_tx_violations" \
+  "$(sc "SELECT \"table\"||'|'||num_violations FROM dolt_constraint_violations;")" \
+  "t|1" "$DB" \
+  "Merge resulted in constraint violations"
+rm -f "$DB"
+
 dltest_finish
