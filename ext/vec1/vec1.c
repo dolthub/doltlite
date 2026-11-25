@@ -8629,7 +8629,7 @@ static int vec1LoadConfig(Vec1Tab *pTab){
 
   rc = vec1GetSql(pTab, VEC1_SQL_LOAD_CONFIG, &pStmt);
   if( rc==SQLITE_OK ){
-    while( sqlite3_step(pStmt)==SQLITE_ROW ){
+    while( rc==SQLITE_OK && sqlite3_step(pStmt)==SQLITE_ROW ){
       int iField = sqlite3_column_int(pStmt, 0);
       switch( iField ){
         case VEC1_CONFIG_MODEL: {
