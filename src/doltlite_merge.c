@@ -1339,11 +1339,16 @@ int doltliteMergeCatalogs(
          && doltliteFindTableByName(aMerged, nMerged, pT->zName) ){
           continue;
         }
-        /* Triggers follow their table: no merged table, no fallback row. */
+        /* Triggers follow their target table or view. */
         if( pT->zType && strcmp(pT->zType, "trigger")==0
          && pT->zTblName && pT->zName
          && sqlite3_stricmp(pT->zTblName, pT->zName)!=0
-         && !doltliteFindTableByName(aMerged, nMerged, pT->zTblName) ){
+         && !mergeTriggerTargetSurvives(aMerged, nMerged,
+                                        aAncSchema, nAncSchema,
+                                        aOursSchema, nOursSchema,
+                                        aTheirsSchema, nTheirsSchema,
+                                        aConflictTables, nConflictTables,
+                                        pT->zTblName) ){
           continue;
         }
         aKept[nFallback++] = *pT;
