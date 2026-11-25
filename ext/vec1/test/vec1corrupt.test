@@ -528,4 +528,46 @@ do_execsql_test 5.4 {
   PRAGMA integrity_check
 } {{v1: vector in %_base row 1 is wrong size}}
 
+#-------------------------------------------------------------------------
+# Crafted 24-byte model blobs with nElem==0 must be rejected when
+# nBucket>0, nCodebook>0, or any transform/quantization flag is set.
+#
+reset_db
+vec1_load db
+
+do_execsql_test 6.0 {
+  CREATE VIRTUAL TABLE v1 USING vec1;
+  INSERT INTO v1(rowid, vector) VALUES(1, random_vector(8));
+}
+
+foreach {tn blob} {
+  1 000000040000000100000000000000000000000200000001
+  2 000000040000000300000000000000000000000000000001
+  3 000000040000000500000000000000000000000000000001
+  4 000000070000000900000000000000000000000000000001
+  5 000000040000001100000000000000000000000000000001
+  6 000000040000000100000000000000020000000000000001
+} {
+  do_catchsql_test 6.1.$tn "
+    INSERT INTO v1(cmd, vector) VALUES('rebuild', X'$blob');
+  " {1 {vec1: model is corrupt}}
+}
+
+do_execsql_test 6.2 {
+  INSERT INTO v1(cmd, vector) VALUES('rebuild', '{index:"flat"}');
+  INSERT INTO v1(cmd, vector) VALUES('rebuild', '{index:"none"}');
+}
+
+do_execsql_test 6.3 {
+  REPLACE INTO v1_model VALUES(1, X'000000040000000100000000000000000000000200000001');
+}
+
+db close
+sqlite3 db test.db
+vec1_load db
+
+do_catchsql_test 6.4 {
+  SELECT distance FROM v1;
+} {1 {vec1: model is corrupt}}
+
 finish_test

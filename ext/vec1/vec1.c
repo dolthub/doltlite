@@ -5323,6 +5323,13 @@ static int vec1DecodeModel(
   if( pMod->hdr.nElem>VEC1_VECSIZE_MAX 
    || pMod->hdr.nBucket>VEC1_MAX_BUCKET 
    || pMod->hdr.nCodebook>pMod->hdr.nElem
+   || (pMod->hdr.nElem==0 && (
+        pMod->hdr.nBucket>0
+     || (pMod->hdr.flags & (
+          VEC1_MODEL_ROTATE|VEC1_MODEL_RESIDUAL
+         |VEC1_MODEL_BITQUANT|VEC1_MODEL_WHT
+        ))
+      ))
   ){
     *pzErr = sqlite3_mprintf("vec1: model is corrupt");
     return SQLITE_ERROR;
