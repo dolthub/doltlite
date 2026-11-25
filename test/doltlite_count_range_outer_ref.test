@@ -53,4 +53,69 @@ do_test 2.1 {
   expr {[lsearch $ops CountIndexRange]>=0}
 } {1}
 
+proc rev_coll {a b} {
+  return [expr {-[string compare $a $b]}]
+}
+db collate rev rev_coll
+
+do_execsql_test 3.0 {
+  CREATE TABLE t_bin(a TEXT);
+  CREATE INDEX t_bin_a ON t_bin(a);
+  INSERT INTO t_bin VALUES('a'),('b'),('c'),('d');
+  CREATE TEMP TABLE t_temp_rev(a TEXT COLLATE rev);
+  CREATE INDEX t_temp_rev_a ON t_temp_rev(a);
+  INSERT INTO t_temp_rev VALUES('a'),('b'),('c'),('d');
+}
+
+do_execsql_test 3.1 {
+  SELECT count(*) FROM t_bin WHERE a COLLATE rev BETWEEN 'c' AND 'a';
+  SELECT count(*) FROM t_bin WHERE a COLLATE rev < 'b';
+  SELECT count(*) FROM t_bin WHERE a COLLATE rev <= 'b';
+  SELECT count(*) FROM t_bin WHERE a COLLATE rev > 'b';
+  SELECT count(*) FROM t_bin WHERE a COLLATE rev >= 'b';
+} {3 2 3 1 2}
+
+do_execsql_test 3.2 {
+  SELECT count(*) FROM t_temp_rev WHERE a BETWEEN 'c' AND 'a';
+  SELECT count(*) FROM t_temp_rev WHERE a < 'b';
+  SELECT count(*) FROM t_temp_rev WHERE a <= 'b';
+  SELECT count(*) FROM t_temp_rev WHERE a > 'b';
+  SELECT count(*) FROM t_temp_rev WHERE a >= 'b';
+} {3 2 3 1 2}
+
+do_execsql_test 4.0 {
+  CREATE TABLE t_nc(a TEXT COLLATE NOCASE);
+  CREATE INDEX t_nc_a ON t_nc(a);
+  INSERT INTO t_nc VALUES('a'),('b'),('c');
+}
+
+do_test 4.1 {
+  set ops [db eval {
+    EXPLAIN SELECT count(*) FROM t_nc
+     WHERE a BETWEEN 'a'||char(0)||'b' AND 'a'||char(0)||'z'
+  }]
+  expr {[lsearch $ops CountIndexRange]>=0}
+} {1}
+
+do_execsql_test 4.2 {
+  SELECT count(*) FROM t_nc
+   WHERE a BETWEEN 'a'||char(0)||'b' AND 'a'||char(0)||'z';
+  SELECT count(*) FROM t_nc NOT INDEXED
+   WHERE a BETWEEN 'a'||char(0)||'b' AND 'a'||char(0)||'z';
+  SELECT count(*) FROM t_nc WHERE a = 'a'||char(0)||'b';
+  SELECT count(*) FROM t_nc NOT INDEXED WHERE a = 'a'||char(0)||'b';
+} {0 0 0 0}
+
+do_execsql_test 4.3 {
+  INSERT INTO t_nc VALUES('a'||char(0)||'a'),('A'||char(0)||'c');
+  SELECT count(*) FROM t_nc
+   WHERE a BETWEEN 'a'||char(0)||'b' AND 'a'||char(0)||'z';
+  SELECT count(*) FROM t_nc NOT INDEXED
+   WHERE a BETWEEN 'a'||char(0)||'b' AND 'a'||char(0)||'z';
+  SELECT count(*) FROM t_nc
+   WHERE a BETWEEN 'a'||char(0)||'z' AND 'a'||char(0)||'b';
+  SELECT count(*) FROM t_nc WHERE a = 'a'||char(0)||'b';
+  SELECT count(*) FROM t_nc NOT INDEXED WHERE a = 'a'||char(0)||'b';
+} {2 2 2 2 2}
+
 finish_test

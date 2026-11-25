@@ -502,6 +502,16 @@ int prollyBtCursorCountIndexRange(
   int rc;
   (void)db;
   if( pCur->curIntKey ) return SQLITE_NOTFOUND;
+  if( !pLower || !pUpper ) return SQLITE_NOTFOUND;
+  if( pCur->pKeyInfo ){
+    int nField = (int)(pLower->nField > pUpper->nField
+                       ? pLower->nField : pUpper->nField);
+    if( keyInfoHasUnsupportedCollation(pCur->pKeyInfo, nField)
+     || unpackedRecordHasNocaseNul(pCur->pKeyInfo, pLower)
+     || unpackedRecordHasNocaseNul(pCur->pKeyInfo, pUpper) ){
+      return SQLITE_NOTFOUND;
+    }
+  }
   rc = flushPendingForCount(pCur, &pScratch, &live);
   if( rc!=SQLITE_OK ) return rc;
   rc = countTreeBlobPrefixRange(pCur, pLower, pUpper, pnEntry);
