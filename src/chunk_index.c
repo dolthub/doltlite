@@ -652,6 +652,7 @@ int csIndexLookup(
     return SQLITE_OK;
   }
   if( !pLazy->active ) return SQLITE_OK;
+  if( !cs->file.pFile ) return SQLITE_CANTOPEN;
   if( pLazy->active==2 ) return csFlatLookup(cs, pHash, pEntry, pFound);
   for(i=pLazy->nRun-1; i>=0; i--){
     int rc = csRunLookup(cs, &pLazy->aRun[i], pHash, pEntry, pFound);

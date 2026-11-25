@@ -1332,6 +1332,7 @@ static int csReloadFromDisk(ChunkStore *cs){
   sqlite3_free(zOldFilename);
   chunkStoreClose(&tmp);
   cs->reloadGen++;
+  cs->openPending = 0;
   cs->bTailTrusted = 0;
   cs->nTailStreak = 0;
 
