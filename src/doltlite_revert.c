@@ -341,6 +341,22 @@ static void doltliteRevertFunc(
       "cannot revert with unresolved conflicts", -1);
     goto done;
   }
+  {
+    u8 isMerging = 0;
+    u8 isRebasing = 0;
+    doltliteGetSessionMergeState(db, &isMerging, 0, 0);
+    if( isMerging ){
+      sqlite3_result_error(context,
+        "cannot revert while a merge is in progress", -1);
+      goto done;
+    }
+    doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, 0, 0);
+    if( isRebasing ){
+      sqlite3_result_error(context,
+        "cannot revert while a rebase is in progress", -1);
+      goto done;
+    }
+  }
   aHashes = sqlite3_malloc64((sqlite3_uint64)args.nPositional*sizeof(*aHashes));
   if( !aHashes ){ sqlite3_result_error_nomem(context); goto done; }
   for(i=0; i<args.nPositional; i++){
