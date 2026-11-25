@@ -1308,6 +1308,7 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
   if( rc!=SQLITE_OK ) goto backup_step_done;
 
   if( destCs->isMemory ){
+    ChunkStore old = *destCs;
     openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
               | SQLITE_OPEN_MEMORY | SQLITE_OPEN_MAIN_DB;
     rc = chunkStoreOpen(&tmpStore, pDestVfs, ":memory:", openFlags);
@@ -1319,10 +1320,11 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     chunkStoreUnlock(destCs);
     destLocked = 0;
     chunkStoreClose(destCs);
-    tmpStore.xWriteGate = destCs->xWriteGate;
-    tmpStore.pWriteGateArg = destCs->pWriteGateArg;
-    tmpStore.xDefaultBusy = destCs->xDefaultBusy;
-    tmpStore.pDefaultBusyArg = destCs->pDefaultBusyArg;
+    tmpStore.xWriteGate = old.xWriteGate;
+    tmpStore.pWriteGateArg = old.pWriteGateArg;
+    tmpStore.xDefaultBusy = old.xDefaultBusy;
+    tmpStore.pDefaultBusyArg = old.pDefaultBusyArg;
+    tmpStore.pStats = old.pStats;
     *destCs = tmpStore;
     memset(&tmpStore, 0, sizeof(tmpStore));
     tmpStoreOpen = 0;
@@ -1366,6 +1368,7 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     destCs->pWriteGateArg = old.pWriteGateArg;
     destCs->xDefaultBusy = old.xDefaultBusy;
     destCs->pDefaultBusyArg = old.pDefaultBusyArg;
+    destCs->pStats = old.pStats;
     if( rc==SQLITE_OK && bShared ){
       sqlite3ErrorWithMsg(p->pDestDb, SQLITE_BUSY,
                           "destination database is in use");
