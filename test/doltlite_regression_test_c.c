@@ -22933,6 +22933,106 @@ static void run_remote_refs_error_rollback(void){
   removeDbFiles(zFetch);
 }
 
+static void run_wal_tail_replay_rollback_nrecent(void){
+  sqlite3 *db = 0;
+  ChunkStore cs1;
+  ChunkStore cs2;
+  ProllyHash preHash;
+  ProllyHash phantomHash;
+  ProllyHash badRefsHash;
+  ProllyHash refsHashBefore;
+  static const u8 phantomData[] = "wal-tail-phantom-chunk";
+  static const u8 badRefsBlob[] = { 6, 0, 0, 0 };
+  char dbpath[256];
+  int nRecentBefore;
+  int changed = -1;
+  int hasChunk = -1;
+  int i;
+  int rc;
+
+  printf("=== WAL Tail Replay Rollback nRecent Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_wal_tail_replay_rollback_nrecent");
+  removeDbFiles(dbpath);
+
+  check("open_db", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+  sqlite3_close(db);
+  db = 0;
+
+  memset(&cs1, 0, sizeof(cs1));
+  memset(&cs2, 0, sizeof(cs2));
+  check("open_store_1", chunkStoreOpen(&cs1, sqlite3_vfs_find(0), dbpath,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+
+  /* Populate > 64 recent entries on cs1 via a valid tail refresh so
+  ** aRecentHT is active when the subsequent corrupt tail replay fails. */
+  check("open_store_2_seed", chunkStoreOpen(&cs2, sqlite3_vfs_find(0), dbpath,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("lock_store_2_seed", chunkStoreLockAndRefresh(&cs2)==SQLITE_OK);
+  memset(&preHash, 0, sizeof(preHash));
+  for(i=0; i<70; i++){
+    u8 buf[32];
+    int n = snprintf((char*)buf, sizeof(buf), "pre-recent-chunk-%03d", i);
+    ProllyHash h;
+    rc = chunkStorePut(&cs2, buf, n, &h);
+    if( rc!=SQLITE_OK ) break;
+    if( i==0 ) preHash = h;
+  }
+  check("put_pre_recent_chunks", i==70);
+  check("commit_pre_recent_chunks", chunkStoreCommit(&cs2)==SQLITE_OK);
+  chunkStoreUnlock(&cs2);
+  chunkStoreClose(&cs2);
+
+  changed = -1;
+  rc = chunkStoreRefreshIfChanged(&cs1, &changed);
+  check("refresh_pre_recent_ok", rc==SQLITE_OK && changed==1);
+  check("pre_recent_count_gt_ht_min", cs1.staging.nRecent>=70);
+  hasChunk = -1;
+  check("pre_recent_chunk_present",
+        chunkStoreHas(&cs1, &preHash, &hasChunk)==SQLITE_OK && hasChunk==1);
+
+  nRecentBefore = cs1.staging.nRecent;
+  refsHashBefore = cs1.refs.refsHash;
+
+  memset(&cs2, 0, sizeof(cs2));
+  check("open_store_2_corrupt", chunkStoreOpen(&cs2, sqlite3_vfs_find(0), dbpath,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("lock_store_2_corrupt", chunkStoreLockAndRefresh(&cs2)==SQLITE_OK);
+  check("put_phantom_chunk",
+        chunkStorePut(&cs2, phantomData, (int)sizeof(phantomData)-1,
+                      &phantomHash)==SQLITE_OK);
+  check("put_bad_refs_chunk",
+        chunkStorePut(&cs2, badRefsBlob, (int)sizeof(badRefsBlob),
+                      &badRefsHash)==SQLITE_OK);
+  cs2.refs.refsHash = badRefsHash;
+  check("commit_corrupt_tail", chunkStoreCommit(&cs2)==SQLITE_OK);
+  chunkStoreUnlock(&cs2);
+  chunkStoreClose(&cs2);
+
+  changed = -1;
+  rc = chunkStoreRefreshIfChanged(&cs1, &changed);
+  check("refresh_fails_corrupt_refs", rc==SQLITE_CORRUPT);
+  check("refresh_not_changed", changed==0);
+  check("nrecent_restored", cs1.staging.nRecent==nRecentBefore);
+  check("refs_hash_restored",
+        prollyHashCompare(&cs1.refs.refsHash, &refsHashBefore)==0);
+  hasChunk = -1;
+  check("phantom_chunk_not_visible",
+        chunkStoreHas(&cs1, &phantomHash, &hasChunk)==SQLITE_OK && hasChunk==0);
+  hasChunk = -1;
+  check("bad_refs_chunk_not_visible",
+        chunkStoreHas(&cs1, &badRefsHash, &hasChunk)==SQLITE_OK && hasChunk==0);
+  hasChunk = -1;
+  check("pre_recent_chunk_still_visible",
+        chunkStoreHas(&cs1, &preHash, &hasChunk)==SQLITE_OK && hasChunk==1);
+
+  chunkStoreClose(&cs1);
+  removeDbFiles(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -23236,7 +23336,8 @@ static const RegressionCase aCases[] = {
   { "dolt_schemas_step_err_and_oom", "dolt_schemas Step Error Propagation And OOM Leak Test", run_dolt_schemas_step_err_and_oom },
   { "nonlocal_attach_oom_no_leak", "Nonlocal Attach OOM No Leak Test", run_nonlocal_attach_oom_no_leak },
   { "clean_close_marker_respects_shared_lock", "Clean Close Marker Respects Shared Lock Test", run_clean_close_marker_respects_shared_lock },
-  { "remote_refs_error_rollback", "Remote Refs Error Rollback Test", run_remote_refs_error_rollback }
+  { "remote_refs_error_rollback", "Remote Refs Error Rollback Test", run_remote_refs_error_rollback },
+  { "wal_tail_replay_rollback_nrecent", "WAL Tail Replay Rollback nRecent Test", run_wal_tail_replay_rollback_nrecent }
 };
 
 static int run_case_by_name(const char *zName){

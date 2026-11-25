@@ -38,6 +38,7 @@ struct ChunkStoreReplayState {
   ** the old index, never re-detecting the change. */
   ProllyHash refsHash;
   int nChunks;
+  int nRecent;
   i64 iFileSize;
   WalState wal;
 };

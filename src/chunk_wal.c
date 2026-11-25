@@ -480,6 +480,7 @@ static void csCaptureReplayState(ChunkStore *cs, ChunkStoreReplayState *pSaved){
   pSaved->lazy = cs->index.lazy;
   pSaved->refsHash = cs->refs.refsHash;
   pSaved->nChunks = cs->index.nChunks;
+  pSaved->nRecent = cs->staging.nRecent;
   pSaved->iFileSize = cs->file.iFileSize;
   pSaved->wal = cs->wal;
   /* Detach, do not alias: the finalize frees the live refs before
@@ -533,6 +534,8 @@ static void csRollbackReplayState(
   csRestoreReplayState(cs, pSaved);
   cs->staging.nPending = nPendingBefore;
   csPendHTClear(cs);
+  cs->staging.nRecent = pSaved->nRecent;
+  csRecentHTClear(cs);
 }
 
 void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
