@@ -1224,7 +1224,13 @@ static int dtRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *r){
   h = doltliteFnv1aSep(h);
   h = doltliteFnv1aStr(h, row->zToCommit);
   h = doltliteFnv1aSep(h);
-  h = doltliteFnv1aBytes(h, row->pKey, row->nKey);
+  h = doltliteFnv1aI64(h, row->keyIsIntKey ? 1 : 0);
+  h = doltliteFnv1aSep(h);
+  if( row->keyIsIntKey ){
+    h = doltliteFnv1aI64(h, row->intKey);
+  }else{
+    h = doltliteFnv1aBytes(h, row->pKey, row->nKey);
+  }
   *r = doltliteFnv1aRowid(h);
   return SQLITE_OK;
 }
