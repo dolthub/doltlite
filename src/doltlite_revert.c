@@ -336,6 +336,22 @@ static void doltliteRevertFunc(
     sqlite3_result_error(context, "a replay is already in progress", -1);
     goto done;
   }
+  {
+    u8 isMerging = 0;
+    u8 isRebasing = 0;
+    doltliteGetSessionMergeState(db, &isMerging, 0, 0);
+    if( isMerging ){
+      sqlite3_result_error(context,
+        "cannot revert while a merge is in progress", -1);
+      goto done;
+    }
+    doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, 0, 0);
+    if( isRebasing ){
+      sqlite3_result_error(context,
+        "cannot revert while a rebase is in progress", -1);
+      goto done;
+    }
+  }
   if( doltliteSessionHasUnresolvedConflicts(db) ){
     sqlite3_result_error(context,
       "cannot revert with unresolved conflicts", -1);

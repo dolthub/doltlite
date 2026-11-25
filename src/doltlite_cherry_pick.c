@@ -965,6 +965,22 @@ static void doltliteCherryPickFunc(
     sqlite3_result_error(context, "a replay is already in progress", -1);
     return;
   }
+  {
+    u8 isMerging = 0;
+    u8 isRebasing = 0;
+    doltliteGetSessionMergeState(db, &isMerging, 0, 0);
+    if( isMerging ){
+      sqlite3_result_error(context,
+        "cannot cherry-pick while a merge is in progress", -1);
+      return;
+    }
+    doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, 0, 0);
+    if( isRebasing ){
+      sqlite3_result_error(context,
+        "cannot cherry-pick while a rebase is in progress", -1);
+      return;
+    }
+  }
   /* A merge whose only effect so far is a conflict leaves nothing
   ** uncommitted for the check below to see. */
   if( doltliteSessionHasUnresolvedConflicts(db) ){

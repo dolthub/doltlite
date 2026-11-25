@@ -1460,4 +1460,139 @@ feat
   "$DB"
 rm -f "$DB"
 
+echo "--- cherry-pick and revert guards during active merge ---"
+DB=/tmp/test_cp_revert_merge_guard_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'pickable');
+INSERT INTO t VALUES (3, 'pick');
+SELECT dolt_commit('-am', 'pickable');
+SELECT dolt_checkout('-b', 'other', 'main');
+UPDATE t SET v = 'other' WHERE id = 1;
+SELECT dolt_commit('-am', 'other');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 'main' WHERE id = 1;
+SELECT dolt_commit('-am', 'main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "cp_revert_blocked_during_active_merge" \
+  "BEGIN;
+   SELECT dolt_merge('other');
+   SELECT is_merging FROM dolt_merge_status;
+   SELECT dolt_cherry_pick('pickable');
+   SELECT dolt_revert('HEAD');
+   SELECT dolt_cherry_pick('--abort');
+   SELECT dolt_cherry_pick('--continue');
+   SELECT dolt_revert('--abort');
+   SELECT dolt_revert('--continue');
+   SELECT dolt_conflicts_resolve('--ours', 't');
+   SELECT is_merging FROM dolt_merge_status;
+   SELECT dolt_cherry_pick('pickable');
+   SELECT dolt_revert('HEAD');
+   SELECT is_merging FROM dolt_merge_status;
+   SELECT length(dolt_commit('-am', 'finish merge'));
+   COMMIT;
+   SELECT is_merging FROM dolt_merge_status;
+   SELECT id || ':' || v FROM t ORDER BY id;" \
+  "Error near line 2: Merge has 1 conflict(s). Resolve and then commit with dolt_commit.
+1
+Error near line 4: cannot cherry-pick while a merge is in progress
+Error near line 5: cannot revert while a merge is in progress
+Error near line 6: no cherry-pick in progress
+Error near line 7: no cherry-pick in progress
+Error near line 8: no revert in progress
+Error near line 9: no revert in progress
+0
+1
+Error near line 12: cannot cherry-pick while a merge is in progress
+Error near line 13: cannot revert while a merge is in progress
+1
+40
+0
+1:main" \
+  "$DB"
+rm -f "$DB"
+
+echo "--- cherry-pick and revert guards during active rebase ---"
+DB=/tmp/test_cp_revert_rebase_guard_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'pickable');
+INSERT INTO t VALUES (3, 'pick');
+SELECT dolt_commit('-am', 'pickable');
+SELECT dolt_checkout('-b', 'feat', 'main');
+UPDATE t SET v = 'feat' WHERE id = 1;
+SELECT dolt_commit('-am', 'feat');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 'main' WHERE id = 1;
+SELECT dolt_commit('-am', 'main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "cp_revert_blocked_during_interactive_rebase_plan" \
+  "SELECT dolt_checkout('feat');
+   SELECT dolt_rebase('-i', 'main');
+   SELECT active_branch();
+   SELECT dolt_cherry_pick('pickable');
+   SELECT dolt_revert('HEAD');
+   SELECT dolt_cherry_pick('--abort');
+   SELECT dolt_cherry_pick('--continue');
+   SELECT dolt_revert('--abort');
+   SELECT dolt_revert('--continue');
+   SELECT active_branch();
+   SELECT dolt_rebase('--abort');
+   SELECT active_branch();
+   SELECT id || ':' || v FROM t ORDER BY id;" \
+  "0
+interactive rebase started on branch dolt_rebase_feat; adjust the rebase plan in the dolt_rebase table, then continue rebasing by calling dolt_rebase('--continue')
+dolt_rebase_feat
+Error near line 4: cannot cherry-pick while a rebase is in progress
+Error near line 5: cannot revert while a rebase is in progress
+Error near line 6: no cherry-pick in progress
+Error near line 7: no cherry-pick in progress
+Error near line 8: no revert in progress
+Error near line 9: no revert in progress
+dolt_rebase_feat
+Interactive rebase aborted
+feat
+1:feat" \
+  "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_cp_revert_rebase_edit_guard_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'pickable');
+INSERT INTO t VALUES (3, 'pick');
+SELECT dolt_commit('-am', 'pickable');
+SELECT dolt_checkout('-b', 'feat', 'main');
+INSERT INTO t VALUES (2, 'feat');
+SELECT dolt_commit('-am', 'feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (4, 'main');
+SELECT dolt_commit('-am', 'main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "cp_revert_blocked_during_rebase_edit_pause" \
+  "SELECT dolt_checkout('feat');
+   SELECT dolt_rebase('-i', 'main');
+   UPDATE dolt_rebase SET action = 'edit' WHERE commit_message = 'feat';
+   SELECT dolt_rebase('--continue') LIKE '%edit action paused%';
+   SELECT dolt_cherry_pick('pickable');
+   SELECT dolt_revert('HEAD');
+   SELECT dolt_rebase('--continue');
+   SELECT active_branch();
+   SELECT id || ':' || v FROM t ORDER BY id;" \
+  "0
+interactive rebase started on branch dolt_rebase_feat; adjust the rebase plan in the dolt_rebase table, then continue rebasing by calling dolt_rebase('--continue')
+1
+Error near line 5: cannot cherry-pick while a rebase is in progress
+Error near line 6: cannot revert while a rebase is in progress
+Successfully rebased and updated refs/heads/feat
+feat
+1:base
+2:feat
+4:main" \
+  "$DB"
+rm -f "$DB"
+
 dltest_finish
