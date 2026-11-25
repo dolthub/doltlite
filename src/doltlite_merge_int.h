@@ -97,6 +97,14 @@ struct MergePass1Ctx {
 
 int mergePass1RunChecks(MergePass1Ctx *c);
 int mergeNoteRedefinedIndex(MergePass1Ctx *c, const char *zIndex);
+int mergeTriggerTargetSurvives(
+  struct TableEntry *aMerged, int nMerged,
+  SchemaEntry *aAncSchema, int nAncSchema,
+  SchemaEntry *aOursSchema, int nOursSchema,
+  SchemaEntry *aTheirsSchema, int nTheirsSchema,
+  MergeConflictTable *aConflictTables, int nConflictTables,
+  const char *zTblName
+);
 int rebuildDisjointSchemaRows(
   sqlite3 *db,
   struct TableEntry *aMerged, int nMerged,

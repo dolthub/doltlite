@@ -2921,5 +2921,87 @@ run_test "cell_merge_omitted_default_virtual_col_val" "SELECT a || '|' || v || '
 
 rm -f "$DB_DFLT1" "$DB_DFLT2" "$DB_DFLT3" "$DB_DFLT4" "$DB_DFLT5"
 
+DB_VTR1=/tmp/test_merge_vtr1_$$.db; rm -f "$DB_VTR1"
+$DOLTLITE "$DB_VTR1" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, x INT);
+CREATE VIEW MyView AS SELECT * FROM t;
+CREATE TRIGGER tr INSTEAD OF INSERT ON myview BEGIN INSERT INTO t VALUES (NEW.id, NEW.x); END;
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('b');
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-am', 'main');
+SELECT dolt_checkout('b');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_commit('-am', 'b');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_preserves_view_instead_of_trigger" "SELECT dolt_merge('b');" "^[0-9a-f]{40}$" "$DB_VTR1"
+run_test "merge_view_trigger_present" "SELECT name FROM sqlite_master WHERE type='trigger';" "tr" "$DB_VTR1"
+run_test "merge_view_trigger_fires" "INSERT INTO MyView VALUES (3, 30); SELECT id || ':' || x FROM t ORDER BY id;" "1:10
+2:20
+3:30" "$DB_VTR1"
+
+DB_VTR2=/tmp/test_merge_vtr2_$$.db; rm -f "$DB_VTR2"
+$DOLTLITE "$DB_VTR2" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, x INT);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('b');
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-am', 'main');
+SELECT dolt_checkout('b');
+INSERT INTO t VALUES (2, 20);
+CREATE VIEW v AS SELECT * FROM t;
+CREATE TRIGGER tr INSTEAD OF INSERT ON v BEGIN INSERT INTO t VALUES (NEW.id, NEW.x); END;
+SELECT dolt_commit('-Am', 'b');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_adopts_theirs_view_instead_of_trigger" "SELECT dolt_merge('b');" "^[0-9a-f]{40}$" "$DB_VTR2"
+run_test "merge_theirs_view_trigger_present" "SELECT name FROM sqlite_master WHERE type='trigger';" "tr" "$DB_VTR2"
+run_test "merge_theirs_view_trigger_fires" "INSERT INTO v VALUES (3, 30); SELECT id || ':' || x FROM t ORDER BY id;" "1:10
+2:20
+3:30" "$DB_VTR2"
+
+DB_VTR3=/tmp/test_merge_vtr3_$$.db; rm -f "$DB_VTR3"
+$DOLTLITE "$DB_VTR3" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, x INT);
+CREATE VIEW v AS SELECT * FROM t;
+CREATE TRIGGER tr INSTEAD OF INSERT ON v BEGIN INSERT INTO t VALUES (NEW.id, NEW.x); END;
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('b');
+INSERT INTO t VALUES (1, 10);
+CREATE TRIGGER tr_ours INSTEAD OF DELETE ON v BEGIN DELETE FROM t WHERE id = OLD.id; END;
+SELECT dolt_commit('-Am', 'main');
+SELECT dolt_checkout('b');
+INSERT INTO t VALUES (2, 20);
+DROP VIEW v;
+SELECT dolt_commit('-Am', 'b');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_dropped_view_theirs_drops_triggers" "SELECT dolt_merge('b');" "^[0-9a-f]{40}$" "$DB_VTR3"
+run_test "merge_dropped_view_theirs_no_view" "SELECT count(*) FROM sqlite_master WHERE type='view';" "0" "$DB_VTR3"
+run_test "merge_dropped_view_theirs_no_triggers" "SELECT count(*) FROM sqlite_master WHERE type='trigger';" "0" "$DB_VTR3"
+
+DB_VTR4=/tmp/test_merge_vtr4_$$.db; rm -f "$DB_VTR4"
+$DOLTLITE "$DB_VTR4" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, x INT);
+CREATE VIEW v AS SELECT * FROM t;
+CREATE TRIGGER tr INSTEAD OF INSERT ON v BEGIN INSERT INTO t VALUES (NEW.id, NEW.x); END;
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('b');
+INSERT INTO t VALUES (1, 10);
+DROP VIEW v;
+SELECT dolt_commit('-Am', 'main');
+SELECT dolt_checkout('b');
+INSERT INTO t VALUES (2, 20);
+CREATE TRIGGER tr_theirs INSTEAD OF DELETE ON v BEGIN DELETE FROM t WHERE id = OLD.id; END;
+SELECT dolt_commit('-Am', 'b');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_dropped_view_ours_drops_triggers" "SELECT dolt_merge('b');" "^[0-9a-f]{40}$" "$DB_VTR4"
+run_test "merge_dropped_view_ours_no_view" "SELECT count(*) FROM sqlite_master WHERE type='view';" "0" "$DB_VTR4"
+run_test "merge_dropped_view_ours_no_triggers" "SELECT count(*) FROM sqlite_master WHERE type='trigger';" "0" "$DB_VTR4"
+
+rm -f "$DB_VTR1" "$DB_VTR2" "$DB_VTR3" "$DB_VTR4"
+
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95" "$DB96" "$DB97" "$DB98" "$DB99" "$DB100" "$DB101" "$DB102" "$DB103" "$DB104" "$DB105" "$DB106" "$DB107" "$DB108" "$DB109" "$DB110" "$DB111" "$DB112" "$DB113" "$DB114" "$DB115" "$DB116" "$DB117" "$DB118" "$DB119" "$DB120" "$DB121" "$DB122"
 dltest_finish

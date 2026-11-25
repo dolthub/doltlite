@@ -508,6 +508,30 @@ static int appendMergedHiddenIndexRow(
   return appendMergedSchemaCatalogRecord(db, pRoot, flags, (*piNextRowid)++, pSe, iRootpage);
 }
 
+int mergeTriggerTargetSurvives(
+  struct TableEntry *aMerged, int nMerged,
+  SchemaEntry *aAncSchema, int nAncSchema,
+  SchemaEntry *aOursSchema, int nOursSchema,
+  SchemaEntry *aTheirsSchema, int nTheirsSchema,
+  MergeConflictTable *aConflictTables, int nConflictTables,
+  const char *zTblName
+){
+  SchemaEntry *pTarget;
+  int i;
+  if( !zTblName ) return 0;
+  for(i=0; i<nMerged; i++){
+    if( aMerged[i].zName && sqlite3_stricmp(aMerged[i].zName, zTblName)==0 ){
+      return 1;
+    }
+  }
+  pTarget = mergedSchemaChoice(aAncSchema, nAncSchema,
+                               aOursSchema, nOursSchema,
+                               aTheirsSchema, nTheirsSchema,
+                               aConflictTables, nConflictTables,
+                               zTblName);
+  return pTarget && pTarget->zType && strcmp(pTarget->zType, "view")==0;
+}
+
 static int appendMergedAuxSchemaRow(
   sqlite3 *db,
   ProllyHash *pRoot,
@@ -537,13 +561,18 @@ static int appendMergedAuxSchemaRow(
   if( strcmp(pSe->zType, "table")==0 && pSe->iRootpage!=0 ){
     return SQLITE_OK;
   }
-  /* A trigger follows its table: when the merge drops the table, the
-  ** trigger goes with it rather than orphaning the catalog. Views are
+  /* A trigger follows its target table or view: when the merge drops it,
+  ** the trigger goes with it rather than orphaning the catalog. Views are
   ** resolved lazily and stay, matching how a plain DROP TABLE leaves them. */
   if( strcmp(pSe->zType, "trigger")==0
    && pSe->zTblName
    && sqlite3_stricmp(pSe->zTblName, pSe->zName)!=0
-   && !doltliteFindTableByName(aMerged, nMerged, pSe->zTblName) ){
+   && !mergeTriggerTargetSurvives(aMerged, nMerged,
+                                  aAncSchema, nAncSchema,
+                                  aOursSchema, nOursSchema,
+                                  aTheirsSchema, nTheirsSchema,
+                                  aConflictTables, nConflictTables,
+                                  pSe->zTblName) ){
     return SQLITE_OK;
   }
 
