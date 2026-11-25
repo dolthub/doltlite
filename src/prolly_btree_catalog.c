@@ -3400,7 +3400,7 @@ static int hardReset(sqlite3 *db, const ProllyHash *catHash, int persist){
   if( rc!=SQLITE_OK ){
     btreeFreeCatalogTables(pBtree);
     if( oldCatData ){
-      rc = deserializeCatalog(pBtree, oldCatData, nOldCatData);
+      (void)deserializeCatalog(pBtree, oldCatData, nOldCatData);
     }
     sqlite3_free(oldCatData);
     pBtree->vc.stagedCatalog = oldStagedCatalog;

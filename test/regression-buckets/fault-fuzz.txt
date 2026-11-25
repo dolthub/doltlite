@@ -98,4 +98,5 @@ doltlite_recover_deferred_seek_oom
 doltlite_recover_delete_reseek_oom
 doltlite_recover_synthetic_rowid_oom
 doltlite_recover_merge_state
+doltlite_recover_hardreset_oom
 mallocH

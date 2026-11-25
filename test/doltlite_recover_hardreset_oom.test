@@ -1,0 +1,40 @@
+# If hardReset fails while deserializing the target catalog, it must not
+# overwrite rc with the status of restoring the old catalog and return
+# SQLITE_OK.
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+
+set testprefix doltlite_recover_hardreset_oom
+
+do_test 1.0 {
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO t VALUES(1, 'v1');
+    SELECT dolt_commit('-A', '-m', 'c1');
+    UPDATE t SET v = 'v2' WHERE id = 1;
+    CREATE TABLE t2(a INTEGER PRIMARY KEY, b TEXT);
+    INSERT INTO t2 VALUES(10, 'extra');
+    SELECT dolt_commit('-A', '-m', 'c2');
+  }
+  set {} {}
+} {}
+faultsim_save_and_close
+
+do_faultsim_test 1.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db eval { SELECT dolt_reset('--hard', 'HEAD~1') }
+  set v [db one { SELECT v FROM t WHERE id = 1 }]
+  set has_t2 [db one { SELECT count(*) FROM sqlite_master WHERE name = 't2' }]
+  set dirty [db one { SELECT count(*) FROM dolt_status }]
+  list $v $has_t2 $dirty
+} -test {
+  faultsim_test_result {0 {v1 0 0}} \
+      {1 {out of memory}} {1 {disk I/O error}} {1 {failed to load commit}}
+  catchsql ROLLBACK
+  faultsim_integrity_check
+}
+
+finish_test
