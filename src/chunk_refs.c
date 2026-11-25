@@ -88,10 +88,6 @@ int refsTableBranchCount(const RefsTable *rt){
   return rt->nBranches;
 }
 
-int refsTableRemoteCount(const RefsTable *rt){
-  return rt->nRemotes;
-}
-
 void refsTableSetHash(RefsTable *rt, const ProllyHash *h){
   assert( rt!=0 && h!=0 );
   memcpy(&rt->refsHash, h, sizeof(ProllyHash));

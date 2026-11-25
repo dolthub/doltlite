@@ -74,7 +74,6 @@ int csFindNamedRef(const void *aBase, int n, int stride, const char *zName);
 int csRefArrayGrow(void **paBase, int n, int stride);
 
 int refsTableBranchCount(const RefsTable *rt);
-int refsTableRemoteCount(const RefsTable *rt);
 
 i64 refsTableGetSequence(const RefsTable *rt, const char *zTableName);
 
