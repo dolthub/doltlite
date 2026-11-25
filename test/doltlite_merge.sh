@@ -3178,5 +3178,159 @@ run_test "merge_partial_unique_ipk_integrity" "PRAGMA integrity_check;" "ok" "$D
 
 rm -f "$DB_PIDX1" "$DB_PIDX2" "$DB_PIDX3" "$DB_PIDX4"
 
+DB_FKG1=/tmp/test_merge_fkg1_$$.db; rm -f "$DB_FKG1"
+$DOLTLITE "$DB_FKG1" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE p(id INTEGER PRIMARY KEY, a INT, g INT GENERATED ALWAYS AS (a*2) STORED UNIQUE);
+CREATE TABLE c(id INTEGER PRIMARY KEY, pg INT REFERENCES p(g));
+INSERT INTO p(id, a) VALUES (1, 5), (2, 6);
+INSERT INTO c VALUES (1, 10);
+SELECT dolt_commit('-Am', 'base');
+PRAGMA foreign_keys = OFF;
+DELETE FROM p WHERE id = 1;
+SQL
+run_test "verify_fk_stored_generated_parent_vc" \
+  "SELECT dolt_verify_constraints('--all');" "1" "$DB_FKG1"
+run_test "verify_fk_stored_generated_parent_cv" \
+  "SELECT \"table\" || '|' || num_violations FROM dolt_constraint_violations;" "c|1" "$DB_FKG1"
+
+DB_FKG2=/tmp/test_merge_fkg2_$$.db; rm -f "$DB_FKG2"
+$DOLTLITE "$DB_FKG2" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE p(id INTEGER PRIMARY KEY, a INT, g INT GENERATED ALWAYS AS (a*2) STORED UNIQUE);
+CREATE TABLE c(id INTEGER PRIMARY KEY, pg INT REFERENCES p(g));
+INSERT INTO p(id, a) VALUES (1, 5), (2, 6);
+INSERT INTO c VALUES (1, 10);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('b');
+INSERT INTO p(id, a) VALUES (3, 7);
+SELECT dolt_commit('-Am', 'main');
+SELECT dolt_checkout('b');
+PRAGMA foreign_keys = OFF;
+DELETE FROM p WHERE id = 1;
+SELECT dolt_commit('-Am', 'b');
+SELECT dolt_checkout('main');
+SQL
+run_test_error_match "merge_fk_stored_generated_parent_errors" \
+  "SELECT dolt_merge('b');" "constraint violations|rolled back" "$DB_FKG2"
+TX_FKG2=$(echo "BEGIN;
+SELECT dolt_merge('b');
+SELECT 'TX|' || (SELECT count(*) FROM dolt_constraint_violations) || '|' ||
+       COALESCE((SELECT num_violations FROM dolt_constraint_violations WHERE \"table\"='c'), 0);
+ROLLBACK;" | $DOLTLITE "$DB_FKG2" 2>&1 | grep '^TX|')
+if [ "$TX_FKG2" = "TX|1|1" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: merge_fk_stored_generated_parent_cv\n  expected: TX|1|1\n  got:      $TX_FKG2"
+fi
+
+DB_FKG3=/tmp/test_merge_fkg3_$$.db; rm -f "$DB_FKG3"
+$DOLTLITE "$DB_FKG3" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE p(id INTEGER PRIMARY KEY, a INT, g INT GENERATED ALWAYS AS (a*2) VIRTUAL UNIQUE);
+CREATE TABLE c(id INTEGER PRIMARY KEY, pg INT REFERENCES p(g));
+INSERT INTO p(id, a) VALUES (1, 5), (2, 6);
+INSERT INTO c VALUES (1, 10);
+SELECT dolt_commit('-Am', 'base');
+PRAGMA foreign_keys = OFF;
+DELETE FROM p WHERE id = 1;
+SQL
+run_test "verify_fk_virtual_generated_parent_vc" \
+  "SELECT dolt_verify_constraints('--all');" "1" "$DB_FKG3"
+run_test "verify_fk_virtual_generated_parent_cv" \
+  "SELECT \"table\" || '|' || num_violations FROM dolt_constraint_violations;" "c|1" "$DB_FKG3"
+
+DB_FKG4=/tmp/test_merge_fkg4_$$.db; rm -f "$DB_FKG4"
+$DOLTLITE "$DB_FKG4" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE p(id INTEGER PRIMARY KEY, a INT, g INT GENERATED ALWAYS AS (a*2) VIRTUAL UNIQUE);
+CREATE TABLE c(id INTEGER PRIMARY KEY, pg INT REFERENCES p(g));
+INSERT INTO p(id, a) VALUES (1, 5), (2, 6);
+INSERT INTO c VALUES (1, 10);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('b');
+INSERT INTO p(id, a) VALUES (3, 7);
+SELECT dolt_commit('-Am', 'main');
+SELECT dolt_checkout('b');
+PRAGMA foreign_keys = OFF;
+DELETE FROM p WHERE id = 1;
+SELECT dolt_commit('-Am', 'b');
+SELECT dolt_checkout('main');
+SQL
+run_test_error_match "merge_fk_virtual_generated_parent_errors" \
+  "SELECT dolt_merge('b');" "constraint violations|rolled back" "$DB_FKG4"
+TX_FKG4=$(echo "BEGIN;
+SELECT dolt_merge('b');
+SELECT 'TX|' || (SELECT count(*) FROM dolt_constraint_violations) || '|' ||
+       COALESCE((SELECT num_violations FROM dolt_constraint_violations WHERE \"table\"='c'), 0);
+ROLLBACK;" | $DOLTLITE "$DB_FKG4" 2>&1 | grep '^TX|')
+if [ "$TX_FKG4" = "TX|1|1" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: merge_fk_virtual_generated_parent_cv\n  expected: TX|1|1\n  got:      $TX_FKG4"
+fi
+
+DB_FKG5=/tmp/test_merge_fkg5_$$.db; rm -f "$DB_FKG5"
+$DOLTLITE "$DB_FKG5" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE p(id INT PRIMARY KEY, g INT GENERATED ALWAYS AS (id*2) VIRTUAL UNIQUE) WITHOUT ROWID;
+CREATE TABLE c(id INTEGER PRIMARY KEY, pg INT REFERENCES p(g));
+INSERT INTO p(id) VALUES (5), (6);
+INSERT INTO c VALUES (1, 10);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('b');
+INSERT INTO p(id) VALUES (7);
+SELECT dolt_commit('-Am', 'main');
+SELECT dolt_checkout('b');
+PRAGMA foreign_keys = OFF;
+DELETE FROM p WHERE id = 5;
+SELECT dolt_commit('-Am', 'b');
+SELECT dolt_checkout('main');
+SQL
+run_test_error_match "merge_fk_without_rowid_virtual_parent_errors" \
+  "SELECT dolt_merge('b');" "constraint violations|rolled back" "$DB_FKG5"
+TX_FKG5=$(echo "BEGIN;
+SELECT dolt_merge('b');
+SELECT 'TX|' || (SELECT count(*) FROM dolt_constraint_violations) || '|' ||
+       COALESCE((SELECT num_violations FROM dolt_constraint_violations WHERE \"table\"='c'), 0);
+ROLLBACK;" | $DOLTLITE "$DB_FKG5" 2>&1 | grep '^TX|')
+if [ "$TX_FKG5" = "TX|1|1" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: merge_fk_without_rowid_virtual_parent_cv\n  expected: TX|1|1\n  got:      $TX_FKG5"
+fi
+
+DB_FKG6=/tmp/test_merge_fkg6_$$.db; rm -f "$DB_FKG6"
+$DOLTLITE "$DB_FKG6" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE p(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO p VALUES (1, 10);
+ALTER TABLE p ADD COLUMN code TEXT DEFAULT 'abc';
+CREATE UNIQUE INDEX idx_p_code ON p(code);
+CREATE TABLE c(id INTEGER PRIMARY KEY, pcode TEXT REFERENCES p(code));
+INSERT INTO c VALUES (1, 'abc');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('b');
+INSERT INTO p(id, v, code) VALUES (2, 20, 'xyz');
+SELECT dolt_commit('-Am', 'main');
+SELECT dolt_checkout('b');
+PRAGMA foreign_keys = OFF;
+DELETE FROM p WHERE id = 1;
+SELECT dolt_commit('-Am', 'b');
+SELECT dolt_checkout('main');
+SQL
+run_test_error_match "merge_fk_added_default_parent_errors" \
+  "SELECT dolt_merge('b');" "constraint violations|rolled back" "$DB_FKG6"
+TX_FKG6=$(echo "BEGIN;
+SELECT dolt_merge('b');
+SELECT 'TX|' || (SELECT count(*) FROM dolt_constraint_violations) || '|' ||
+       COALESCE((SELECT num_violations FROM dolt_constraint_violations WHERE \"table\"='c'), 0);
+ROLLBACK;" | $DOLTLITE "$DB_FKG6" 2>&1 | grep '^TX|')
+if [ "$TX_FKG6" = "TX|1|1" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: merge_fk_added_default_parent_cv\n  expected: TX|1|1\n  got:      $TX_FKG6"
+fi
+
+rm -f "$DB_FKG1" "$DB_FKG2" "$DB_FKG3" "$DB_FKG4" "$DB_FKG5" "$DB_FKG6"
+
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95" "$DB96" "$DB97" "$DB98" "$DB99" "$DB100" "$DB101" "$DB102" "$DB103" "$DB104" "$DB105" "$DB106" "$DB107" "$DB108" "$DB109" "$DB110" "$DB111" "$DB112" "$DB113" "$DB114" "$DB115" "$DB116" "$DB117" "$DB118" "$DB119" "$DB120" "$DB121" "$DB122"
 dltest_finish

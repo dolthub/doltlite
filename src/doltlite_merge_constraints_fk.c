@@ -34,18 +34,7 @@ static int backfillParentPk(sqlite3 *db, const char *zParent,
 }
 
 
-static int tableColumnIndex(const DoltliteColInfo *pCols, const char *zName){
-  int i;
-  for(i=0; i<pCols->nCol; i++){
-    if( pCols->azName[i] && sqlite3_stricmp(pCols->azName[i], zName)==0 ){
-      return i;
-    }
-  }
-  return -1;
-}
-
-/* Declared column, including generated ones. Column-info indexes skip
-** those, so they are not subscripts of Table.aCol. */
+/* Declared column, including generated ones. */
 static int tableDeclIndex(const Table *pTab, const char *zName){
   int i;
   if( !pTab || !zName ) return -1;
@@ -56,6 +45,132 @@ static int tableDeclIndex(const Table *pTab, const char *zName){
   return -1;
 }
 
+static int fkStoredField(Table *pTab, int iColumn){
+  if( HasRowid(pTab) ) return sqlite3TableColumnToStorage(pTab, iColumn);
+  return sqlite3TableColumnToIndex(sqlite3PrimaryKeyIndex(pTab), iColumn);
+}
+
+static int fkDecodeClusteredKey(
+  sqlite3 *db,
+  Table *pTab,
+  const u8 *pKey, int nKey,
+  u8 **ppRec, int *pnRec
+){
+  Index *pPk;
+  KeyInfo *pKI;
+  u8 *pBuf = 0;
+  int nAlloc = 0, nRec = 0;
+  int i, rc;
+
+  *ppRec = 0;
+  *pnRec = 0;
+  if( !pKey || nKey<=0 || !pTab || HasRowid(pTab) ) return SQLITE_OK;
+  pPk = sqlite3PrimaryKeyIndex(pTab);
+  if( !pPk ) return SQLITE_OK;
+  pKI = sqlite3KeyInfoAlloc(db, pPk->nKeyCol, 0);
+  if( !pKI ) return SQLITE_NOMEM;
+  for(i=0; i<pPk->nKeyCol; i++){
+    pKI->aSortFlags[i] = pPk->aSortOrder[i];
+  }
+  rc = recordFromSortKeyBufferColl(pKey, nKey, pKI, &pBuf, &nAlloc, &nRec);
+  sqlite3KeyInfoUnref(pKI);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pBuf);
+    return rc;
+  }
+  *ppRec = pBuf;
+  *pnRec = nRec;
+  return SQLITE_OK;
+}
+
+#ifndef SQLITE_OMIT_GENERATED_COLUMNS
+static int fkEvalVirtualColumn(
+  sqlite3 *db,
+  Table *pTab,
+  sqlite3_stmt *pStmt,
+  const u8 *pVal,
+  int nVal,
+  const DoltliteRecordInfo *pInfo,
+  int bHasRowid,
+  i64 intKey,
+  DoltliteSerialValue *pOut,
+  u8 **ppOwned
+){
+  sqlite3_value *pRes;
+  int i, iParam, eType, n, rc = SQLITE_OK;
+
+  *ppOwned = 0;
+  memset(pOut, 0, sizeof(*pOut));
+  sqlite3_reset(pStmt);
+  sqlite3_clear_bindings(pStmt);
+  for(i=0, iParam=1; i<pTab->nCol && rc==SQLITE_OK; i++){
+    int iField;
+    DoltliteSerialValue v;
+    if( doltliteColumnIsVirtual(pTab, i) ) continue;
+    if( bHasRowid && i==pTab->iPKey ){
+      rc = sqlite3_bind_int64(pStmt, iParam++, intKey);
+      continue;
+    }
+    iField = fkStoredField(pTab, i);
+    if( iField<0 || iField>=pInfo->nField ){
+      rc = doltliteBindColumnDefault(db, pStmt, iParam++, pTab, i);
+      continue;
+    }
+    rc = doltliteSerialValueFromField(pVal, nVal, pInfo, iField, &v);
+    if( rc!=SQLITE_OK ) break;
+    if( v.eType==SQLITE_NULL ){
+      rc = sqlite3_bind_null(pStmt, iParam);
+    }else if( v.eType==SQLITE_INTEGER ){
+      rc = sqlite3_bind_int64(pStmt, iParam, v.i);
+    }else if( v.eType==SQLITE_FLOAT ){
+      rc = sqlite3_bind_double(pStmt, iParam, v.r);
+    }else if( v.eType==SQLITE_TEXT ){
+      rc = sqlite3_bind_text(pStmt, iParam, (const char*)v.p, v.n,
+                             SQLITE_TRANSIENT);
+    }else{
+      rc = sqlite3_bind_blob(pStmt, iParam, v.p, v.n, SQLITE_TRANSIENT);
+    }
+    iParam++;
+  }
+  if( rc==SQLITE_OK && bHasRowid ){
+    rc = sqlite3_bind_int64(pStmt, pTab->nNVCol+1, intKey);
+  }
+  if( rc==SQLITE_OK ) rc = sqlite3_step(pStmt);
+  if( rc!=SQLITE_ROW ){
+    sqlite3_reset(pStmt);
+    return rc==SQLITE_DONE ? SQLITE_ERROR : rc;
+  }
+  pRes = sqlite3_column_value(pStmt, 0);
+  eType = sqlite3_value_type(pRes);
+  if( eType==SQLITE_INTEGER ){
+    pOut->eType = SQLITE_INTEGER;
+    pOut->i = sqlite3_value_int64(pRes);
+  }else if( eType==SQLITE_FLOAT ){
+    pOut->eType = SQLITE_FLOAT;
+    pOut->r = sqlite3_value_double(pRes);
+  }else if( eType==SQLITE_TEXT || eType==SQLITE_BLOB ){
+    n = sqlite3_value_bytes(pRes);
+    *ppOwned = sqlite3_malloc(n ? n : 1);
+    if( !*ppOwned ){
+      sqlite3_reset(pStmt);
+      return SQLITE_NOMEM;
+    }
+    if( n>0 ){
+      memcpy(*ppOwned, eType==SQLITE_TEXT
+             ? (const void*)sqlite3_value_text(pRes)
+             : sqlite3_value_blob(pRes), (size_t)n);
+    }
+    pOut->eType = eType;
+    pOut->p = *ppOwned;
+    pOut->n = n;
+  }else{
+    pOut->eType = SQLITE_NULL;
+  }
+  sqlite3_reset(pStmt);
+  return SQLITE_OK;
+}
+#endif
+
 typedef struct FkParentLookup FkParentLookup;
 struct FkParentLookup {
   int ready;
@@ -64,8 +179,6 @@ struct FkParentLookup {
   int nCol;
   struct TableEntry *pParent;
   Table *pTab;
-  DoltliteColInfo cols;
-  int *aiCol;       /* Index in cols, which omits generated columns */
   int *aiDecl;      /* Index in Table.aCol, collation and affinity */
   ProllyCursor cur;
   Btree *pIndex;
@@ -89,9 +202,7 @@ static void fkParentLookupClear(sqlite3 *db, FkParentLookup *p){
   }
   sqlite3KeyInfoUnref(p->pKeyInfo);
   if( p->ready && p->pParent ) prollyCursorClose(&p->cur);
-  sqlite3_free(p->aiCol);
   sqlite3_free(p->aiDecl);
-  doltliteFreeColInfo(&p->cols);
 }
 
 static int fkParentLookupInit(
@@ -105,6 +216,8 @@ static int fkParentLookupInit(
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
   DoltliteSerialValue *aValue = 0;
+  u8 **apOwned = 0;
+  sqlite3_stmt **apVirtStmt = 0;
   const char *zSchema = "main";
   const char *zTable = zParentTable;
   Pgno root;
@@ -129,21 +242,16 @@ static int fkParentLookupInit(
   prollyCursorInit(&p->cur, cs, pCache, &p->pParent->root, p->pParent->flags);
   p->ready = 1;
   p->nCol = nCol;
-  rc = doltliteGetColumnNamesIn(db, zSchema, zTable, &p->cols);
-  if( rc!=SQLITE_OK ) return rc;
   pTab = sqlite3FindTable(db, zTable, zSchema);
   if( !pTab ) return SQLITE_ERROR;
   p->pTab = pTab;
-  p->aiCol = sqlite3_malloc64((sqlite3_int64)nCol * sizeof(int));
   p->aiDecl = sqlite3_malloc64((sqlite3_int64)nCol * sizeof(int));
   p->pKeyInfo = sqlite3KeyInfoAlloc(db, nCol, 0);
-  if( !p->aiCol || !p->aiDecl || !p->pKeyInfo ) return SQLITE_NOMEM;
+  if( !p->aiDecl || !p->pKeyInfo ) return SQLITE_NOMEM;
   for(int i=0; i<nCol; i++){
-    int col = tableColumnIndex(&p->cols, azTo[i]);
     int decl = tableDeclIndex(pTab, azTo[i]);
     const char *zColl;
-    if( col<0 || decl<0 ) return SQLITE_ERROR;
-    p->aiCol[i] = col;
+    if( decl<0 ) return SQLITE_ERROR;
     p->aiDecl[i] = decl;
     zColl = sqlite3ColumnColl(&pTab->aCol[decl]);
     p->pKeyInfo->aColl[i] = sqlite3FindCollSeq(db, ENC(db),
@@ -160,7 +268,7 @@ static int fkParentLookupInit(
     sqlite3VdbeMemInit(&p->pProbe->aMem[i], db, MEM_Null);
   }
   p->isIntPk = nCol==1 && (p->pParent->flags & PROLLY_NODE_INTKEY)
-      && p->cols.iPkCol==p->aiCol[0];
+      && pTab->iPKey==p->aiDecl[0];
   if( p->isIntPk ) return SQLITE_OK;
 
   /* Rebuilt secondary indexes need not yet reflect the merged table root. */
@@ -177,37 +285,65 @@ static int fkParentLookupInit(
   if( rc!=SQLITE_OK ) return rc;
   p->cursorOpen = 1;
   aValue = sqlite3_malloc64((sqlite3_int64)nCol * sizeof(*aValue));
-  if( !aValue ) return SQLITE_NOMEM;
-  rc = prollyCursorFirst(&p->cur, &res);
+  apOwned = sqlite3_malloc64((sqlite3_int64)nCol * sizeof(*apOwned));
+  apVirtStmt = sqlite3_malloc64((sqlite3_int64)nCol * sizeof(*apVirtStmt));
+  if( !aValue || !apOwned || !apVirtStmt ){
+    sqlite3_free(aValue);
+    sqlite3_free(apOwned);
+    sqlite3_free(apVirtStmt);
+    return SQLITE_NOMEM;
+  }
+  memset(apVirtStmt, 0, (size_t)nCol * sizeof(*apVirtStmt));
+#ifndef SQLITE_OMIT_GENERATED_COLUMNS
+  for(int i=0; i<nCol && rc==SQLITE_OK; i++){
+    int decl = p->aiDecl[i];
+    if( doltliteColumnIsVirtual(pTab, decl) ){
+      Expr *pExpr = sqlite3ColumnExpr(pTab, &pTab->aCol[decl]);
+      if( !pExpr ){
+        rc = SQLITE_CORRUPT;
+        break;
+      }
+      rc = doltlitePrepareIndexExpr(db, pTab, pExpr, decl, &apVirtStmt[i]);
+    }
+  }
+#endif
+  if( rc==SQLITE_OK ) rc = prollyCursorFirst(&p->cur, &res);
   while( rc==SQLITE_OK && res==0 && prollyCursorIsValid(&p->cur) ){
     const u8 *pVal;
     int nVal;
+    int bHasRowid = (p->pParent->flags & PROLLY_NODE_INTKEY)!=0;
+    i64 intKey = bHasRowid ? prollyCursorIntKey(&p->cur) : 0;
     u8 *pDecoded = 0;
     u8 *pRecord = 0;
     int nRecord = 0;
     DoltliteRecordInfo info = {0};
     BtreePayload payload;
     prollyCursorValue(&p->cur, &pVal, &nVal);
-    if( nVal==0 && (p->pParent->flags & PROLLY_NODE_INTKEY)==0 ){
+    if( nVal==0 && !bHasRowid ){
       const u8 *pKey;
       int nKey;
       prollyCursorKey(&p->cur, &pKey, &nKey);
-      rc = doltliteRecordFromClusteredKeyCols(db, &p->cols,
-          pKey, nKey, &pDecoded, &nVal);
+      rc = fkDecodeClusteredKey(db, pTab, pKey, nKey, &pDecoded, &nVal);
       pVal = pDecoded;
     }
     if( rc==SQLITE_OK ) rc = doltliteParseRecordStrict(pVal, nVal, &info);
     memset(aValue, 0, (size_t)nCol * sizeof(*aValue));
+    memset(apOwned, 0, (size_t)nCol * sizeof(*apOwned));
     for(int i=0; i<nCol && rc==SQLITE_OK; i++){
-      int col = p->aiCol[i];
-      if( (p->pParent->flags & PROLLY_NODE_INTKEY) && col==p->cols.iPkCol ){
+      int decl = p->aiDecl[i];
+      if( bHasRowid && decl==pTab->iPKey ){
         aValue[i].eType = SQLITE_INTEGER;
-        aValue[i].i = prollyCursorIntKey(&p->cur);
+        aValue[i].i = intKey;
+#ifndef SQLITE_OMIT_GENERATED_COLUMNS
+      }else if( doltliteColumnIsVirtual(pTab, decl) ){
+        rc = fkEvalVirtualColumn(db, pTab, apVirtStmt[i], pVal, nVal, &info,
+                                 bHasRowid, intKey, &aValue[i], &apOwned[i]);
+#endif
       }else{
-        int iField = p->cols.aColToRec[col];
-        /* A trailing NULL is stored by leaving the field out. */
+        int iField = fkStoredField(pTab, decl);
         if( iField<0 || iField>=info.nField ){
-          aValue[i].eType = SQLITE_NULL;
+          rc = doltliteColumnDefaultSerialValue(db, pTab, decl,
+                                                &aValue[i], &apOwned[i]);
         }else{
           rc = doltliteSerialValueFromField(pVal, nVal, &info,
                                             iField, &aValue[i]);
@@ -224,11 +360,15 @@ static int fkParentLookupInit(
       payload.nKey = nRecord;
       rc = sqlite3BtreeInsert(p->pIndexCur, &payload, 0, 0);
     }
+    for(int i=0; i<nCol; i++) sqlite3_free(apOwned[i]);
     sqlite3_free(pRecord);
     sqlite3_free(pDecoded);
     doltliteRecordInfoClear(&info);
     if( rc==SQLITE_OK ) rc = prollyCursorNext(&p->cur);
   }
+  for(int i=0; i<nCol; i++) sqlite3_finalize(apVirtStmt[i]);
+  sqlite3_free(apVirtStmt);
+  sqlite3_free(apOwned);
   sqlite3_free(aValue);
   prollyCursorClose(&p->cur);
   return rc==SQLITE_DONE ? SQLITE_OK : rc;
