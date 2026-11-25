@@ -17,6 +17,7 @@
 #include "prolly_chunk_walk.h"
 #include "doltlite_ancestor.h"
 #include "doltlite_internal.h"
+#include "doltlite_constraint_violations.h"
 #include "doltlite_record.h"
 #include "prolly_cache.h"
 #include "prolly_cursor.h"
@@ -23033,6 +23034,108 @@ static void run_wal_tail_replay_rollback_nrecent(void){
   removeDbFiles(dbpath);
 }
 
+static void run_cv_without_rowid_pk_delete(void){
+  char zDb[256];
+  sqlite3 *db = 0;
+  ChunkStore *cs;
+  ProllyCache *pCache;
+  Pgno iTable = 0;
+  ProllyHash root;
+  u8 flags = 0;
+  ProllyCursor cur;
+  int res = 0;
+  const u8 *pKey = 0;
+  int nKey = 0;
+  u8 *pKeyCopy = 0;
+  sqlite3_stmt *pStmt = 0;
+  sqlite3_int64 rowidFirst = 0, rowidSecond = 0;
+  int kFirst = 0, kSecond = 0, nRemain = -1;
+  int rc;
+
+  printf("=== Constraint Violation Delete On PK-Only WITHOUT ROWID Table ===\n\n");
+
+  snprintf(zDb, sizeof(zDb), "%s/test_cv_wor_pk_%d.db",
+           DOLTLITE_TEST_TMPDIR, (int)getpid());
+  removeDbFiles(zDb);
+
+  rc = sqlite3_open(zDb, &db);
+  check("cv_wor_pk: open", rc==SQLITE_OK && db!=0);
+  if( !db ) return;
+
+  rc = sqlite3_exec(db,
+      "CREATE TABLE p(k INT PRIMARY KEY);"
+      "CREATE TABLE c(k INT PRIMARY KEY, FOREIGN KEY(k) REFERENCES p(k)) WITHOUT ROWID;"
+      "INSERT INTO c VALUES(1);"
+      "SELECT dolt_commit('-Am','init');",
+      0, 0, 0);
+  check("cv_wor_pk: setup", rc==SQLITE_OK);
+
+  cs = doltliteGetChunkStore(db);
+  pCache = doltliteGetCache(db);
+  rc = doltliteResolveTableName(db, "c", &iTable);
+  if( rc==SQLITE_OK ) rc = doltliteGetSessionTableRoot(db, iTable, &root, &flags);
+  check("cv_wor_pk: resolve table root", rc==SQLITE_OK && !(flags & PROLLY_NODE_INTKEY));
+
+  memset(&cur, 0, sizeof(cur));
+  prollyCursorInit(&cur, cs, pCache, &root, flags);
+  rc = prollyCursorFirst(&cur, &res);
+  check("cv_wor_pk: cursor first", rc==SQLITE_OK && res==0 && prollyCursorIsValid(&cur));
+  if( rc==SQLITE_OK && res==0 && prollyCursorIsValid(&cur) ){
+    prollyCursorKey(&cur, &pKey, &nKey);
+    if( pKey && nKey>0 ){
+      pKeyCopy = (u8*)malloc((size_t)nKey);
+      if( pKeyCopy ) memcpy(pKeyCopy, pKey, (size_t)nKey);
+    }
+  }
+  prollyCursorClose(&cur);
+  check("cv_wor_pk: captured clustered key", pKeyCopy!=0 && nKey>0);
+
+  rc = doltliteAppendConstraintViolation(
+      db, "c", DOLTLITE_CV_FOREIGN_KEY, 0,
+      pKeyCopy, nKey, 0, 0, "{\"Columns\":[\"k\"]}");
+  free(pKeyCopy);
+  check("cv_wor_pk: append empty-val violation", rc==SQLITE_OK);
+
+  rc = sqlite3_prepare_v2(db,
+      "SELECT rowid, k FROM dolt_constraint_violations_c", -1, &pStmt, 0);
+  check("cv_wor_pk: prepare rowid,k", rc==SQLITE_OK);
+  if( rc==SQLITE_OK && sqlite3_step(pStmt)==SQLITE_ROW ){
+    rowidFirst = sqlite3_column_int64(pStmt, 0);
+    kFirst = sqlite3_column_int(pStmt, 1);
+  }
+  sqlite3_finalize(pStmt);
+  pStmt = 0;
+
+  rc = sqlite3_prepare_v2(db,
+      "SELECT k, rowid FROM dolt_constraint_violations_c", -1, &pStmt, 0);
+  check("cv_wor_pk: prepare k,rowid", rc==SQLITE_OK);
+  if( rc==SQLITE_OK && sqlite3_step(pStmt)==SQLITE_ROW ){
+    kSecond = sqlite3_column_int(pStmt, 0);
+    rowidSecond = sqlite3_column_int64(pStmt, 1);
+  }
+  sqlite3_finalize(pStmt);
+  pStmt = 0;
+
+  check("cv_wor_pk: decoded k==1 both orders", kFirst==1 && kSecond==1);
+  check("cv_wor_pk: rowid invariant across column order",
+        rowidFirst!=0 && rowidFirst==rowidSecond);
+
+  rc = sqlite3_exec(db,
+      "DELETE FROM dolt_constraint_violations_c WHERE k = 1;", 0, 0, 0);
+  check("cv_wor_pk: delete where k=1", rc==SQLITE_OK);
+
+  rc = sqlite3_prepare_v2(db,
+      "SELECT count(*) FROM dolt_constraint_violations_c", -1, &pStmt, 0);
+  if( rc==SQLITE_OK && sqlite3_step(pStmt)==SQLITE_ROW ){
+    nRemain = sqlite3_column_int(pStmt, 0);
+  }
+  sqlite3_finalize(pStmt);
+  check("cv_wor_pk: remaining violations == 0", nRemain==0);
+
+  sqlite3_close(db);
+  removeDbFiles(zDb);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -23337,7 +23440,8 @@ static const RegressionCase aCases[] = {
   { "nonlocal_attach_oom_no_leak", "Nonlocal Attach OOM No Leak Test", run_nonlocal_attach_oom_no_leak },
   { "clean_close_marker_respects_shared_lock", "Clean Close Marker Respects Shared Lock Test", run_clean_close_marker_respects_shared_lock },
   { "remote_refs_error_rollback", "Remote Refs Error Rollback Test", run_remote_refs_error_rollback },
-  { "wal_tail_replay_rollback_nrecent", "WAL Tail Replay Rollback nRecent Test", run_wal_tail_replay_rollback_nrecent }
+  { "wal_tail_replay_rollback_nrecent", "WAL Tail Replay Rollback nRecent Test", run_wal_tail_replay_rollback_nrecent },
+  { "cv_without_rowid_pk_delete", "Constraint Violation Delete On PK-Only WITHOUT ROWID Table", run_cv_without_rowid_pk_delete }
 };
 
 static int run_case_by_name(const char *zName){
