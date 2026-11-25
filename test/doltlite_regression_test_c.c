@@ -1,3 +1,6 @@
+#ifndef DOLTLITE_PROLLY
+#define DOLTLITE_PROLLY 1
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +26,7 @@
 #include "prolly_node.h"
 #include "prolly_mutmap.h"
 #include "vdbeInt.h"
+#include "prolly_btree_int.h"
 #if !SQLITE_OS_WIN
 #include <sys/wait.h>
 #endif
@@ -22116,6 +22120,281 @@ static void run_fast_intleaf_skips_degenerate_schema_rows(void){
   removeDbFiles(dbpath);
 }
 
+static void cursor_prev_read_text_key(
+  BtCursor *pCur,
+  char *zOut,
+  int nOut,
+  i64 *pRowidOut
+){
+  u32 nPay = 0;
+  const u8 *pPay = 0;
+  int rc;
+  u64 hdrSize = 0;
+  u64 st1 = 0, st2 = 0;
+  int off = 0;
+  zOut[0] = 0;
+  if( pRowidOut ) *pRowidOut = -1;
+  nPay = sqlite3BtreePayloadSize(pCur);
+  pPay = (const u8*)sqlite3BtreePayloadFetch(pCur, &nPay);
+  if( !pPay || nPay==0 ) return;
+  off += sqlite3GetVarint(pPay + off, &hdrSize);
+  off += sqlite3GetVarint(pPay + off, &st1);
+  if( off < (int)hdrSize ){
+    off += sqlite3GetVarint(pPay + off, &st2);
+  }
+  if( st1 >= 13 && (st1 & 1) ){
+    int nStr = (int)((st1 - 13) / 2);
+    int dataOff = (int)hdrSize;
+    if( dataOff + nStr <= (int)nPay ){
+      int nCopy = nStr < nOut - 1 ? nStr : nOut - 1;
+      memcpy(zOut, pPay + dataOff, (size_t)nCopy);
+      zOut[nCopy] = 0;
+    }
+    if( pRowidOut ){
+      if( st2==8 ){
+        *pRowidOut = 0;
+      }else if( st2==9 ){
+        *pRowidOut = 1;
+      }else if( st2==1 && dataOff + nStr + 1 <= (int)nPay ){
+        *pRowidOut = (i8)pPay[dataOff + nStr];
+      }
+    }
+  }
+  rc = SQLITE_OK;
+  (void)rc;
+}
+
+static void run_cursor_prev_mutmap_no_double_dec(void){
+  sqlite3 *db = 0;
+  Btree *pBt = 0;
+  BtCursor *pCur = 0;
+  KeyInfo *pKi = 0;
+  struct TableEntry *pTE = 0;
+  Pgno pgnoT = 0, pgnoIdx = 0;
+  char dbpath[256];
+  char zKey[32];
+  u8 *aRec[4] = {0, 0, 0, 0};
+  int anRec[4] = {0, 0, 0, 0};
+  int rc, res = 0, i;
+
+  printf("=== Cursor Previous MutMap No Double-Decrement Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_cursor_prev_mutmap_no_double_dec");
+  removeDbFiles(dbpath);
+
+  check("cpnd_open", open_db(dbpath, &db)==SQLITE_OK);
+  check("cpnd_schema", execSql(db,
+      "CREATE TABLE t(k TEXT PRIMARY KEY, v TEXT) WITHOUT ROWID;"
+      "CREATE TABLE s(id INTEGER PRIMARY KEY, k TEXT);"
+      "CREATE INDEX idx_k ON s(k);")==SQLITE_OK);
+
+  pgnoT = (Pgno)queryInt64(db,
+      "SELECT rootpage FROM sqlite_master WHERE type='table' AND name='t'");
+  pgnoIdx = (Pgno)queryInt64(db,
+      "SELECT rootpage FROM sqlite_master WHERE type='index' AND name='idx_k'");
+  check("cpnd_roots", pgnoT>1 && pgnoIdx>1);
+
+  /* Insert 4 pending-only rows into t inside an uncommitted transaction so the
+  ** committed tree is empty and all rows live only in pMutMap. */
+  check("cpnd_begin", execSql(db,
+      "BEGIN;"
+      "INSERT INTO t VALUES('k1','v1'),('k2','v2'),('k3','v3'),('k4','v4');"
+      "INSERT INTO s VALUES(1,'dup'),(2,'dup'),(3,'dup');")==SQLITE_OK);
+
+  pBt = db->aDb[0].pBt;
+  pCur = (BtCursor*)sqlite3_malloc(sqlite3BtreeCursorSize());
+  pKi = (KeyInfo*)sqlite3_malloc(sizeof(KeyInfo) + 2 * sizeof(CollSeq*));
+  check("cpnd_alloc", pBt!=0 && pCur!=0 && pKi!=0);
+  if( !pBt || !pCur || !pKi ) goto cleanup;
+
+  memset(pKi, 0, sizeof(KeyInfo) + 2 * sizeof(CollSeq*));
+  pKi->db = db;
+  pKi->enc = SQLITE_UTF8;
+  pKi->nKeyField = 1;
+  pKi->nAllField = 2;
+  pKi->aSortFlags = (u8*)sqlite3_malloc(2);
+  pKi->aSortFlags[0] = 0;
+  pKi->aSortFlags[1] = 0;
+  pKi->aColl[0] = 0;
+  pKi->aColl[1] = 0;
+
+  sqlite3BtreeEnter(pBt);
+  sqlite3BtreeCursorZero(pCur);
+  rc = sqlite3BtreeCursor(pBt, pgnoT, 0, pKi, pCur);
+  check("cpnd_open_t_cur", rc==SQLITE_OK);
+
+  /* Capture the exact serialized records for k1..k4 via a normal forward scan. */
+  rc = sqlite3BtreeFirst(pCur, &res);
+  check("cpnd_capture_first", rc==SQLITE_OK && res==0);
+  for(i=0; i<4; i++){
+    u32 nPay = sqlite3BtreePayloadSize(pCur);
+    const u8 *pPay = (const u8*)sqlite3BtreePayloadFetch(pCur, &nPay);
+    check("cpnd_capture_pay", pPay!=0 && nPay>0);
+    aRec[i] = (u8*)sqlite3_malloc((int)nPay);
+    memcpy(aRec[i], pPay, nPay);
+    anRec[i] = (int)nPay;
+    if( i<3 ){
+      rc = sqlite3BtreeNext(pCur, 0);
+      check("cpnd_capture_next", rc==SQLITE_OK);
+    }
+  }
+
+  pTE = findTable(pBt, pgnoT);
+  check("cpnd_has_pending", pTE!=0 && pTE->pPending!=0 && pTE->pPending->nEntries==4);
+
+  /* Case A: non-intKey cursor positioned on pending entry k4 (idx=3) with
+  ** mmActive==0 and !prollyCursorIsValid(&pCur->pCur). Stepping backward must
+  ** visit k3, k2, k1 without skipping any entry, then reach EOF. */
+  clearMergeCursorState(pCur);
+  pCur->pCur.eState = PROLLY_CURSOR_EOF;
+  pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
+  rc = cacheCursorPayloadCopy(pCur, aRec[3], anRec[3]);
+  check("cpnd_caseA_cache", rc==SQLITE_OK);
+  pCur->eState = CURSOR_VALID;
+
+  rc = sqlite3BtreePrevious(pCur, 0);
+  cursor_prev_read_text_key(pCur, zKey, sizeof(zKey), 0);
+  check("cpnd_caseA_prev_k3", rc==SQLITE_OK && strcmp(zKey, "k3")==0);
+
+  rc = sqlite3BtreePrevious(pCur, 0);
+  cursor_prev_read_text_key(pCur, zKey, sizeof(zKey), 0);
+  check("cpnd_caseA_prev_k2", rc==SQLITE_OK && strcmp(zKey, "k2")==0);
+
+  rc = sqlite3BtreePrevious(pCur, 0);
+  cursor_prev_read_text_key(pCur, zKey, sizeof(zKey), 0);
+  check("cpnd_caseA_prev_k1", rc==SQLITE_OK && strcmp(zKey, "k1")==0);
+
+  rc = sqlite3BtreePrevious(pCur, 0);
+  check("cpnd_caseA_prev_eof", rc==SQLITE_DONE && sqlite3BtreeEof(pCur)!=0);
+
+  /* Case A2: positioned on middle pending entry k3 (idx=2); stepping backward
+  ** must land on k2 (not skip to k1 or jump to k3). */
+  clearMergeCursorState(pCur);
+  pCur->pCur.eState = PROLLY_CURSOR_EOF;
+  pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
+  rc = cacheCursorPayloadCopy(pCur, aRec[2], anRec[2]);
+  check("cpnd_caseA2_cache", rc==SQLITE_OK);
+  pCur->eState = CURSOR_VALID;
+
+  rc = sqlite3BtreePrevious(pCur, 0);
+  cursor_prev_read_text_key(pCur, zKey, sizeof(zKey), 0);
+  check("cpnd_caseA2_prev_k2", rc==SQLITE_OK && strcmp(zKey, "k2")==0);
+
+  rc = sqlite3BtreePrevious(pCur, 0);
+  cursor_prev_read_text_key(pCur, zKey, sizeof(zKey), 0);
+  check("cpnd_caseA2_prev_k1", rc==SQLITE_OK && strcmp(zKey, "k1")==0);
+
+  rc = sqlite3BtreePrevious(pCur, 0);
+  check("cpnd_caseA2_prev_eof", rc==SQLITE_DONE && sqlite3BtreeEof(pCur)!=0);
+
+  /* Case B: positioned on first pending entry k1 (idx=0); stepping backward
+  ** must cleanly reach EOF. */
+  clearMergeCursorState(pCur);
+  pCur->pCur.eState = PROLLY_CURSOR_EOF;
+  pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
+  rc = cacheCursorPayloadCopy(pCur, aRec[0], anRec[0]);
+  check("cpnd_caseB_cache", rc==SQLITE_OK);
+  pCur->eState = CURSOR_VALID;
+
+  rc = sqlite3BtreePrevious(pCur, 0);
+  check("cpnd_caseB_prev_eof", rc==SQLITE_DONE && sqlite3BtreeEof(pCur)!=0);
+
+  /* Case C: seedMutMapIterFromCursor returns SQLITE_NOTFOUND (no cached payload);
+  ** stepping backward must land on last entry k4 (not skip to k3). */
+  clearMergeCursorState(pCur);
+  CLEAR_CACHED_PAYLOAD(pCur);
+  pCur->pCur.eState = PROLLY_CURSOR_EOF;
+  pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
+  pCur->eState = CURSOR_VALID;
+
+  rc = sqlite3BtreePrevious(pCur, 0);
+  cursor_prev_read_text_key(pCur, zKey, sizeof(zKey), 0);
+  check("cpnd_caseC_prev_k4", rc==SQLITE_OK && strcmp(zKey, "k4")==0);
+
+  rc = sqlite3BtreePrevious(pCur, 0);
+  cursor_prev_read_text_key(pCur, zKey, sizeof(zKey), 0);
+  check("cpnd_caseC_prev_k3", rc==SQLITE_OK && strcmp(zKey, "k3")==0);
+
+  /* Case D: forward step symmetry from k1 (idx=0) and from SQLITE_NOTFOUND. */
+  clearMergeCursorState(pCur);
+  pCur->pCur.eState = PROLLY_CURSOR_EOF;
+  pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
+  rc = cacheCursorPayloadCopy(pCur, aRec[0], anRec[0]);
+  check("cpnd_caseD_cache", rc==SQLITE_OK);
+  pCur->eState = CURSOR_VALID;
+
+  rc = sqlite3BtreeNext(pCur, 0);
+  cursor_prev_read_text_key(pCur, zKey, sizeof(zKey), 0);
+  check("cpnd_caseD_next_k2", rc==SQLITE_OK && strcmp(zKey, "k2")==0);
+
+  clearMergeCursorState(pCur);
+  CLEAR_CACHED_PAYLOAD(pCur);
+  pCur->pCur.eState = PROLLY_CURSOR_EOF;
+  pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
+  pCur->eState = CURSOR_VALID;
+
+  rc = sqlite3BtreeNext(pCur, 0);
+  cursor_prev_read_text_key(pCur, zKey, sizeof(zKey), 0);
+  check("cpnd_caseD_notfound_k1", rc==SQLITE_OK && strcmp(zKey, "k1")==0);
+
+  sqlite3BtreeCloseCursor(pCur);
+
+  /* Case E: secondary index (!isTableRoot) with duplicate key values
+  ** ('dup',1), ('dup',2), ('dup',3). Positioning on ('dup',3) via cached payload
+  ** and stepping backward must visit ('dup',2) then ('dup',1) then EOF. */
+  sqlite3BtreeCursorZero(pCur);
+  rc = sqlite3BtreeCursor(pBt, pgnoIdx, 0, pKi, pCur);
+  check("cpnd_open_idx_cur", rc==SQLITE_OK && !pCur->isTableRoot);
+  {
+    u8 *pIdxRec3 = 0;
+    int nIdxRec3 = 0;
+    i64 rid = -1;
+    rc = sqlite3BtreeLast(pCur, &res);
+    check("cpnd_idx_last", rc==SQLITE_OK && res==0);
+    {
+      u32 nPay = sqlite3BtreePayloadSize(pCur);
+      const u8 *pPay = (const u8*)sqlite3BtreePayloadFetch(pCur, &nPay);
+      check("cpnd_idx_last_pay", pPay!=0 && nPay>0);
+      pIdxRec3 = (u8*)sqlite3_malloc((int)nPay);
+      memcpy(pIdxRec3, pPay, nPay);
+      nIdxRec3 = (int)nPay;
+    }
+    pTE = findTable(pBt, pgnoIdx);
+    clearMergeCursorState(pCur);
+    pCur->pCur.eState = PROLLY_CURSOR_EOF;
+    pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
+    rc = cacheCursorPayloadCopy(pCur, pIdxRec3, nIdxRec3);
+    check("cpnd_caseE_cache", rc==SQLITE_OK);
+    pCur->eState = CURSOR_VALID;
+
+    rc = sqlite3BtreePrevious(pCur, 0);
+    cursor_prev_read_text_key(pCur, zKey, sizeof(zKey), &rid);
+    check("cpnd_caseE_prev_2", rc==SQLITE_OK && strcmp(zKey, "dup")==0 && rid==2);
+
+    rc = sqlite3BtreePrevious(pCur, 0);
+    cursor_prev_read_text_key(pCur, zKey, sizeof(zKey), &rid);
+    check("cpnd_caseE_prev_1", rc==SQLITE_OK && strcmp(zKey, "dup")==0 && rid==1);
+
+    rc = sqlite3BtreePrevious(pCur, 0);
+    check("cpnd_caseE_prev_eof", rc==SQLITE_DONE && sqlite3BtreeEof(pCur)!=0);
+    sqlite3_free(pIdxRec3);
+  }
+
+  sqlite3BtreeCloseCursor(pCur);
+  sqlite3BtreeLeave(pBt);
+
+  check("cpnd_rollback", execSql(db, "ROLLBACK;")==SQLITE_OK);
+
+cleanup:
+  for(i=0; i<4; i++) sqlite3_free(aRec[i]);
+  if( pKi ){
+    sqlite3_free(pKi->aSortFlags);
+    sqlite3_free(pKi);
+  }
+  sqlite3_free(pCur);
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -22413,7 +22692,8 @@ static const RegressionCase aCases[] = {
   { "opfs_large_transaction", "OPFS Large Transaction Test", run_opfs_large_transaction },
   { "push_refreshes_before_reading_refs", "Push Refreshes Before Reading Refs Test", run_push_refreshes_before_reading_refs },
   { "incrblob_payload_putdata_requireseek", "Incrblob PayloadChecked/PutData RequireSeek Test", run_incrblob_payload_putdata_requireseek },
-  { "fast_intleaf_skips_degenerate_schema_rows", "Fast IntLeaf Skips Degenerate Schema Rows Test", run_fast_intleaf_skips_degenerate_schema_rows }
+  { "fast_intleaf_skips_degenerate_schema_rows", "Fast IntLeaf Skips Degenerate Schema Rows Test", run_fast_intleaf_skips_degenerate_schema_rows },
+  { "cursor_prev_mutmap_no_double_dec", "Cursor Previous MutMap No Double-Decrement Test", run_cursor_prev_mutmap_no_double_dec }
 };
 
 static int run_case_by_name(const char *zName){

@@ -526,7 +526,8 @@ static int seedMutMapIterFromCursor(
       int nSortKey = 0;
       int nMutKeyField = 0;
       int rc;
-      if( pCur->pKeyInfo
+      if( pCur->isTableRoot
+       && pCur->pKeyInfo
        && pCur->pKeyInfo->nKeyField < pCur->pKeyInfo->nAllField ){
         nMutKeyField = (int)pCur->pKeyInfo->nKeyField;
       }
@@ -598,9 +599,12 @@ static int mergeFirst(BtCursor *pCur, int *pRes){
 }
 
 int mergeLast(BtCursor *pCur, int *pRes){
+  ProllyMutMapIter it;
   int rc = ensureCursorMutMapOrder(pCur);
   if( rc!=SQLITE_OK ) return rc;
-  pCur->mmIdx = pCur->pMutMap->nEntries - 1;
+  rc = prollyMutMapIterLast(&it, pCur->pMutMap);
+  if( rc!=SQLITE_OK ) return rc;
+  pCur->mmIdx = it.idx;
   pCur->mergeSrc = MERGE_SRC_TREE;
   return mergeScan(pCur, -1, pRes);
 }
@@ -693,7 +697,12 @@ static SQLITE_INLINE int prollyBtCursorStepPrologue(
 ){
   int rc;
   *pImmediate = 1;
-  CLEAR_CACHED_PAYLOAD(pCur);
+  if( !(!pCur->curIntKey && !pCur->mmActive
+        && !prollyCursorIsValid(&pCur->pCur)
+        && pCur->eState==CURSOR_VALID
+        && pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap)) ){
+    CLEAR_CACHED_PAYLOAD(pCur);
+  }
   /* The seek key describes where the last seek landed, and a delete may remove
   ** it in place of the entry under the cursor; stepping makes it a stale key. */
   CLEAR_CACHED_SEEK_KEY(pCur);
@@ -828,11 +837,13 @@ int prollyBtCursorNext(BtCursor *pCur, int flags){
       rc = prollyMutMapIterSeek(&it, pCur->pMutMap, pK, nK, 0);
     }else if( pCur->eState==CURSOR_VALID ){
       rc = seedMutMapIterFromCursor(pCur, &it);
+      CLEAR_CACHED_PAYLOAD(pCur);
       if( rc==SQLITE_NOTFOUND ){
-        rc = prollyMutMapIterFirst(&it, pCur->pMutMap);
+        it.idx = -1;
+        rc = SQLITE_OK;
       }
     }else{
-      rc = prollyMutMapIterFirst(&it, pCur->pMutMap);
+      it.idx = -1;
     }
     if( rc!=SQLITE_OK ) return rc;
     pCur->mmIdx = it.idx;
@@ -894,13 +905,13 @@ int prollyBtCursorPrevious(BtCursor *pCur, int flags){
       it.idx--;
     }else if( pCur->eState==CURSOR_VALID ){
       rc = seedMutMapIterFromCursor(pCur, &it);
+      CLEAR_CACHED_PAYLOAD(pCur);
       if( rc==SQLITE_NOTFOUND ){
-        rc = prollyMutMapIterLast(&it, pCur->pMutMap);
-      }else if( rc==SQLITE_OK ){
-        it.idx--;
+        it.idx = pCur->pMutMap->nEntries;
+        rc = SQLITE_OK;
       }
     }else{
-      rc = prollyMutMapIterLast(&it, pCur->pMutMap);
+      it.idx = pCur->pMutMap->nEntries;
     }
     if( rc!=SQLITE_OK ) return rc;
     pCur->mmIdx = it.idx;
