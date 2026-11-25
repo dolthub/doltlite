@@ -65,4 +65,76 @@ do_ioerr_test 3 -sqlprep {
   }
 }
 
+reset_db
+do_execsql_test 4.0 {
+  CREATE TABLE t1(a INTEGER PRIMARY KEY, b BLOB);
+}
+faultsim_save_and_close
+
+do_faultsim_test 4.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+  db eval {
+    BEGIN;
+    INSERT INTO t1 VALUES(1, replace(hex(zeroblob(250)), '00', 'ab'));
+    INSERT INTO t1 VALUES(2, zeroblob(500));
+    SAVEPOINT sp1;
+      DELETE FROM t1 WHERE a IN (1, 2);
+      SAVEPOINT sp2;
+        INSERT INTO t1 VALUES(1, X'01'), (2, X'02');
+      ROLLBACK TO sp2;
+      RELEASE sp2;
+  }
+  set ::rb_stmt [sqlite3_prepare_v2 db "ROLLBACK TO sp1" -1]
+} -body {
+  set rc [sqlite3_step $::rb_stmt]
+  if {$rc ne "SQLITE_DONE"} {
+    error "ROLLBACK TO sp1 failed: $rc ([sqlite3_errmsg db])"
+  }
+} -test {
+  sqlite3_finalize $::rb_stmt
+  faultsim_test_result {0 {}}
+  set res [db eval {
+    SELECT a, length(b), substr(b, 1, 4) FROM t1 WHERE a = 1
+    UNION ALL
+    SELECT a, length(b), hex(substr(b, 1, 2)) FROM t1 WHERE a = 2
+    ORDER BY a
+  }]
+  if {$res ne {1 500 abab 2 500 0000}} {
+    error "unexpected rows after ROLLBACK TO sp1: $res"
+  }
+  db eval {
+    RELEASE sp1;
+    COMMIT;
+  }
+  faultsim_integrity_check
+}
+
+do_faultsim_test 4.2 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+  db eval {
+    BEGIN;
+    INSERT INTO t1 VALUES(1, X'01'), (2, X'02'), (3, X'03');
+    SAVEPOINT sp1;
+      INSERT INTO t1 VALUES(4, X'04'), (5, X'05');
+  }
+  set ::rb_stmt [sqlite3_prepare_v2 db "ROLLBACK TO sp1" -1]
+} -body {
+  set rc [sqlite3_step $::rb_stmt]
+  if {$rc ne "SQLITE_DONE"} {
+    error "ROLLBACK TO sp1 failed: $rc ([sqlite3_errmsg db])"
+  }
+} -test {
+  sqlite3_finalize $::rb_stmt
+  faultsim_test_result {0 {}}
+  set res [db eval { SELECT a, hex(b) FROM t1 ORDER BY a }]
+  if {$res ne {1 01 2 02 3 03}} {
+    error "unexpected rows after append-sorted ROLLBACK TO sp1: $res"
+  }
+  db eval {
+    RELEASE sp1;
+    COMMIT;
+  }
+  faultsim_integrity_check
+}
+
 finish_test

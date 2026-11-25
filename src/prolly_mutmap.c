@@ -1002,7 +1002,6 @@ void prollyMutMapPushSavepoint(ProllyMutMap *mm, int level){
 
 int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
   int i;
-  int rc;
   if( !mm ) return SQLITE_OK;
 
   if( mm->nEntries==0 && mm->nUndo==0 ){
@@ -1019,8 +1018,21 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
       e->op = rec->prevOp;
       if( e->op==PROLLY_EDIT_DELETE ) mm->bHasDelete = 1;
       e->bornAt = encodeLevel(mm, rec->prevBornAt);
-      rc = replaceEntryValue(mm, e, rec->prevVal, rec->nPrevVal);
-      if( rc!=SQLITE_OK ) return rc;
+      if( e->bValHeap ) sqlite3_free(e->pVal);
+      if( rec->prevVal && rec->nPrevVal>0 ){
+        e->pVal = rec->prevVal;
+        e->nVal = rec->nPrevVal;
+        e->nValAlloc = rec->nPrevVal;
+        e->bValInline = 0;
+        e->bValHeap = 1;
+        rec->prevVal = 0;
+      }else{
+        e->pVal = 0;
+        e->nVal = 0;
+        e->nValAlloc = 0;
+        e->bValInline = 0;
+        e->bValHeap = 0;
+      }
       e->nZeroTail = rec->nPrevZeroTail;
     }
     sqlite3_free(rec->prevVal);
@@ -1081,7 +1093,7 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
     }
   }
 
-  if( !mm->keepSorted ){
+  if( !mm->keepSorted && mm->nHashAlloc>0 ){
     int rc = rebuildHash(mm);
     if( rc!=SQLITE_OK ) return rc;
   }
