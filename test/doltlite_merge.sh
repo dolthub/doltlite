@@ -3083,5 +3083,100 @@ run_test "merge_genuine_text_to_int_coerces" "SELECT id || ':' || val || ':' || 
 
 rm -f "$DB_AFF1" "$DB_AFF2" "$DB_AFF3" "$DB_AFF4"
 
+DB_PIDX1=/tmp/test_merge_pidx1_$$.db; rm -f "$DB_PIDX1"
+$DOLTLITE "$DB_PIDX1" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE INDEX idx_v ON t(v) WHERE id > 0;
+INSERT INTO t VALUES (-1, 5), (1, 10), (4, 40);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('b');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_commit('-am', 'main');
+SELECT dolt_checkout('b');
+INSERT INTO t VALUES (-2, 6), (3, 30);
+UPDATE t SET v = 45 WHERE id = 4;
+DELETE FROM t WHERE id = 1;
+SELECT dolt_commit('-am', 'b');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_partial_idx_ipk_ok" "SELECT dolt_merge('b');" "^[0-9a-f]{40}$" "$DB_PIDX1"
+run_test "merge_partial_idx_ipk_scan" \
+  "SELECT group_concat(v, ',') FROM (SELECT v FROM t INDEXED BY idx_v WHERE id > 0 ORDER BY v);" \
+  "20,30,45" "$DB_PIDX1"
+run_test "merge_partial_idx_ipk_integrity" "PRAGMA integrity_check;" "ok" "$DB_PIDX1"
+
+DB_PIDX2=/tmp/test_merge_pidx2_$$.db; rm -f "$DB_PIDX2"
+$DOLTLITE "$DB_PIDX2" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(a INT, v INT);
+CREATE INDEX idx_v ON t(v) WHERE rowid > 0;
+INSERT INTO t(rowid, a, v) VALUES (-1, -1, 5), (1, 1, 10), (4, 4, 40);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('b');
+INSERT INTO t(rowid, a, v) VALUES (2, 2, 20);
+SELECT dolt_commit('-am', 'main');
+SELECT dolt_checkout('b');
+INSERT INTO t(rowid, a, v) VALUES (-2, -2, 6), (3, 3, 30);
+UPDATE t SET v = 45 WHERE rowid = 4;
+DELETE FROM t WHERE rowid = 1;
+SELECT dolt_commit('-am', 'b');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_partial_idx_rowid_ok" "SELECT dolt_merge('b');" "^[0-9a-f]{40}$" "$DB_PIDX2"
+run_test "merge_partial_idx_rowid_scan" \
+  "SELECT group_concat(v, ',') FROM (SELECT v FROM t INDEXED BY idx_v WHERE rowid > 0 ORDER BY v);" \
+  "20,30,45" "$DB_PIDX2"
+run_test "merge_partial_idx_rowid_integrity" "PRAGMA integrity_check;" "ok" "$DB_PIDX2"
+
+DB_PIDX3=/tmp/test_merge_pidx3_$$.db; rm -f "$DB_PIDX3"
+$DOLTLITE "$DB_PIDX3" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE UNIQUE INDEX idx_uv ON t(v) WHERE id > 0;
+INSERT INTO t VALUES (-1, 99), (1, 10);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('b');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_commit('-am', 'main');
+SELECT dolt_checkout('b');
+INSERT INTO t VALUES (-2, 99), (3, 20);
+SELECT dolt_commit('-am', 'b');
+SELECT dolt_checkout('main');
+SQL
+run_test_error_match "merge_partial_unique_ipk_dup_errors" "SELECT dolt_merge('b');" "constraint violations|rolled back" "$DB_PIDX3"
+TX_PIDX3=$(echo "BEGIN;
+SELECT dolt_merge('b');
+SELECT 'TX|' || (SELECT count(*) FROM dolt_constraint_violations) || '|' ||
+       COALESCE((SELECT num_violations FROM dolt_constraint_violations WHERE \"table\"='t'), 0) || '|' ||
+       COALESCE((SELECT group_concat(id, ',') FROM (SELECT id FROM dolt_constraint_violations_t ORDER BY id)), '');
+ROLLBACK;" | $DOLTLITE "$DB_PIDX3" 2>&1 | grep '^TX|')
+if [ "$TX_PIDX3" = "TX|1|2|2,3" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: merge_partial_unique_ipk_dup_cv\n  expected: TX|1|2|2,3\n  got:      $TX_PIDX3"
+fi
+
+DB_PIDX4=/tmp/test_merge_pidx4_$$.db; rm -f "$DB_PIDX4"
+$DOLTLITE "$DB_PIDX4" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE UNIQUE INDEX idx_uv ON t(v) WHERE id > 0;
+INSERT INTO t VALUES (-1, 99), (1, 10);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('b');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_commit('-am', 'main');
+SELECT dolt_checkout('b');
+INSERT INTO t VALUES (-2, 99), (3, 30);
+DELETE FROM t WHERE id = 1;
+SELECT dolt_commit('-am', 'b');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_partial_unique_ipk_excluded_dup_ok" "SELECT dolt_merge('b');" "^[0-9a-f]{40}$" "$DB_PIDX4"
+run_test "merge_partial_unique_ipk_scan" \
+  "SELECT group_concat(v, ',') FROM (SELECT v FROM t INDEXED BY idx_uv WHERE id > 0 ORDER BY v);" \
+  "20,30" "$DB_PIDX4"
+run_test "merge_partial_unique_ipk_integrity" "PRAGMA integrity_check;" "ok" "$DB_PIDX4"
+
+rm -f "$DB_PIDX1" "$DB_PIDX2" "$DB_PIDX3" "$DB_PIDX4"
+
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95" "$DB96" "$DB97" "$DB98" "$DB99" "$DB100" "$DB101" "$DB102" "$DB103" "$DB104" "$DB105" "$DB106" "$DB107" "$DB108" "$DB109" "$DB110" "$DB111" "$DB112" "$DB113" "$DB114" "$DB115" "$DB116" "$DB117" "$DB118" "$DB119" "$DB120" "$DB121" "$DB122"
 dltest_finish

@@ -776,13 +776,14 @@ static int indexRowInPartialIndex(
   Index *pIdx,
   DoltlitePartialIndex *pPart,
   const u8 *pRec, int nRec,
+  i64 intKey,
   int *pIn
 ){
   *pIn = 1;
   if( !pPart->zWhere ) return SQLITE_OK;
   if( !pRec || nRec<=0 ) return SQLITE_OK;
   return doltlitePartialIndexMatchesRecord(
-      db, pIdx, pPart->zWhere, pRec, nRec,
+      db, pIdx, pPart->zWhere, pRec, nRec, intKey,
       pPart->colsInit ? &pPart->cols : 0, &pPart->pStmt, pIn);
 }
 
@@ -815,10 +816,12 @@ int doltliteIndexMutMapRowDelta(
       pPart = &partLocal;
     }
     if( rc==SQLITE_OK ){
-      rc = indexRowInPartialIndex(db, pIdx, pPart, pOldVal, nOldVal, &oldIn);
+      rc = indexRowInPartialIndex(db, pIdx, pPart, pOldVal, nOldVal, intKey,
+                                  &oldIn);
     }
     if( rc==SQLITE_OK ){
-      rc = indexRowInPartialIndex(db, pIdx, pPart, pNewVal, nNewVal, &newIn);
+      rc = indexRowInPartialIndex(db, pIdx, pPart, pNewVal, nNewVal, intKey,
+                                  &newIn);
     }
     if( rc!=SQLITE_OK ){
       if( partLocalInit ) doltlitePartialIndexClear(&partLocal);
