@@ -2033,6 +2033,8 @@ void doltliteGetSessionReplayState(
 );
 void doltliteGetSessionReplaySeries(sqlite3*, DoltliteReplaySeries*);
 int doltliteSetSessionReplaySeries(sqlite3*, const DoltliteReplaySeries*);
+void doltliteSaveSessionVcSnapshot(sqlite3*, DoltliteSessionVcSnapshot*);
+int doltliteRestoreSessionVcSnapshot(sqlite3*, const DoltliteSessionVcSnapshot*);
 int doltliteCheckpointCommand(sqlite3_context*);
 int doltliteSetSessionReplayState(
   sqlite3*, u8, const ProllyHash*, const ProllyHash*, const ProllyHash*,

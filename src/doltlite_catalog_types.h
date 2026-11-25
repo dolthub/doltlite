@@ -12,6 +12,22 @@ struct DoltliteReplaySeries {
   ProllyHash remaining;
 };
 
+typedef struct DoltliteSessionVcSnapshot DoltliteSessionVcSnapshot;
+struct DoltliteSessionVcSnapshot {
+  ProllyHash stagedCatalog;
+  u8 isMerging;
+  u8 pendingReplayCommit;
+  u8 replayKind;
+  ProllyHash replaySnapshot;
+  ProllyHash replayStaged;
+  ProllyHash replayViolations;
+  ProllyHash replayWorkingSetBasis;
+  DoltliteReplaySeries replaySeries;
+  ProllyHash mergeCommitHash;
+  ProllyHash conflictsCatalogHash;
+  ProllyHash constraintViolationsHash;
+};
+
 struct ProllyMutMap;
 
 #define ORDERED_PLAN_NOCASE  0x01

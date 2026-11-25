@@ -1346,4 +1346,118 @@ run_test "revert_cv_autocommit_log_unchanged" \
   "4" "$DB"
 rm -f "$DB"
 
+DB=/tmp/test_replay_checkout_guard_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_commit('-Am', 'base');
+UPDATE t SET v = 'one' WHERE id = 1;
+SELECT dolt_commit('-am', 'c1');
+SELECT dolt_tag('c1');
+INSERT INTO t VALUES (2, 'two');
+SELECT dolt_commit('-am', 'c2');
+SELECT dolt_tag('c2');
+INSERT INTO t VALUES (3, 'three');
+SELECT dolt_commit('-am', 'c3');
+SELECT dolt_tag('c3');
+UPDATE t SET v = 'latest' WHERE id = 1;
+SELECT dolt_commit('-am', 'latest');
+SELECT dolt_branch('other');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "revert_series_resolved_blocks_checkout_and_continues" \
+  "BEGIN;
+   SELECT dolt_revert('c3', 'c1', 'c2');
+   SELECT dolt_conflicts_resolve('--theirs', 't');
+   SELECT dolt_add('t');
+   SELECT dolt_checkout('other');
+   SELECT active_branch();
+   SELECT length(dolt_revert('--continue'));
+   COMMIT;
+   SELECT id || ':' || v FROM t ORDER BY id;
+   SELECT count(*) FROM dolt_log WHERE message LIKE 'Revert%';" \
+  "Error near line 2: Revert has 1 conflict(s). Resolve and then commit with dolt_commit.
+0
+0
+Error near line 5: revert in progress — commit, continue, or abort first
+main
+40
+1:base
+3" \
+  "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_replay_checkout_guard_abort_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_commit('-Am', 'base');
+UPDATE t SET v = 'one' WHERE id = 1;
+SELECT dolt_commit('-am', 'c1');
+SELECT dolt_tag('c1');
+INSERT INTO t VALUES (2, 'two');
+SELECT dolt_commit('-am', 'c2');
+SELECT dolt_tag('c2');
+INSERT INTO t VALUES (3, 'three');
+SELECT dolt_commit('-am', 'c3');
+SELECT dolt_tag('c3');
+UPDATE t SET v = 'latest' WHERE id = 1;
+SELECT dolt_commit('-am', 'latest');
+SELECT dolt_branch('other');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "revert_series_resolved_blocks_checkout_and_aborts" \
+  "BEGIN;
+   SELECT dolt_revert('c3', 'c1', 'c2');
+   SELECT dolt_conflicts_resolve('--theirs', 't');
+   SELECT dolt_add('t');
+   SELECT dolt_checkout('other');
+   SELECT active_branch();
+   SELECT dolt_revert('--abort');
+   COMMIT;
+   SELECT id || ':' || v FROM t ORDER BY id;
+   SELECT count(*) FROM dolt_log WHERE message LIKE 'Revert%';" \
+  "Error near line 2: Revert has 1 conflict(s). Resolve and then commit with dolt_commit.
+0
+0
+Error near line 5: revert in progress — commit, continue, or abort first
+main
+0
+1:latest
+2:two
+3:three
+0" \
+  "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_cp_resolved_checkout_guard_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'feat');
+UPDATE t SET v = 'feat' WHERE id = 1;
+SELECT dolt_commit('-am', 'feat');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 'main' WHERE id = 1;
+SELECT dolt_commit('-am', 'main');
+SELECT dolt_branch('other');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "cp_resolved_blocks_checkout_and_continues" \
+  "BEGIN;
+   SELECT dolt_cherry_pick('feat');
+   SELECT dolt_conflicts_resolve('--theirs', 't');
+   SELECT dolt_add('t');
+   SELECT dolt_checkout('other');
+   SELECT active_branch();
+   SELECT length(dolt_cherry_pick('--continue'));
+   COMMIT;
+   SELECT v FROM t WHERE id = 1;
+   SELECT count(*) FROM dolt_log;" \
+  "Error near line 2: Cherry-pick has 1 conflict(s). Resolve and then commit with dolt_commit.
+0
+0
+Error near line 5: cherry-pick in progress — commit, continue, or abort first
+main
+40
+feat
+4" \
+  "$DB"
+rm -f "$DB"
+
 dltest_finish
