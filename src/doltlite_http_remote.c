@@ -1427,8 +1427,10 @@ static int httpSetRefsIf(
 }
 
 static int httpSendPendingRefs(HttpRemote *p){
+  size_t nBranchLen;
   int nBranch;
   int nHashPart;
+  i64 nReq64;
   int nReq;
   int status = 0;
   int nResp = 0;
@@ -1439,9 +1441,13 @@ static int httpSendPendingRefs(HttpRemote *p){
   char *zPath;
 
   if( !p->pPendingRefs || p->nPendingRefs<=0 ) return SQLITE_OK;
-  nBranch = p->zPushBranch ? (int)strlen(p->zPushBranch) : 0;
+  nBranchLen = p->zPushBranch ? strlen(p->zPushBranch) : 0;
+  if( nBranchLen > 0xffff ) return SQLITE_TOOBIG;
+  nBranch = (int)nBranchLen;
   nHashPart = p->hasExpectedRefsHash ? PROLLY_HASH_SIZE : 0;
-  nReq = 2 + nBranch + 1 + nHashPart + p->nPendingRefs;
+  nReq64 = 2 + (i64)nBranch + 1 + nHashPart + (i64)p->nPendingRefs;
+  if( nReq64 > 0x7fffffff ) return SQLITE_TOOBIG;
+  nReq = (int)nReq64;
   zPath = buildPath(p, p->hasExpectedRefsHash ? "/refs-if" : "/refs");
   if( !zPath ) return SQLITE_NOMEM;
   pReq = sqlite3_malloc(nReq);
