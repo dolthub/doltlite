@@ -582,6 +582,7 @@ int doltlitePartialIndexWhereSql(sqlite3 *db, Index *pIdx, char **pzWhere);
 int doltlitePartialIndexMatchesRecord(sqlite3 *db, Index *pIdx,
                                       const char *zWhere,
                                       const u8 *pRec, int nRec,
+                                      i64 intKey,
                                       const DoltliteColInfo *pCols,
                                       sqlite3_stmt **ppCached,
                                       int *pMatch);

@@ -180,6 +180,7 @@ int doltlitePartialIndexMatchesRecord(
   Index *pIdx,
   const char *zWhere,
   const u8 *pRec, int nRec,
+  i64 intKey,
   const DoltliteColInfo *pCols,
   sqlite3_stmt **ppCached,
   int *pMatch
@@ -214,6 +215,11 @@ int doltlitePartialIndexMatchesRecord(
     int iField;
     DoltliteSerialValue v;
     if( doltliteColumnIsVirtual(pTab, i) ) continue;
+    if( HasRowid(pTab) && i==pTab->iPKey ){
+      rc = sqlite3_bind_int64(pStmt, iParam, intKey);
+      iParam++;
+      continue;
+    }
     iField = partialStoredSlot(pTab, pCols, i);
     if( iField<0 || iField>=info.nField ){
       rc = doltliteBindColumnDefault(db, pStmt, iParam, pTab, i);
@@ -234,6 +240,9 @@ int doltlitePartialIndexMatchesRecord(
       rc = sqlite3_bind_blob(pStmt, iParam, v.p, v.n, SQLITE_TRANSIENT);
     }
     iParam++;
+  }
+  if( rc==SQLITE_OK && HasRowid(pTab) ){
+    rc = sqlite3_bind_int64(pStmt, pTab->nNVCol+1, intKey);
   }
   if( rc==SQLITE_OK ){
     rc = sqlite3_step(pStmt);
@@ -753,7 +762,7 @@ static int detectUniqueViolationsForIndexWithoutRowid(
     rc = doltliteParseRecordStrict(pRecord, nRecord, &info);
     if( rc==SQLITE_OK && zPartWhere ){
       rc = doltlitePartialIndexMatchesRecord(db, pIdx, zPartWhere,
-                                      pRecord, nRecord, &cols, 0,
+                                      pRecord, nRecord, 0, &cols, 0,
                                       &partialMatch);
     }
     if( rc==SQLITE_OK && !partialMatch ){
