@@ -1664,6 +1664,8 @@ static int rebaseEnterEditPause(
   if( rc==SQLITE_OK && db->autoCommit ){
     rc = doltlitePersistWorkingSet(db);
     if( rc==SQLITE_OK ) rc = doltliteVcSealBranchStyleTxn(db);
+  }else if( rc==SQLITE_OK ){
+    rc = rebaseAnchorPauseBaseline(db);
   }
   if( rc!=SQLITE_OK ){
     sqlite3_free(zMsg);
@@ -2594,6 +2596,7 @@ static int rebaseReplayPausedTail(
       }
       rc = doltliteSetSessionPendingReplayCommit(db, 0);
       if( rc==SQLITE_OK ) rc = rebaseWritePlanRows(db, aPlan+i, nPlan-i);
+      if( rc==SQLITE_OK ) rc = rebaseAnchorPauseBaseline(db);
       if( rc!=SQLITE_OK ) return rc;
       {
         char zHex[PROLLY_HASH_SIZE*2+1];

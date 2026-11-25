@@ -2217,4 +2217,106 @@ else
 fi
 rm -f "$DBEDIT_REOPEN_MAIN"
 
+# Second consecutive conflict pause during --continue must anchor the rollback
+# baseline so ROLLBACK keeps dolt_rebase and --continue / --abort still work.
+seed_two_conflict_repo() {
+  local db="$1"
+  rm -f "$db"
+  "$DOLTLITE" "$db" >/dev/null <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base1'), (2, 'base2');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_checkout('-b', 'feat');
+UPDATE t SET v = 'feat1' WHERE id = 1;
+SELECT dolt_commit('-am', 'feat_c1');
+UPDATE t SET v = 'feat2' WHERE id = 2;
+SELECT dolt_commit('-am', 'feat_c2');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 'main1' WHERE id = 1;
+UPDATE t SET v = 'main2' WHERE id = 2;
+SELECT dolt_commit('-am', 'main_both');
+SQL
+}
+
+DBRB_C2=/tmp/test_rebase_second_conflict_rollback_continue_$$.db
+seed_two_conflict_repo "$DBRB_C2"
+RB_C2_OUT=$(echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('main');
+SELECT dolt_conflicts_resolve('--theirs', 't');
+SELECT dolt_add('t');
+SELECT dolt_rebase('--continue');
+SELECT 'BEFORE|' || count(*) || '|' || group_concat(commit_message) FROM dolt_rebase;
+ROLLBACK;
+SELECT 'AFTER|' || count(*) || '|' || group_concat(commit_message) FROM dolt_rebase;
+SELECT 'BR|' || active_branch();
+SELECT dolt_rebase('--continue');
+SELECT 'DONE|' || active_branch();
+SELECT 'ROWS|' || group_concat(id || '=' || v, ',') FROM (SELECT id, v FROM t ORDER BY id);" | "$DOLTLITE" "$DBRB_C2" 2>&1)
+if echo "$RB_C2_OUT" | grep -q '^BEFORE|1|feat_c2$' \
+   && echo "$RB_C2_OUT" | grep -q '^AFTER|1|feat_c2$' \
+   && echo "$RB_C2_OUT" | grep -q '^BR|dolt_rebase_feat$' \
+   && echo "$RB_C2_OUT" | grep -q 'Successfully rebased and updated refs/heads/feat' \
+   && echo "$RB_C2_OUT" | grep -q '^DONE|feat$' \
+   && echo "$RB_C2_OUT" | grep -q '^ROWS|1=feat1,2=main2$'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_second_conflict_rollback_continue\n  full: $RB_C2_OUT"
+fi
+rm -f "$DBRB_C2"
+
+DBRB_C2A=/tmp/test_rebase_second_conflict_rollback_abort_$$.db
+seed_two_conflict_repo "$DBRB_C2A"
+RB_C2A_OUT=$(echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('main');
+SELECT dolt_conflicts_resolve('--theirs', 't');
+SELECT dolt_add('t');
+SELECT dolt_rebase('--continue');
+ROLLBACK;
+SELECT 'AFTER|' || count(*) || '|' || group_concat(commit_message) FROM dolt_rebase;
+SELECT dolt_rebase('--abort');
+SELECT 'DONE|' || active_branch();
+SELECT 'ROWS|' || group_concat(id || '=' || v, ',') FROM (SELECT id, v FROM t ORDER BY id);" | "$DOLTLITE" "$DBRB_C2A" 2>&1)
+if echo "$RB_C2A_OUT" | grep -q '^AFTER|1|feat_c2$' \
+   && echo "$RB_C2A_OUT" | grep -q 'Interactive rebase aborted' \
+   && echo "$RB_C2A_OUT" | grep -q '^DONE|feat$' \
+   && echo "$RB_C2A_OUT" | grep -q '^ROWS|1=feat1,2=feat2$'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_second_conflict_rollback_abort\n  full: $RB_C2A_OUT"
+fi
+rm -f "$DBRB_C2A"
+
+# Edit pause inside BEGIN must also anchor the rollback baseline so ROLLBACK
+# discards uncommitted edits while keeping dolt_rebase intact.
+DBRB_EDIT=/tmp/test_rebase_edit_pause_rollback_$$.db
+seed_edit_stage_repo "$DBRB_EDIT"
+RB_EDIT_OUT=$(echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('-i', 'main');
+UPDATE dolt_rebase SET action='edit' WHERE commit_message='f1';
+SELECT dolt_rebase('--continue');
+SELECT 'BEFORE|' || count(*) || '|' || group_concat(commit_message) FROM dolt_rebase;
+INSERT INTO t VALUES (99, 99);
+ROLLBACK;
+SELECT 'AFTER|' || count(*) || '|' || group_concat(commit_message) FROM dolt_rebase;
+SELECT dolt_rebase('--continue');
+SELECT 'DONE|' || active_branch();
+SELECT 'ROWS|' || group_concat(id || '=' || v, ',') FROM (SELECT id, v FROM t ORDER BY id);" | "$DOLTLITE" "$DBRB_EDIT" 2>&1)
+if echo "$RB_EDIT_OUT" | grep -q '^BEFORE|1|f2$' \
+   && echo "$RB_EDIT_OUT" | grep -q '^AFTER|1|f2$' \
+   && echo "$RB_EDIT_OUT" | grep -q 'Successfully rebased and updated refs/heads/feat' \
+   && echo "$RB_EDIT_OUT" | grep -q '^DONE|feat$' \
+   && echo "$RB_EDIT_OUT" | grep -q '^ROWS|1=1,2=2,3=3,10=10$'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_edit_pause_rollback_continue\n  full: $RB_EDIT_OUT"
+fi
+rm -f "$DBRB_EDIT"
+
 dltest_finish
