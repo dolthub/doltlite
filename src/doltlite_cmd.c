@@ -1539,8 +1539,25 @@ static int cmdRollbackAutocommitToSaved(
         &pSaved->sessionConflictsCatalog);
   }
   if( rc==SQLITE_OK ){
+    rc = doltliteSetSessionConflictsBaseCatalog(
+        db, &pSaved->sessionConflictsBaseCatalog);
+  }
+  if( rc==SQLITE_OK ){
     rc = doltliteSetSessionConstraintViolationsCatalog(
         db, &pSaved->sessionConstraintViolationsCatalog);
+  }
+  if( rc==SQLITE_OK ){
+    rc = doltliteSetSessionReplayState(
+        db, pSaved->sessionReplayKind,
+        &pSaved->sessionReplaySnapshot, &pSaved->sessionReplayStaged,
+        &pSaved->sessionReplayViolations,
+        &pSaved->sessionReplayWorkingSetBasis);
+  }
+  if( rc==SQLITE_OK ){
+    rc = doltliteSetSessionPendingReplayCommit(db, pSaved->sessionPendingReplay);
+  }
+  if( rc==SQLITE_OK ){
+    rc = doltliteSetSessionReplaySeries(db, &pSaved->sessionReplaySeries);
   }
   if( rc==SQLITE_OK ){
     rc = doltlitePersistWorkingSet(db);

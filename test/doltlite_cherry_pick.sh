@@ -1256,4 +1256,94 @@ run_test "trailer_cp_x_continue" \
   "feat|1" "$DB"
 rm -f "$DB"
 
+echo "--- autocommit constraint-violation rollback clears replay state ---"
+DB=/tmp/test_cp_cv_autocommit_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, k INTEGER UNIQUE);
+INSERT INTO t VALUES (1,1), (2,2);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_checkout('-b', 'target');
+UPDATE t SET k = 9 WHERE id = 2;
+SELECT dolt_commit('-am', 'target');
+SELECT dolt_checkout('main');
+UPDATE t SET k = 9 WHERE id = 1;
+SELECT dolt_commit('-am', 'main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+SAME_SESSION_OUT=$({
+cat <<'SQL'
+SELECT dolt_cherry_pick('target');
+SELECT 'AFTER1';
+SELECT dolt_cherry_pick('target');
+SELECT 'AFTER2';
+SELECT dolt_cherry_pick('--continue');
+SQL
+} | $DOLTLITE "$DB" 2>&1)
+if echo "$SAME_SESSION_OUT" | grep -q "a replay is already in progress"; then
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: cp_cv_autocommit_same_session_no_leaked_replay\n  unexpected replay-in-progress error:\n$SAME_SESSION_OUT"
+elif echo "$SAME_SESSION_OUT" | grep -q "no cherry-pick in progress"; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: cp_cv_autocommit_same_session_no_leaked_replay\n  expected 'no cherry-pick in progress', got:\n$SAME_SESSION_OUT"
+fi
+
+run_test_error_match "cp_cv_autocommit_reopen_retry" \
+  "SELECT dolt_cherry_pick('target');" \
+  "constraint violations, transaction rolled back" "$DB"
+run_test_error_match "cp_cv_autocommit_reopen_no_continue" \
+  "SELECT dolt_cherry_pick('--continue');" \
+  "no cherry-pick in progress" "$DB"
+run_test "cp_cv_autocommit_data_intact" \
+  "SELECT id || ':' || k FROM t ORDER BY id;" \
+  "1:9
+2:2" "$DB"
+run_test "cp_cv_autocommit_log_unchanged" \
+  "SELECT count(*) FROM dolt_log;" \
+  "3" "$DB"
+rm -f "$DB"
+
+DB=/tmp/test_revert_cv_autocommit_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, k INTEGER UNIQUE);
+INSERT INTO t VALUES (1,1), (2,2);
+SELECT dolt_commit('-Am', 'base');
+UPDATE t SET k = 3 WHERE id = 2;
+SELECT dolt_commit('-am', 'move_2');
+SELECT dolt_tag('move_2', 'HEAD');
+UPDATE t SET k = 2 WHERE id = 1;
+SELECT dolt_commit('-am', 'take_2');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+REV_SAME_SESSION_OUT=$({
+cat <<'SQL'
+SELECT dolt_revert('move_2');
+SELECT 'AFTER1';
+SELECT dolt_revert('move_2');
+SELECT 'AFTER2';
+SELECT dolt_revert('--continue');
+SQL
+} | $DOLTLITE "$DB" 2>&1)
+if echo "$REV_SAME_SESSION_OUT" | grep -q "a replay is already in progress"; then
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: revert_cv_autocommit_same_session_no_leaked_replay\n  unexpected replay-in-progress error:\n$REV_SAME_SESSION_OUT"
+elif echo "$REV_SAME_SESSION_OUT" | grep -q "no revert in progress"; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: revert_cv_autocommit_same_session_no_leaked_replay\n  expected 'no revert in progress', got:\n$REV_SAME_SESSION_OUT"
+fi
+
+run_test_error_match "revert_cv_autocommit_reopen_retry" \
+  "SELECT dolt_revert('move_2');" \
+  "constraint violations, transaction rolled back" "$DB"
+run_test_error_match "revert_cv_autocommit_reopen_no_continue" \
+  "SELECT dolt_revert('--continue');" \
+  "no revert in progress" "$DB"
+run_test "revert_cv_autocommit_data_intact" \
+  "SELECT id || ':' || k FROM t ORDER BY id;" \
+  "1:2
+2:3" "$DB"
+run_test "revert_cv_autocommit_log_unchanged" \
+  "SELECT count(*) FROM dolt_log;" \
+  "4" "$DB"
+rm -f "$DB"
+
 dltest_finish
