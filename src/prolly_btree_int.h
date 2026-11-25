@@ -870,6 +870,7 @@ int ensureStatementSavepointsCaptured(Btree*);
 int pushSavepoint(Btree*, int);
 void freeSavepointTables(struct SavepointTableState*);
 int snapshotPendingForFlush(Btree*, Pgno, ProllyMutMap**, ProllyMutMap**, int*);
+void undoSnapshotPendingForFlush(Btree*, Pgno, ProllyMutMap**, ProllyMutMap*);
 int serializeCatalog(Btree*, u8**, int*);
 int doltliteFlushAndSerializeBtreeCatalog(Btree*, u8**, int*);
 int doltliteBtreeTxnWrote(Btree*);

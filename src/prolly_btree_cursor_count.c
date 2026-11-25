@@ -440,7 +440,14 @@ static int flushPendingForCount(
                                        &pFlushMap, &captured);
       if( rc!=SQLITE_OK ) return rc;
       rc = applyMutMapToTableRoot(pCur->pBt, pTE, pFlushMap);
-      if( rc!=SQLITE_OK ) return rc;
+      if( rc!=SQLITE_OK ){
+        if( captured ){
+          undoSnapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot,
+                                      (ProllyMutMap**)&pTE->pPending,
+                                      pFlushMap);
+        }
+        return rc;
+      }
       if( pTE->pPending==pMap ){
         prollyMutMapClear(pMap);
       }
