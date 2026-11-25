@@ -267,13 +267,17 @@ static int descendToChild(ProllyCursor *cur, int childSlot,
 
   prollyNodeChildHash(&pParent->node, childSlot, &childHash);
 
-  cur->iLevel++;
-  if( cur->iLevel>=PROLLY_CURSOR_MAX_DEPTH ){
+  if( cur->iLevel+1>=PROLLY_CURSOR_MAX_DEPTH ){
+    prollyCursorReleaseAll(cur);
     return SQLITE_CORRUPT;
   }
+  cur->iLevel++;
 
   rc = loadNode(cur, &childHash, &pChild);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    prollyCursorReleaseAll(cur);
+    return rc;
+  }
 
   cur->aLevel[cur->iLevel].pEntry = pChild;
   cur->aLevel[cur->iLevel].idx = childIdx;
@@ -477,6 +481,7 @@ int prollyCursorNext(ProllyCursor *cur){
     }
   }
 
+  cur->iLevel = 0;
   cur->eState = PROLLY_CURSOR_EOF;
   return SQLITE_OK;
 }
@@ -516,6 +521,7 @@ int prollyCursorPrev(ProllyCursor *cur){
     }
   }
 
+  cur->iLevel = 0;
   cur->eState = PROLLY_CURSOR_EOF;
   return SQLITE_OK;
 }

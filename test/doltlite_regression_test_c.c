@@ -18214,6 +18214,196 @@ static void run_prolly_cursor_empty_leaf_under_internal(void){
   chunkStoreClose(&cs);
 }
 
+static int put_two_child_internal(ChunkStore *pCs, u8 level,
+                                  const ProllyHash *pLeft,
+                                  const ProllyHash *pRight,
+                                  ProllyHash *pOut){
+  u8 buf[8 + 24 + 2 + PROLLY_HASH_SIZE*2];
+  int n = 0;
+  memcpy(buf, "DONP", 4);            n = 4;
+  buf[n++] = level;
+  buf[n++] = 2;
+  buf[n++] = 0;
+  buf[n++] = PROLLY_NODE_BLOBKEY;
+  putU32le(buf + n, 0);              n += 4;
+  putU32le(buf + n, 1);              n += 4;
+  putU32le(buf + n, 2);              n += 4;
+  putU32le(buf + n, 0);              n += 4;
+  putU32le(buf + n, PROLLY_HASH_SIZE);   n += 4;
+  putU32le(buf + n, PROLLY_HASH_SIZE*2); n += 4;
+  buf[n++] = 'a';
+  buf[n++] = 'b';
+  memcpy(buf + n, pLeft->data, PROLLY_HASH_SIZE);  n += PROLLY_HASH_SIZE;
+  memcpy(buf + n, pRight->data, PROLLY_HASH_SIZE); n += PROLLY_HASH_SIZE;
+  return chunkStorePut(pCs, buf, n, pOut);
+}
+
+static int put_one_child_internal(ChunkStore *pCs, u8 level,
+                                  const ProllyHash *pChild,
+                                  ProllyHash *pOut){
+  u8 buf[8 + 16 + 1 + PROLLY_HASH_SIZE];
+  int n = 0;
+  memcpy(buf, "DONP", 4);            n = 4;
+  buf[n++] = level;
+  buf[n++] = 1;
+  buf[n++] = 0;
+  buf[n++] = PROLLY_NODE_BLOBKEY;
+  putU32le(buf + n, 0);              n += 4;
+  putU32le(buf + n, 1);              n += 4;
+  putU32le(buf + n, 0);              n += 4;
+  putU32le(buf + n, PROLLY_HASH_SIZE); n += 4;
+  buf[n++] = 'b';
+  memcpy(buf + n, pChild->data, PROLLY_HASH_SIZE); n += PROLLY_HASH_SIZE;
+  return chunkStorePut(pCs, buf, n, pOut);
+}
+
+static void run_prolly_cursor_descend_error(void){
+  ChunkStore cs;
+  ProllyCache cache;
+  ProllyCursor cur;
+  ProllyHash leafHash, missingHash, badHash;
+  ProllyHash rootNextMissing, rootPrevMissing;
+  ProllyHash rootNextBad, rootPrevBad;
+  ProllyHash chainHash, rootDeepFirst, rootDeepNext, rootDeepPrev;
+  int rc, res = 99, i;
+
+  static const u8 fullLeaf[] = {
+    'D','O','N','P',
+    0,
+    1, 0,
+    PROLLY_NODE_BLOBKEY,
+    0,0,0,0,
+    1,0,0,0,
+    0,0,0,0,
+    1,0,0,0,
+    'a',
+    'A'
+  };
+  static const u8 badNode[] = { 'b', 'a', 'd', '!' };
+
+  printf("=== Prolly Cursor Descend Error Test ===\n\n");
+
+  check("cursor_descend_err_open_store",
+        chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
+  check("cursor_descend_err_init_cache",
+        prollyCacheInit(&cache, 32*4096)==SQLITE_OK);
+  check("cursor_descend_err_put_leaf",
+        chunkStorePut(&cs, fullLeaf, (int)sizeof(fullLeaf), &leafHash)==SQLITE_OK);
+  check("cursor_descend_err_put_bad",
+        chunkStorePut(&cs, badNode, (int)sizeof(badNode), &badHash)==SQLITE_OK);
+  memset(missingHash.data, 0xAB, PROLLY_HASH_SIZE);
+
+  check("cursor_descend_err_root_next_missing",
+        put_two_child_internal(&cs, 1, &leafHash, &missingHash, &rootNextMissing)==SQLITE_OK);
+  check("cursor_descend_err_root_prev_missing",
+        put_two_child_internal(&cs, 1, &missingHash, &leafHash, &rootPrevMissing)==SQLITE_OK);
+  check("cursor_descend_err_root_next_bad",
+        put_two_child_internal(&cs, 1, &leafHash, &badHash, &rootNextBad)==SQLITE_OK);
+  check("cursor_descend_err_root_prev_bad",
+        put_two_child_internal(&cs, 1, &badHash, &leafHash, &rootPrevBad)==SQLITE_OK);
+
+  prollyCursorInit(&cur, &cs, &cache, &rootNextMissing, PROLLY_NODE_BLOBKEY);
+  rc = prollyCursorFirst(&cur, &res);
+  check("cursor_descend_next_missing_first_ok",
+        rc==SQLITE_OK && res==0 && prollyCursorIsValid(&cur));
+  rc = prollyCursorNext(&cur);
+  check("cursor_descend_next_missing_errors", rc!=SQLITE_OK);
+  check("cursor_descend_next_missing_invalid", !prollyCursorIsValid(&cur));
+  check("cursor_descend_next_missing_level_in_bounds",
+        cur.iLevel>=0 && cur.iLevel<PROLLY_CURSOR_MAX_DEPTH
+        && cur.aLevel[cur.iLevel].pEntry==0);
+  prollyCursorClose(&cur);
+
+  prollyCursorInit(&cur, &cs, &cache, &rootPrevMissing, PROLLY_NODE_BLOBKEY);
+  rc = prollyCursorLast(&cur, &res);
+  check("cursor_descend_prev_missing_last_ok",
+        rc==SQLITE_OK && res==0 && prollyCursorIsValid(&cur));
+  rc = prollyCursorPrev(&cur);
+  check("cursor_descend_prev_missing_errors", rc!=SQLITE_OK);
+  check("cursor_descend_prev_missing_invalid", !prollyCursorIsValid(&cur));
+  check("cursor_descend_prev_missing_level_in_bounds",
+        cur.iLevel>=0 && cur.iLevel<PROLLY_CURSOR_MAX_DEPTH
+        && cur.aLevel[cur.iLevel].pEntry==0);
+  prollyCursorClose(&cur);
+
+  prollyCursorInit(&cur, &cs, &cache, &rootNextBad, PROLLY_NODE_BLOBKEY);
+  rc = prollyCursorFirst(&cur, &res);
+  check("cursor_descend_next_bad_first_ok",
+        rc==SQLITE_OK && res==0 && prollyCursorIsValid(&cur));
+  rc = prollyCursorNext(&cur);
+  check("cursor_descend_next_bad_corrupt", rc==SQLITE_CORRUPT);
+  check("cursor_descend_next_bad_invalid", !prollyCursorIsValid(&cur));
+  check("cursor_descend_next_bad_level_in_bounds",
+        cur.iLevel>=0 && cur.iLevel<PROLLY_CURSOR_MAX_DEPTH
+        && cur.aLevel[cur.iLevel].pEntry==0);
+  prollyCursorClose(&cur);
+
+  prollyCursorInit(&cur, &cs, &cache, &rootPrevBad, PROLLY_NODE_BLOBKEY);
+  rc = prollyCursorLast(&cur, &res);
+  check("cursor_descend_prev_bad_last_ok",
+        rc==SQLITE_OK && res==0 && prollyCursorIsValid(&cur));
+  rc = prollyCursorPrev(&cur);
+  check("cursor_descend_prev_bad_corrupt", rc==SQLITE_CORRUPT);
+  check("cursor_descend_prev_bad_invalid", !prollyCursorIsValid(&cur));
+  check("cursor_descend_prev_bad_level_in_bounds",
+        cur.iLevel>=0 && cur.iLevel<PROLLY_CURSOR_MAX_DEPTH
+        && cur.aLevel[cur.iLevel].pEntry==0);
+  prollyCursorClose(&cur);
+
+  chainHash = leafHash;
+  for(i=1; i<PROLLY_CURSOR_MAX_DEPTH; i++){
+    ProllyHash nextHash;
+    rc = put_one_child_internal(&cs, (u8)i, &chainHash, &nextHash);
+    check("cursor_descend_depth_chain_put", rc==SQLITE_OK);
+    chainHash = nextHash;
+  }
+  check("cursor_descend_depth_root_first",
+        put_one_child_internal(&cs, (u8)PROLLY_CURSOR_MAX_DEPTH,
+                               &chainHash, &rootDeepFirst)==SQLITE_OK);
+  check("cursor_descend_depth_root_next",
+        put_two_child_internal(&cs, (u8)PROLLY_CURSOR_MAX_DEPTH,
+                               &leafHash, &chainHash, &rootDeepNext)==SQLITE_OK);
+  check("cursor_descend_depth_root_prev",
+        put_two_child_internal(&cs, (u8)PROLLY_CURSOR_MAX_DEPTH,
+                               &chainHash, &leafHash, &rootDeepPrev)==SQLITE_OK);
+
+  prollyCursorInit(&cur, &cs, &cache, &rootDeepFirst, PROLLY_NODE_BLOBKEY);
+  rc = prollyCursorFirst(&cur, &res);
+  check("cursor_descend_depth_first_corrupt", rc==SQLITE_CORRUPT);
+  check("cursor_descend_depth_first_invalid", !prollyCursorIsValid(&cur));
+  check("cursor_descend_depth_first_level_in_bounds",
+        cur.iLevel>=0 && cur.iLevel<PROLLY_CURSOR_MAX_DEPTH
+        && cur.aLevel[cur.iLevel].pEntry==0);
+  prollyCursorClose(&cur);
+
+  prollyCursorInit(&cur, &cs, &cache, &rootDeepNext, PROLLY_NODE_BLOBKEY);
+  rc = prollyCursorFirst(&cur, &res);
+  check("cursor_descend_depth_next_first_ok",
+        rc==SQLITE_OK && res==0 && prollyCursorIsValid(&cur));
+  rc = prollyCursorNext(&cur);
+  check("cursor_descend_depth_next_corrupt", rc==SQLITE_CORRUPT);
+  check("cursor_descend_depth_next_invalid", !prollyCursorIsValid(&cur));
+  check("cursor_descend_depth_next_level_in_bounds",
+        cur.iLevel>=0 && cur.iLevel<PROLLY_CURSOR_MAX_DEPTH
+        && cur.aLevel[cur.iLevel].pEntry==0);
+  prollyCursorClose(&cur);
+
+  prollyCursorInit(&cur, &cs, &cache, &rootDeepPrev, PROLLY_NODE_BLOBKEY);
+  rc = prollyCursorLast(&cur, &res);
+  check("cursor_descend_depth_prev_last_ok",
+        rc==SQLITE_OK && res==0 && prollyCursorIsValid(&cur));
+  rc = prollyCursorPrev(&cur);
+  check("cursor_descend_depth_prev_corrupt", rc==SQLITE_CORRUPT);
+  check("cursor_descend_depth_prev_invalid", !prollyCursorIsValid(&cur));
+  check("cursor_descend_depth_prev_level_in_bounds",
+        cur.iLevel>=0 && cur.iLevel<PROLLY_CURSOR_MAX_DEPTH
+        && cur.aLevel[cur.iLevel].pEntry==0);
+  prollyCursorClose(&cur);
+
+  prollyCacheFree(&cache);
+  chunkStoreClose(&cs);
+}
+
 /* Offsets must start at 0; a nonzero first offset makes offset-array and stride readers disagree. */
 static void run_prolly_node_first_offset_validation(void){
   ProllyNode node;
@@ -21849,6 +22039,7 @@ static const RegressionCase aCases[] = {
   { "prolly_cursor_empty_leaf_root", "Prolly Cursor Empty Leaf Root Test", run_prolly_cursor_empty_leaf_root },
   { "prolly_cursor_corrupt_node", "Prolly Cursor Corrupt Node Test", run_prolly_cursor_surfaces_corrupt_node },
   { "prolly_cursor_empty_leaf_under_internal", "Prolly Cursor Empty Leaf Under Internal Test", run_prolly_cursor_empty_leaf_under_internal },
+  { "prolly_cursor_descend_error", "Prolly Cursor Descend Error Test", run_prolly_cursor_descend_error },
   { "prolly_node_first_offset_validation", "Prolly Node First Offset Validation Test", run_prolly_node_first_offset_validation },
   { "prolly_diff_iter_copies_blob_keys", "Prolly Diff Iterator Blob Key Copy Test", run_prolly_diff_iter_copies_blob_keys },
   { "prolly_diff_leaf_record_corruption", "Prolly Diff Leaf Corruption Test", run_prolly_diff_leaf_surfaces_record_corruption },
