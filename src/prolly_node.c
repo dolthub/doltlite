@@ -568,7 +568,8 @@ int prollyNodeBuilderAddZeroTail(
   if( b->nItems>=PROLLY_NODE_MAX_ITEMS ){
     return SQLITE_FULL;
   }
-  if( (i64)b->nValBytes + (i64)nValPrefix + nZeroTail > (i64)0x7fffffff ){
+  if( nValPrefix < 0 || nZeroTail > (i64)0x7fffffff
+   || (i64)b->nValBytes + (i64)nValPrefix + nZeroTail > (i64)0x7fffffff ){
     return SQLITE_NOMEM;
   }
 
@@ -622,8 +623,8 @@ int prollyNodeBuilderFinish(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut){
 int prollyNodeBuilderFinishSparse(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut,
                                   i64 *pnZeroTail){
   int nOff;
-  int nTotal;
-  int nPhys;
+  i64 nTotal;
+  i64 nPhys;
   u8 *pBuf;
   u8 *pCur;
 #if SQLITE_BYTEORDER!=1234
@@ -663,14 +664,19 @@ int prollyNodeBuilderFinishSparse(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut,
   }
 
   nOff = (b->nItems + 1) * 4;
-  nTotal = PROLLY_HDR_SIZE + nOff * 2 + b->nKeyBytes + b->nValBytes;
+  nTotal = (i64)PROLLY_HDR_SIZE + (i64)nOff * 2
+         + (i64)b->nKeyBytes + (i64)b->nValBytes;
   if( writeCounts ){
-    nTotal += b->nItems * 8;
+    nTotal += (i64)b->nItems * 8;
   }
   assert( b->nValZeroTail==0 || !writeCounts );
-  nPhys = nTotal - (int)b->nValZeroTail;
+  nPhys = nTotal - b->nValZeroTail;
+  if( nTotal < 0 || nTotal > (i64)0x7fffffff
+   || nPhys < 0 || nPhys > (i64)0x7fffffff ){
+    return SQLITE_TOOBIG;
+  }
 
-  pBuf = (u8*)sqlite3_malloc(nPhys);
+  pBuf = (u8*)sqlite3_malloc((int)nPhys);
   if( !pBuf ) return SQLITE_NOMEM;
 
   PROLLY_PUT_U32(pBuf + PROLLY_MAGIC_OFF, PROLLY_NODE_MAGIC);
@@ -704,8 +710,10 @@ int prollyNodeBuilderFinishSparse(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut,
 
   if( b->nValBytes>0 ){
     int nValPhys = b->nValBytes - (int)b->nValZeroTail;
-    memcpy(pCur, b->pValBuf, nValPhys);
-    pCur += nValPhys;
+    if( nValPhys>0 ){
+      memcpy(pCur, b->pValBuf, nValPhys);
+      pCur += nValPhys;
+    }
   }
 
   if( writeCounts ){
@@ -728,10 +736,10 @@ int prollyNodeBuilderFinishSparse(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut,
 #endif
   }
 
-  assert( pCur==pBuf+nPhys );
+  assert( pCur==pBuf+(int)nPhys );
 
   *ppOut = pBuf;
-  *pnOut = nTotal;
+  *pnOut = (int)nTotal;
   *pnZeroTail = b->nValZeroTail;
   return SQLITE_OK;
 }
