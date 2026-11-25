@@ -8421,6 +8421,134 @@ static void run_sortkey_mem_matches_record(void){
   sqlite3_free(pFastKey);
 }
 
+static void run_sortkey_corrupt_record_bounds(void){
+  static const u8 cTruncHdr[] = { 0x80 };
+  static const u8 cZeroHdr[] = { 0x00 };
+  static const u8 cShortHdr[] = { 0x80, 0x01 };
+  static const u8 cOverHdr[] = { 0x05, 0x01 };
+  static const u8 cTruncSerial[] = { 0x02, 0x80 };
+  static const u8 cSerialPastHdr[] = { 0x02, 0x80, 0x07 };
+  static const u8 cTruncSecondSerial[] = { 0x03, 0x00, 0x80 };
+  static const struct {
+    const char *zName;
+    const u8 *aBytes;
+    int nBytes;
+    int nPrefixFields;
+  } aBad[] = {
+    { "trunc_hdr", cTruncHdr, (int)sizeof(cTruncHdr), 1 },
+    { "zero_hdr", cZeroHdr, (int)sizeof(cZeroHdr), 1 },
+    { "short_hdr", cShortHdr, (int)sizeof(cShortHdr), 1 },
+    { "over_hdr", cOverHdr, (int)sizeof(cOverHdr), 1 },
+    { "trunc_serial", cTruncSerial, (int)sizeof(cTruncSerial), 1 },
+    { "serial_past_hdr", cSerialPastHdr, (int)sizeof(cSerialPastHdr), 1 },
+    { "trunc_second_serial", cTruncSecondSerial, (int)sizeof(cTruncSecondSerial), 2 }
+  };
+  int i;
+
+  printf("=== Sortkey Corrupt Record Bounds Test ===\n\n");
+
+  for(i=0; i<(int)(sizeof(aBad)/sizeof(aBad[0])); i++){
+    u8 *pRec = (u8*)sqlite3_malloc(aBad[i].nBytes);
+    u8 *pOut = 0;
+    int nOut = 0;
+    int rc;
+    char zCheck[96];
+
+    check("corrupt_rec_alloc", pRec!=0);
+    if( !pRec ) continue;
+    memcpy(pRec, aBad[i].aBytes, (size_t)aBad[i].nBytes);
+
+    rc = sortKeyFromRecord(pRec, aBad[i].nBytes, &pOut, &nOut);
+    sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_full_corrupt", aBad[i].zName);
+    check(zCheck, rc==SQLITE_CORRUPT);
+    sqlite3_free(pOut);
+    pOut = 0;
+
+    rc = sortKeyFromRecordPrefix(pRec, aBad[i].nBytes, aBad[i].nPrefixFields,
+                                 &pOut, &nOut);
+    sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_prefix_corrupt", aBad[i].zName);
+    check(zCheck, rc==SQLITE_CORRUPT);
+    sqlite3_free(pOut);
+    pOut = 0;
+
+    rc = sortKeyRecordNeedsPayload(pRec, aBad[i].nBytes, 0);
+    sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_needs_payload_false", aBad[i].zName);
+    check(zCheck, rc==0);
+
+    sqlite3_free(pRec);
+  }
+}
+
+static void run_sortkey_large_record_header(void){
+  static const struct {
+    const char *zName;
+    int nFields;
+    int expectedHdr;
+    int expectedHdrVarintLen;
+  } aCasesLocal[] = {
+    { "hdr_127", 126, 127, 1 },
+    { "hdr_129", 127, 129, 2 },
+    { "hdr_16383", 16381, 16383, 2 },
+    { "hdr_16385", 16382, 16385, 3 },
+    { "hdr_16403", 16400, 16403, 3 }
+  };
+  int i;
+
+  printf("=== Sortkey Large Record Header Test ===\n\n");
+
+  for(i=0; i<(int)(sizeof(aCasesLocal)/sizeof(aCasesLocal[0])); i++){
+    int nFields = aCasesLocal[i].nFields;
+    int expectedHdr = aCasesLocal[i].expectedHdr;
+    int expectedVarintLen = aCasesLocal[i].expectedHdrVarintLen;
+    u8 *pKey = (u8*)sqlite3_malloc(nFields);
+    u8 *pRec = 0;
+    u8 *pReEnc = 0;
+    int nAlloc = 0;
+    int nRec = 0;
+    int nReEnc = 0;
+    int rc;
+    int j;
+    int allZero = 1;
+    u64 decodedHdr = 0;
+    int nHdrVarint = 0;
+    char zCheck[96];
+
+    check("large_hdr_key_alloc", pKey!=0);
+    if( !pKey ) continue;
+    memset(pKey, SORTKEY_NULL, (size_t)nFields);
+
+    rc = recordFromSortKeyBuffer(pKey, nFields, &pRec, &nAlloc, &nRec);
+    sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_decode_ok", aCasesLocal[i].zName);
+    check(zCheck, rc==SQLITE_OK);
+    sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_output_len", aCasesLocal[i].zName);
+    check(zCheck, nRec==expectedHdr && nAlloc==expectedHdr);
+
+    if( rc==SQLITE_OK && pRec && nRec==expectedHdr ){
+      nHdrVarint = dlReadVarint(pRec, pRec + nRec, &decodedHdr);
+      sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_hdr_varint", aCasesLocal[i].zName);
+      check(zCheck, nHdrVarint==expectedVarintLen && decodedHdr==(u64)expectedHdr);
+
+      for(j=nHdrVarint; j<nRec; j++){
+        if( pRec[j]!=0 ){
+          allZero = 0;
+          break;
+        }
+      }
+      sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_serial_types_zero", aCasesLocal[i].zName);
+      check(zCheck, allZero);
+
+      rc = sortKeyFromRecord(pRec, nRec, &pReEnc, &nReEnc);
+      sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_roundtrip", aCasesLocal[i].zName);
+      check(zCheck, rc==SQLITE_OK && nReEnc==nFields
+                    && memcmp(pReEnc, pKey, (size_t)nFields)==0);
+    }
+
+    sqlite3_free(pReEnc);
+    sqlite3_free(pRec);
+    sqlite3_free(pKey);
+  }
+}
+
 static void run_reload_refs_transactional(void){
   ChunkStore cs;
   ProllyHash emptyHash;
@@ -23709,7 +23837,9 @@ static const RegressionCase aCases[] = {
   { "wal_tail_replay_rollback_nrecent", "WAL Tail Replay Rollback nRecent Test", run_wal_tail_replay_rollback_nrecent },
   { "cv_without_rowid_pk_delete", "Constraint Violation Delete On PK-Only WITHOUT ROWID Table", run_cv_without_rowid_pk_delete },
   { "chunk_store_put_int_overflow", "Chunk Store Put Int Overflow Test", run_chunk_store_put_int_overflow },
-  { "wal_checkpoint_fallback_restores_manifest", "WAL Checkpoint Fallback Restores Manifest Test", run_wal_checkpoint_fallback_restores_manifest }
+  { "wal_checkpoint_fallback_restores_manifest", "WAL Checkpoint Fallback Restores Manifest Test", run_wal_checkpoint_fallback_restores_manifest },
+  { "sortkey_corrupt_record_bounds", "Sortkey Corrupt Record Bounds Test", run_sortkey_corrupt_record_bounds },
+  { "sortkey_large_record_header", "Sortkey Large Record Header Test", run_sortkey_large_record_header }
 };
 
 static int run_case_by_name(const char *zName){
