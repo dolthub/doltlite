@@ -211,6 +211,40 @@ foreach op {detach deserialize} {
   dest close
   db close
 }
+
+# Backup to :memory: or named memory must preserve the destination store's
+# write gate (e.g. PRAGMA query_only) and stats pointer.
+foreach dest_uri {:memory: {file:backup_qo_mem?mode=memory&cache=shared}} {
+  set tag [expr {$dest_uri eq ":memory:" ? "memory" : "sharedmem"}]
+  set prefix backup-preserve-gates-$tag
+  forcedelete backup-source.db
+  sqlite3 src backup-source.db
+  src eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO t VALUES(1, 'a');
+    SELECT dolt_commit('-Am', 'base');
+  }
+  sqlite3 db $dest_uri -uri 1
+  sqlite3_backup B db main src main
+  do_test $prefix.step {B step -1} SQLITE_DONE
+  do_test $prefix.finish {B finish} SQLITE_OK
+  do_test $prefix.query-only-branch-refused {
+    db eval {PRAGMA query_only = ON;}
+    catchsql {SELECT dolt_branch('b2')}
+  } {1 {attempt to write a readonly database}}
+  do_test $prefix.branches-unchanged {
+    db eval {SELECT name FROM dolt_branches ORDER BY name}
+  } {main}
+  do_test $prefix.query-only-off-writable {
+    db eval {PRAGMA query_only = OFF;}
+    sqlite3_db_status db CACHE_WRITE 1
+    set rc [catchsql {SELECT dolt_branch('b2')}]
+    set cw [lindex [sqlite3_db_status db CACHE_WRITE 0] 1]
+    list $rc [db eval {SELECT name FROM dolt_branches ORDER BY name}] [expr {$cw > 0}]
+  } {{0 0} {b2 main} 1}
+  src close
+  db close
+}
 sqlite3 db test.db
 
 finish_test
