@@ -2882,10 +2882,14 @@ static int rollbackNamedSavepoint(Btree *p, BtShared *pBt, int iSavepoint){
   }
   p->nSavepoint = iSavepoint;
   for(pC=pBt->pCursor; pC; pC=pC->pNext){
+    struct TableEntry *pTE;
     if( pC->pBtree!=p ) continue;
-    pC->pMutMap = 0;
+    pTE = findTable(p, pC->pgnoRoot);
+    pC->pMutMap = (pC->eState!=CURSOR_FAULT && pTE)
+                    ? (ProllyMutMap*)pTE->pPending : 0;
     pC->mmActive = 0;
     pC->mmPhysActive = 0;
+    pC->mmExactMiss = 0;
     pC->deferredTreeSeek = 0;
     pC->mmIdx = -1;
     pC->mmPhysIdx = -1;

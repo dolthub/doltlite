@@ -602,12 +602,15 @@ int mergeLast(BtCursor *pCur, int *pRes){
 
 int prollyBtCursorFirst(BtCursor *pCur, int *pRes){
   int rc;
+  struct TableEntry *pTE;
   rc = flushScanDeletes(pCur);
   if( rc!=SQLITE_OK ) return rc;
   CLEAR_CACHED_PAYLOAD(pCur);
   CLEAR_CACHED_SEEK_KEY(pCur);
   CLEAR_CACHED_COMPARE_KEY(pCur);
   refreshCursorRoot(pCur);
+  pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+  pCur->pMutMap = pTE ? (ProllyMutMap*)pTE->pPending : 0;
   rc = prollyCursorCheckInterrupt(pCur);
   if( rc!=SQLITE_OK ) return rc;
   pCur->pCur.bWriteScan = (pCur->curFlags & BTCF_WriteFlag) ? 1 : 0;
@@ -638,12 +641,15 @@ int sqlite3BtreeFirst(BtCursor *pCur, int *pRes){
 
 int prollyBtCursorLast(BtCursor *pCur, int *pRes){
   int rc;
+  struct TableEntry *pTE;
   rc = flushScanDeletes(pCur);
   if( rc!=SQLITE_OK ) return rc;
   CLEAR_CACHED_PAYLOAD(pCur);
   CLEAR_CACHED_SEEK_KEY(pCur);
   CLEAR_CACHED_COMPARE_KEY(pCur);
   refreshCursorRoot(pCur);
+  pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+  pCur->pMutMap = pTE ? (ProllyMutMap*)pTE->pPending : 0;
   rc = prollyCursorCheckInterrupt(pCur);
   if( rc!=SQLITE_OK ) return rc;
   rc = prollyCursorLast(&pCur->pCur, pRes);
