@@ -926,6 +926,51 @@ SELECT group_concat(name,',') FROM pragma_table_info('we (them)');
 SELECT replace(sql,' ','') FROM sqlite_master WHERE name='we (them)';
 "
 
+apply_bidirectional ddl_block_comment_unmatched_paren "
+CREATE TABLE t(id INT PRIMARY KEY, a INT);
+INSERT INTO t VALUES(1,10),(2,20);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_tag('base');
+DROP TABLE t;
+CREATE TABLE t(id INT PRIMARY KEY, /* (note */ a INT, b INT);
+INSERT INTO t VALUES(1,10,100),(2,20,200);
+SELECT dolt_commit('-A','-m','target');
+SELECT dolt_tag('target');
+" "
+SELECT group_concat(id||':'||a||':'||b,',') FROM (SELECT id, a, b FROM t ORDER BY id);
+SELECT group_concat(name,',') FROM pragma_table_info('t');
+SELECT sql FROM sqlite_master WHERE name='t';
+" "
+SELECT group_concat(id||':'||a,',') FROM (SELECT id, a FROM t ORDER BY id);
+SELECT group_concat(name,',') FROM pragma_table_info('t');
+SELECT sql FROM sqlite_master WHERE name='t';
+"
+
+apply_bidirectional ddl_line_and_block_comments_delimiters "
+CREATE TABLE t(id INT PRIMARY KEY, a INT);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_commit('-A','-m','base');
+SELECT dolt_tag('base');
+DROP TABLE t;
+CREATE TABLE t(
+  id INT PRIMARY KEY,
+  -- (unmatched paren
+  /* ), */ a INT,
+  b INT
+);
+INSERT INTO t VALUES(1,10,99);
+SELECT dolt_commit('-A','-m','target');
+SELECT dolt_tag('target');
+" "
+SELECT group_concat(id||':'||a||':'||b,',') FROM (SELECT id, a, b FROM t ORDER BY id);
+SELECT group_concat(name,',') FROM pragma_table_info('t');
+SELECT sql FROM sqlite_master WHERE name='t';
+" "
+SELECT group_concat(id||':'||a,',') FROM (SELECT id, a FROM t ORDER BY id);
+SELECT group_concat(name,',') FROM pragma_table_info('t');
+SELECT sql FROM sqlite_master WHERE name='t';
+"
+
 for rebuild_dependency in view trigger both; do
   rebuild_view=""
   rebuild_trigger=""

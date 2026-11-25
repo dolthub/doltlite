@@ -260,26 +260,48 @@ static int patchRootsShareKey(
   return found;
 }
 
-/* First '(' outside quotes; a quoted table name may contain parens. */
+static const char *patchSkipSqlNonCode(const char *z, const char *zEnd){
+  char c = *z;
+  if( c=='"' || c=='`' || c=='\'' ){
+    z++;
+    while( (!zEnd || z<zEnd) && *z ){
+      if( *z==c ){
+        if( (!zEnd || z+1<zEnd) && z[1]==c ){ z += 2; continue; }
+        return z + 1;
+      }
+      z++;
+    }
+    return z;
+  }
+  if( c=='[' ){
+    z++;
+    while( (!zEnd || z<zEnd) && *z && *z!=']' ) z++;
+    return ((!zEnd || z<zEnd) && *z==']') ? z + 1 : z;
+  }
+  if( c=='-' && (!zEnd || z+1<zEnd) && z[1]=='-' ){
+    z += 2;
+    while( (!zEnd || z<zEnd) && *z && *z!='\n' ) z++;
+    return ((!zEnd || z<zEnd) && *z=='\n') ? z + 1 : z;
+  }
+  if( c=='/' && (!zEnd || z+1<zEnd) && z[1]=='*' ){
+    z += 2;
+    while( (!zEnd || z<zEnd) && *z ){
+      if( *z=='*' && (!zEnd || z+1<zEnd) && z[1]=='/' ) return z + 2;
+      z++;
+    }
+    return z;
+  }
+  return 0;
+}
+
+/* First '(' outside quotes and comments. */
 static const char *patchSchemaBody(const char *zSql){
   const char *z = zSql;
   while( *z ){
-    char c = *z;
-    if( c=='"' || c=='`' || c=='\'' ){
-      z++;
-      while( *z ){
-        if( *z==c ){
-          if( z[1]==c ){ z += 2; continue; }
-          z++;
-          break;
-        }
-        z++;
-      }
-    }else if( c=='[' ){
-      z++;
-      while( *z && *z!=']' ) z++;
-      if( *z ) z++;
-    }else if( c=='(' ){
+    const char *zNext = patchSkipSqlNonCode(z, 0);
+    if( zNext ){
+      z = zNext;
+    }else if( *z=='(' ){
       return z;
     }else{
       z++;
@@ -667,24 +689,12 @@ static const char *patchSchemaBodyEnd(const char *zBody){
   const char *z = zBody;
   int depth = 0;
   while( *z ){
-    char c = *z;
-    if( c=='"' || c=='`' || c=='\'' ){
-      z++;
-      while( *z ){
-        if( *z==c ){
-          if( z[1]==c ){ z += 2; continue; }
-          z++;
-          break;
-        }
-        z++;
-      }
-    }else if( c=='[' ){
-      z++;
-      while( *z && *z!=']' ) z++;
-      if( *z ) z++;
+    const char *zNext = patchSkipSqlNonCode(z, 0);
+    if( zNext ){
+      z = zNext;
     }else{
-      if( c=='(' ) depth++;
-      if( c==')' && --depth==0 ) return z;
+      if( *z=='(' ) depth++;
+      if( *z==')' && --depth==0 ) return z;
       z++;
     }
   }
@@ -709,9 +719,9 @@ static int patchSchemaItem(
   zEnd = patchSchemaBodyEnd(zBody);
   if( !zEnd ) return SQLITE_CORRUPT;
   zItem = zBody + 1;
-  for(z=zItem; z<=zEnd; z++){
-    char c = *z;
-    if( z==zEnd || (c==',' && depth==0) ){
+  z = zItem;
+  while( z<=zEnd ){
+    if( z==zEnd || (*z==',' && depth==0) ){
       const char *zStart = zItem;
       const char *zStop = z;
       while( zStart<zStop && sqlite3Isspace(*zStart) ) zStart++;
@@ -724,22 +734,16 @@ static int patchSchemaItem(
       }
       iItem++;
       zItem = z + 1;
-    }else if( c=='"' || c=='`' || c=='\'' ){
-      char q = c;
       z++;
-      while( z<zEnd ){
-        if( *z==q ){
-          if( z+1<zEnd && z[1]==q ){ z++; }
-          else break;
-        }
+    }else{
+      const char *zNext = patchSkipSqlNonCode(z, zEnd);
+      if( zNext ){
+        z = zNext;
+      }else{
+        if( *z=='(' ) depth++;
+        else if( *z==')' ) depth--;
         z++;
       }
-    }else if( c=='[' ){
-      while( z<zEnd && *z!=']' ) z++;
-    }else if( c=='(' ){
-      depth++;
-    }else if( c==')' ){
-      depth--;
     }
   }
   return *pzItem ? SQLITE_OK : SQLITE_NOTFOUND;
@@ -778,7 +782,7 @@ static int patchNativeAlter(
       int nItem = 0;
       int nIdent = 0;
       rc = patchSchemaItem(pTable->pToSchema->zSql,iDiff,&zItem,&nItem);
-      if( rc!=SQLITE_OK ) return rc;
+      if( rc!=SQLITE_OK ) return rc==SQLITE_NOMEM ? rc : SQLITE_OK;
       if( zItem[0]=='"' || zItem[0]=='`' ){
         char q = zItem[0];
         for(nIdent=1; nIdent<nItem; nIdent++){
@@ -794,7 +798,7 @@ static int patchNativeAlter(
         while( nIdent<nItem && !sqlite3Isspace(zItem[nIdent])
             && zItem[nIdent]!='(' && zItem[nIdent]!=',' ) nIdent++;
       }
-      if( nIdent<=0 || nIdent>nItem ) return SQLITE_CORRUPT;
+      if( nIdent<=0 || nIdent>nItem ) return SQLITE_OK;
       isCandidate = 1;
       zAlter = sqlite3_mprintf(
           "ALTER TABLE \"%w\" RENAME COLUMN \"%w\" TO %.*s",
@@ -807,9 +811,9 @@ static int patchNativeAlter(
     for(i=0; i<pFrom->col.nCol; i++){
       if( strcmp(pFrom->col.azName[i],pTo->col.azName[i])!=0 ) return SQLITE_OK;
     }
-    if( !pTab ) return SQLITE_CORRUPT;
+    if( !pTab ) return SQLITE_OK;
     i = sqlite3ColumnIndex(pTab,pTo->col.azName[pTo->col.nCol-1]);
-    if( i<0 ) return SQLITE_CORRUPT;
+    if( i<0 ) return SQLITE_OK;
     {
       /* ADD COLUMN on a table that has rows needs a constant default, and
       ** a non-NULL one under NOT NULL. Anything else is a rebuild. */
@@ -824,13 +828,13 @@ static int patchNativeAlter(
         iAddedDefault = pTo->col.nCol-1;
       }
       sqlite3ValueFree(pValue);
-      if( rc!=SQLITE_OK ) return rc;
+      if( rc!=SQLITE_OK ) return rc==SQLITE_NOMEM ? rc : SQLITE_OK;
       if( !bConstant || (pTab->aCol[i].notNull && bNull) ){
         return SQLITE_OK;
       }
     }
     rc = patchSchemaItem(pTable->pToSchema->zSql,i,&zItem,&nItem);
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ) return rc==SQLITE_NOMEM ? rc : SQLITE_OK;
     isCandidate = 1;
     zAlter = sqlite3_mprintf("ALTER TABLE \"%w\" ADD COLUMN %.*s",
                              pTable->zFromName,nItem,zItem);
