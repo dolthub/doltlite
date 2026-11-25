@@ -163,4 +163,65 @@ do_execsql_test clean-reset-noop.reopen {
   PRAGMA integrity_check;
 } {3 dirty t 0 u 1 ok}
 
+foreach boundary {begin savepoint nested} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO t VALUES(1,'base');
+    SELECT dolt_commit('-Am','base');
+    CREATE TABLE u(id INTEGER PRIMARY KEY);
+    INSERT INTO u VALUES(10);
+  }
+  set prefix clean-txn-isolation-$boundary
+  switch $boundary {
+    begin {execsql {BEGIN}}
+    savepoint {execsql {SAVEPOINT s}}
+    nested {execsql {BEGIN; SAVEPOINT s}}
+  }
+  execsql {INSERT INTO t VALUES(2,'uncommitted')}
+  do_execsql_test $prefix.clean {SELECT dolt_clean()} {0}
+  do_test $prefix.open {sqlite3_get_autocommit db} 0
+  do_execsql_test $prefix.live {
+    SELECT count(*) FROM sqlite_master WHERE type='table' AND name='u';
+    SELECT id,v FROM t ORDER BY id;
+  } {0 1 base 2 uncommitted}
+  do_test $prefix.peer-isolated {
+    sqlite3 peer test.db
+    set res [peer eval {
+      SELECT count(*) FROM sqlite_master WHERE type='table' AND name='u';
+      SELECT id,v FROM t ORDER BY id;
+    }]
+    peer close
+    set res
+  } {1 1 base}
+  switch $boundary {
+    begin {execsql {ROLLBACK}}
+    savepoint {execsql {ROLLBACK TO s; RELEASE s}}
+    nested {execsql {ROLLBACK TO s; ROLLBACK}}
+  }
+  do_execsql_test $prefix.after-rollback {
+    SELECT count(*) FROM sqlite_master WHERE type='table' AND name='u';
+    SELECT id,v FROM t ORDER BY id;
+  } {1 1 base}
+  db close
+  sqlite3 db test.db
+  do_execsql_test $prefix.reopen-after-rollback {
+    SELECT count(*) FROM sqlite_master WHERE type='table' AND name='u';
+    SELECT id,v FROM t ORDER BY id;
+    PRAGMA integrity_check;
+  } {1 1 base ok}
+  switch $boundary {
+    begin {execsql {BEGIN; INSERT INTO t VALUES(2,'committed'); SELECT dolt_clean(); COMMIT}}
+    savepoint {execsql {SAVEPOINT s; INSERT INTO t VALUES(2,'committed'); SELECT dolt_clean(); RELEASE s}}
+    nested {execsql {BEGIN; SAVEPOINT s; INSERT INTO t VALUES(2,'committed'); SELECT dolt_clean(); RELEASE s; COMMIT}}
+  }
+  db close
+  sqlite3 db test.db
+  do_execsql_test $prefix.reopen-after-commit {
+    SELECT count(*) FROM sqlite_master WHERE type='table' AND name='u';
+    SELECT id,v FROM t ORDER BY id;
+    PRAGMA integrity_check;
+  } {0 1 base 2 committed ok}
+}
+
 finish_test

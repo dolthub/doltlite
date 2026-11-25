@@ -320,7 +320,8 @@ static void doltliteCleanFunc(
     rc = cleanDropTables(db, &untracked);
     db->nVcStatementRestore--;
     if( rc!=SQLITE_OK ) goto clean_rollback;
-    rc = doltlitePersistWorkingSet(db);
+    rc = db->autoCommit ? doltlitePersistWorkingSet(db)
+                        : doltliteSaveWorkingSet(db);
     if( rc!=SQLITE_OK ) goto clean_rollback;
   }
   sqlite3_result_int(context, 0);

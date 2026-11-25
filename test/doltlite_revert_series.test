@@ -299,4 +299,99 @@ do_execsql_test series-attached.other-kept {SELECT id FROM f.t ORDER BY id} {1 2
 do_execsql_test series-attached.rollback {ROLLBACK; SELECT id FROM t ORDER BY id} 1
 do_execsql_test series-attached.other-rollback {SELECT id FROM f.t ORDER BY id} {1 2 3}
 db eval {DETACH f}
+
+foreach kind {cherry_pick revert} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO t VALUES(1,'base');
+    INSERT INTO u VALUES(1,'u_base');
+    SELECT dolt_commit('-Am','base');
+  }
+  if {$kind eq "cherry_pick"} {
+    execsql {
+      SELECT dolt_checkout('-b','feat');
+      UPDATE t SET v='feat' WHERE id=1;
+      SELECT dolt_commit('-am','feat');
+      SELECT dolt_checkout('main');
+      UPDATE t SET v='main' WHERE id=1;
+      SELECT dolt_commit('-am','main');
+    }
+    set triggerSql {SELECT dolt_cherry_pick('feat')}
+    set abortSql {SELECT dolt_cherry_pick('--abort')}
+    set beforeSql {}
+    set afterSql {INSERT INTO u VALUES(2,'uncommitted')}
+    set liveAfterAbort 0
+    set expectedT {1 main}
+  } else {
+    execsql {
+      UPDATE t SET v='v2' WHERE id=1;
+      SELECT dolt_commit('-am','c2');
+      SELECT dolt_tag('c2');
+      UPDATE t SET v='v3' WHERE id=1;
+      SELECT dolt_commit('-am','c3');
+    }
+    set triggerSql {SELECT dolt_revert('c2')}
+    set abortSql {SELECT dolt_revert('--abort')}
+    set beforeSql {INSERT INTO u VALUES(2,'uncommitted')}
+    set afterSql {}
+    set liveAfterAbort 1
+    set expectedT {1 v3}
+  }
+  set prefix replay-abort-begin-$kind
+  execsql "BEGIN; $beforeSql"
+  do_test $prefix.conflict {
+    list [lindex [catchsql $triggerSql] 0] [db one {SELECT count(*) FROM dolt_conflicts}]
+  } {1 1}
+  do_test $prefix.open-after-conflict {sqlite3_get_autocommit db} 0
+  do_execsql_test $prefix.abort $abortSql {0}
+  do_test $prefix.open-after-abort {sqlite3_get_autocommit db} 0
+  do_execsql_test $prefix.live {
+    SELECT count(*) FROM dolt_conflicts;
+    SELECT count(*) FROM u WHERE id=2;
+    SELECT id,v FROM t ORDER BY id;
+  } [list 0 $liveAfterAbort {*}$expectedT]
+  if {$afterSql ne ""} {execsql $afterSql}
+  do_test $prefix.peer-isolated {
+    sqlite3 peer test.db
+    set res [peer eval {
+      SELECT count(*) FROM dolt_conflicts;
+      SELECT count(*) FROM u WHERE id=2;
+      SELECT id,v FROM t ORDER BY id;
+    }]
+    peer close
+    set res
+  } [list 0 0 {*}$expectedT]
+  execsql {ROLLBACK}
+  do_execsql_test $prefix.after-rollback {
+    SELECT count(*) FROM dolt_conflicts;
+    SELECT count(*) FROM u WHERE id=2;
+    SELECT id,v FROM t ORDER BY id;
+  } [list 0 0 {*}$expectedT]
+  db close
+  sqlite3 db test.db
+  do_execsql_test $prefix.reopen-after-rollback {
+    SELECT count(*) FROM dolt_conflicts;
+    SELECT count(*) FROM u WHERE id=2;
+    SELECT id,v FROM t ORDER BY id;
+    PRAGMA integrity_check;
+  } [list 0 0 {*}$expectedT ok]
+  execsql "BEGIN; $beforeSql"
+  do_test $prefix.commit-conflict {
+    list [lindex [catchsql $triggerSql] 0] [db one {SELECT count(*) FROM dolt_conflicts}]
+  } {1 1}
+  do_execsql_test $prefix.commit-abort $abortSql {0}
+  if {$afterSql ne ""} {execsql $afterSql}
+  execsql {COMMIT}
+  db close
+  sqlite3 db test.db
+  do_execsql_test $prefix.reopen-after-commit {
+    SELECT count(*) FROM dolt_conflicts;
+    SELECT count(*) FROM u WHERE id=2;
+    SELECT id,v FROM t ORDER BY id;
+    PRAGMA integrity_check;
+  } [list 0 1 {*}$expectedT ok]
+}
+
 finish_test

@@ -789,7 +789,10 @@ void doltliteReplayFinish(
           pOriginalHead, &originalHeadCatalog, pRestoreCatalog);
       if( rc==SQLITE_OK ) rc = doltliteSetSessionStaged(db, &originalStaged);
     }
-    if( rc==SQLITE_OK ) rc = doltlitePersistWorkingSet(db);
+    if( rc==SQLITE_OK ){
+      rc = isSeries ? doltlitePersistWorkingSet(db)
+                    : doltlitePersistOrSaveWorkingSet(db);
+    }
     chunkStoreUnlock(cs);
     graphLocked = 0;
     if( rc==SQLITE_OK ){
