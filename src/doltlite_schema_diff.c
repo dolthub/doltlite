@@ -800,7 +800,9 @@ static int sdLoadFilteredSchemas(
 
   pTo = doltliteFindTableByName(aToTables, nToTables, zFilter);
   if( pTo && pTo->iTable!=0 ){
-    pFrom = doltliteFindTableByNumber(aFromTables, nFromTables, pTo->iTable);
+    pFrom = sdRenamePartner(db, aFromTables, nFromTables,
+                            aToTables, nToTables, pTo, 0, &rc);
+    if( rc!=SQLITE_OK ) return rc;
     if( pFrom && pFrom->zName && strcmp(pFrom->zName, zFilter)!=0 ){
       rc = sdAppendSchemaEntryByName(db, cs, pCache, pFromCatHash,
                                      pFrom->zName, paFrom, pnFrom);
@@ -813,7 +815,9 @@ static int sdLoadFilteredSchemas(
 
   pFrom = doltliteFindTableByName(aFromTables, nFromTables, zFilter);
   if( pFrom && pFrom->iTable!=0 ){
-    pTo = doltliteFindTableByNumber(aToTables, nToTables, pFrom->iTable);
+    pTo = sdRenamePartner(db, aFromTables, nFromTables,
+                          aToTables, nToTables, pFrom, 1, &rc);
+    if( rc!=SQLITE_OK ) return rc;
     if( pTo && pTo->zName && strcmp(pTo->zName, zFilter)!=0 ){
       rc = sdAppendSchemaEntryByName(db, cs, pCache, pFromCatHash,
                                      pTo->zName, paFrom, pnFrom);
