@@ -1005,6 +1005,72 @@ run_test_error_match "commit_normal_table_missing_fk_still_rejected" \
   "CREATE TABLE bad_child(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES missing_parent(id)); SELECT dolt_commit('-A', '-m', 'bad fk');" \
   "foreign key on table \`bad_child\` requires the referenced table \`missing_parent\`" "$DB33"
 
-rm -f "$DB" "$DB_DUP" "$DB2" "$DB3" "$DB_BOTH" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB26" "$DB27" "$DB28" "$DB29" "$DB30" "$DB31" "$DB32" "$DB33"
+DB34=/tmp/test_dolt_commit_replay_clear_cp_$$.db; rm -f "$DB34"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1, 'base');
+SELECT dolt_commit('-A', '-m', 'init');
+SELECT dolt_checkout('-b', 'feat');
+UPDATE t SET v='feat' WHERE id=1;
+SELECT dolt_commit('-A', '-m', 'feat conflict');
+INSERT INTO t VALUES(2, 'two');
+SELECT dolt_commit('-A', '-m', 'feat clean');
+SELECT dolt_checkout('main');
+UPDATE t SET v='main' WHERE id=1;
+SELECT dolt_commit('-A', '-m', 'main change');
+BEGIN;
+SELECT dolt_cherry_pick('feat~1');
+DELETE FROM dolt_conflicts_t;
+UPDATE t SET v='resolved' WHERE id=1;
+SELECT dolt_add('t');
+COMMIT;
+SELECT dolt_commit('-m', 'resolved cherry-pick');" | $DOLTLITE "$DB34" > /dev/null 2>&1
+
+run_test_match "commit_clears_cherry_pick_replay_state_amend_reopen" \
+  "SELECT dolt_commit('--amend', '-m', 'reword cherry-pick');" \
+  "^[0-9a-f]{40}$" "$DB34"
+
+run_test_match "commit_clears_cherry_pick_replay_state_next_pick_reopen" \
+  "SELECT dolt_cherry_pick('feat');" \
+  "^[0-9a-f]{40}$" "$DB34"
+
+run_test "commit_clears_cherry_pick_replay_state_rows" \
+  "SELECT id || ':' || v FROM t ORDER BY id;" \
+  "1:resolved
+2:two" "$DB34"
+
+DB35=/tmp/test_dolt_commit_replay_clear_rev_$$.db; rm -f "$DB35"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1, 'base');
+SELECT dolt_commit('-A', '-m', 'init');
+SELECT dolt_checkout('-b', 'other');
+INSERT INTO t VALUES(2, 'other');
+SELECT dolt_commit('-A', '-m', 'other clean');
+SELECT dolt_checkout('main');
+UPDATE t SET v='v1' WHERE id=1;
+SELECT dolt_commit('-A', '-m', 'c1');
+UPDATE t SET v='v2' WHERE id=1;
+SELECT dolt_commit('-A', '-m', 'c2');
+BEGIN;
+SELECT dolt_revert('HEAD~1');
+DELETE FROM dolt_conflicts_t;
+UPDATE t SET v='reverted' WHERE id=1;
+SELECT dolt_add('t');
+COMMIT;
+SELECT dolt_commit('-m', 'resolved revert');" | $DOLTLITE "$DB35" > /dev/null 2>&1
+
+run_test_match "commit_clears_revert_replay_state_amend_reopen" \
+  "SELECT dolt_commit('--amend', '-m', 'reword revert');" \
+  "^[0-9a-f]{40}$" "$DB35"
+
+run_test_match "commit_clears_revert_replay_state_next_pick_reopen" \
+  "SELECT dolt_cherry_pick('other');" \
+  "^[0-9a-f]{40}$" "$DB35"
+
+run_test "commit_clears_revert_replay_state_rows" \
+  "SELECT id || ':' || v FROM t ORDER BY id;" \
+  "1:reverted
+2:other" "$DB35"
+
+rm -f "$DB" "$DB_DUP" "$DB2" "$DB3" "$DB_BOTH" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB26" "$DB27" "$DB28" "$DB29" "$DB30" "$DB31" "$DB32" "$DB33" "$DB34" "$DB35"
 
 dltest_finish

@@ -1453,6 +1453,12 @@ static void doltliteCommitFuncImpl(
       }
     }
   }
+  rc = doltliteSetSessionPendingReplayCommit(db, 0);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context,
+        doltliteRestoreTxnStateOnFailure(db, &mutationState, rc));
+    return;
+  }
 
   /* --force is the only way to reach here with CVs present. Leave them on
   ** the working set so they follow the branch, matching Dolt. */
@@ -1485,7 +1491,6 @@ static void doltliteCommitFuncImpl(
     return;
   }
   doltliteTxnStateClear(&mutationState);
-  (void)doltliteSetSessionPendingReplayCommit(db, 0);
 
   doltliteHashToHex(&commitHash, hexBuf);
 
