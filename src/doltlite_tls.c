@@ -84,8 +84,13 @@ static int connSend(void *pCtx, const unsigned char *pBuf, size_t nBuf) {
 #else
   n = (int)send(c->net.fd, pBuf, nBuf, flags);
 #endif
+  if (n < 0) {
+    if (doltliteSocketWouldBlock(c->net.fd)) return MBEDTLS_ERR_SSL_WANT_WRITE;
+    connIoResult(c, n);
+    return MBEDTLS_ERR_NET_SEND_FAILED;
+  }
   connIoResult(c, n);
-  return n < 0 ? MBEDTLS_ERR_NET_SEND_FAILED : n;
+  return n;
 }
 
 static int connRecv(void *pCtx, unsigned char *pBuf, size_t nBuf) {
@@ -93,6 +98,11 @@ static int connRecv(void *pCtx, unsigned char *pBuf, size_t nBuf) {
   int n;
   if (c->idleTimeoutMs && connApplyDeadline(c)) return MBEDTLS_ERR_SSL_TIMEOUT;
   n = mbedtls_net_recv(&c->net, pBuf, nBuf);
+#ifdef _WIN32
+  if (n == MBEDTLS_ERR_NET_RECV_FAILED && WSAGetLastError() == WSAEINTR) {
+    return MBEDTLS_ERR_SSL_WANT_READ;
+  }
+#endif
   if (n > 0) connIoResult(c, n);
   else if (n < 0 && n != MBEDTLS_ERR_SSL_WANT_READ) connIoResult(c, n);
   return n;

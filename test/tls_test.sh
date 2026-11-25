@@ -11,10 +11,12 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 FAKE=""
+FAKE_KEY=""
 if command -v openssl >/dev/null 2>&1; then
-  if openssl_test_cert /dev/null "$TMP/fake_ca.pem" "/CN=doltlite-fake-ca" \
+  if openssl_test_cert "$TMP/fake_ca.key" "$TMP/fake_ca.pem" "/CN=doltlite-fake-ca" \
        >/dev/null 2>&1; then
     FAKE="$TMP/fake_ca.pem"
+    FAKE_KEY="$TMP/fake_ca.key"
   fi
 fi
 
@@ -38,4 +40,4 @@ if [ ! -x "$BIN" ]; then
   exit 1
 fi
 
-"$BIN" ${FAKE:+"$FAKE"}
+"$BIN" ${FAKE:+"$FAKE" "$FAKE_KEY"}
