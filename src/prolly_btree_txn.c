@@ -2861,6 +2861,28 @@ static int rollbackSavepointBranches(
   return btreeReloadBranchWorkingStateInto(p, 1, &catHash);
 }
 
+static void detachSavepointRollbackCursors(
+  Btree *p,
+  BtShared *pBt,
+  int faultRc
+){
+  BtCursor *pC;
+  for(pC=pBt->pCursor; pC; pC=pC->pNext){
+    if( pC->pBtree!=p ) continue;
+    pC->pMutMap = 0;
+    CLEAR_CACHED_PAYLOAD(pC);
+    clearMergeCursorState(pC);
+    if( faultRc!=SQLITE_OK ){
+      if( pC->eState!=CURSOR_FAULT ){
+        pC->eState = CURSOR_FAULT;
+        pC->skipNext = faultRc;
+      }
+      pC->bCatalogGone = 1;
+      prollyCursorReleaseAll(&pC->pCur);
+    }
+  }
+}
+
 static int rollbackNamedSavepoint(Btree *p, BtShared *pBt, int iSavepoint){
   struct SavepointTableState *pState = &p->aSavepointTables[iSavepoint];
   BtCursor *pC;
@@ -2869,28 +2891,24 @@ static int rollbackNamedSavepoint(Btree *p, BtShared *pBt, int iSavepoint){
   int bSchemaChangedRollback = rollbackNeedsSchemaReset(p);
   int bStatement = pState->bStatement;
   if( p->db && p->db->mallocFailed ){
-    for(pC=pBt->pCursor; pC; pC=pC->pNext){
-      if( pC->pBtree!=p ) continue;
-      pC->eState = CURSOR_FAULT;
-      pC->skipNext = SQLITE_NOMEM;
-      pC->mmActive = 0;
-      pC->mmPhysActive = 0;
-      pC->deferredTreeSeek = 0;
-      pC->mmIdx = -1;
-      pC->mmPhysIdx = -1;
-      pC->pMutMap = 0;
-      prollyCursorReleaseAll(&pC->pCur);
-    }
+    detachSavepointRollbackCursors(p, pBt, SQLITE_NOMEM);
   }else{
     rc = saveAllCursors(p, pBt, 0, 0);
     if( rc!=SQLITE_OK ) return rc;
+    detachSavepointRollbackCursors(p, pBt, SQLITE_OK);
   }
 
   rc = rollbackMutMapsToSavepoint(p, iSavepoint + 1, iSavepoint);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    detachSavepointRollbackCursors(p, pBt, rc);
+    return rc;
+  }
   if( pState->bTablesCaptured ){
     rc = restoreTablesFromSavepoint(p, pState);
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ){
+      detachSavepointRollbackCursors(p, pBt, rc);
+      return rc;
+    }
   }
   restoreSavepointSessionState(p, pState);
   p->bSchemaChangedTxn = pState->bSchemaChangedTxn;
@@ -2898,7 +2916,10 @@ static int rollbackNamedSavepoint(Btree *p, BtShared *pBt, int iSavepoint){
   p->bTxnWrote = pState->bTxnWrote;
   if( pState->bRefs ){
     rc = rollbackSavepointBranches(p, pState, &bSchemaChangedRollback);
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ){
+      detachSavepointRollbackCursors(p, pBt, rc);
+      return rc;
+    }
   }
   freeSavepointTables(pState);
   for(j=iSavepoint+1; j<p->nSavepoint; j++){
@@ -2909,14 +2930,20 @@ static int rollbackNamedSavepoint(Btree *p, BtShared *pBt, int iSavepoint){
     struct TableEntry *pTE;
     if( pC->pBtree!=p ) continue;
     pTE = findTable(p, pC->pgnoRoot);
-    pC->pMutMap = (pC->eState!=CURSOR_FAULT && pTE)
-                    ? (ProllyMutMap*)pTE->pPending : 0;
-    pC->mmActive = 0;
-    pC->mmPhysActive = 0;
-    pC->mmExactMiss = 0;
-    pC->deferredTreeSeek = 0;
-    pC->mmIdx = -1;
-    pC->mmPhysIdx = -1;
+    CLEAR_CACHED_PAYLOAD(pC);
+    clearMergeCursorState(pC);
+    if( !pTE ){
+      pC->pMutMap = 0;
+      if( pC->eState!=CURSOR_FAULT ){
+        pC->eState = CURSOR_FAULT;
+        pC->skipNext = SQLITE_ABORT_ROLLBACK;
+      }
+      pC->bCatalogGone = 1;
+      prollyCursorReleaseAll(&pC->pCur);
+    }else{
+      pC->pMutMap = (pC->eState!=CURSOR_FAULT)
+                      ? (ProllyMutMap*)pTE->pPending : 0;
+    }
   }
   if( bSchemaChangedRollback ){
     rollbackResetSchema(p, !bStatement);
