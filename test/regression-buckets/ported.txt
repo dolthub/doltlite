@@ -318,3 +318,4 @@ doltlite_sqlite_file_engine
 doltlite_vc_review
 doltlite_staged_index_collision
 doltlite_pk_range_bounds
+doltlite_table_moveto_stale_root
