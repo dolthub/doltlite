@@ -1387,6 +1387,11 @@ int csTryLoadWalCheckpoint(
     ChunkIndexRun aRun[CS_INDEX_MAX_RUNS];
     int nRun = 0;
     int i;
+    int savedNChunks;
+    ProllyHash savedRefsHash;
+    WalState savedWal;
+    i64 savedFileSize;
+    int savedCorruptMidStream;
     if( memcmp(aHeader+CS_WAL_CHUNK_HASH_OFF,
                stamp.checkpointHash.data, PROLLY_HASH_SIZE)!=0 ){
       csCheckpointSkipRange(&stamp, pSkipStart, pSkipEnd);
@@ -1413,6 +1418,11 @@ int csTryLoadWalCheckpoint(
       return rc==SQLITE_NOMEM ? rc : SQLITE_OK;
     }
 
+    savedNChunks = cs->index.nChunks;
+    savedRefsHash = cs->refs.refsHash;
+    savedWal = cs->wal;
+    savedFileSize = cs->file.iFileSize;
+    savedCorruptMidStream = cs->corruptMidStream;
     csReleaseIndexBuf(cs->index.aIndex, cs->index.aIndexMmapBase,
                       cs->index.aIndexMmapSize);
     cs->index.aIndex = 0;
@@ -1439,15 +1449,13 @@ int csTryLoadWalCheckpoint(
     memcpy(cs->wal.aCheckpointRun, aRun, nRun*sizeof(aRun[0]));
     rc = csReplayWalFrom(cs, stamp.iCheckpointReplay, 0, 0, 0, iEnd);
     if( rc!=SQLITE_OK ){
+      csIndexCacheFree(cs);
       memset(&cs->index.lazy, 0, sizeof(cs->index.lazy));
-      cs->wal.iCheckpointOffset = 0;
-      cs->wal.nCheckpointIndex = 0;
-      cs->wal.iCheckpointReplay = 0;
-      cs->wal.iCheckpointDataEnd = 0;
-      cs->wal.nCheckpointEntries = 0;
-      memset(&cs->wal.checkpointHash, 0, sizeof(cs->wal.checkpointHash));
-      cs->wal.checkpointMagic = 0;
-      cs->wal.nCheckpointRun = 0;
+      cs->index.nChunks = savedNChunks;
+      cs->refs.refsHash = savedRefsHash;
+      cs->wal = savedWal;
+      cs->file.iFileSize = savedFileSize;
+      cs->corruptMidStream = savedCorruptMidStream;
       if( rc!=SQLITE_NOMEM ){
         csCheckpointSkipRange(&stamp, pSkipStart, pSkipEnd);
       }

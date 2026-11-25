@@ -23191,6 +23191,217 @@ static void run_chunk_store_put_int_overflow(void){
   removeDbFiles(zDb);
 }
 
+static void run_wal_checkpoint_fallback_restores_manifest(void){
+  char zDb[256];
+  char zDb2[256];
+  sqlite3 *db = 0;
+  ChunkStore *cs;
+  int baseNChunks = 0;
+  ProllyHash baseRefsHash;
+  ProllyHash ckptRefsHash;
+  i64 refsBodyOff = -1;
+  i64 leafStartOff = -1;
+  i64 leafEndOff = -1;
+  int i;
+  const char *zSavedChunks = getenv("DOLTLITE_WAL_CHECKPOINT_CHUNKS");
+  const char *zSavedThresh = getenv("DOLTLITE_WAL_CHECKPOINT_THRESHOLD");
+  char savedChunksBuf[64];
+  char savedThreshBuf[64];
+  int hadSavedChunks = 0;
+  int hadSavedThresh = 0;
+  FILE *fp;
+  unsigned char b = 0;
+  int rc;
+
+  printf("=== WAL Checkpoint Fallback Restores Manifest Test ===\n\n");
+
+  memset(&baseRefsHash, 0, sizeof(baseRefsHash));
+  memset(&ckptRefsHash, 0, sizeof(ckptRefsHash));
+  if( zSavedChunks ){
+    snprintf(savedChunksBuf, sizeof(savedChunksBuf), "%s", zSavedChunks);
+    hadSavedChunks = 1;
+  }
+  if( zSavedThresh ){
+    snprintf(savedThreshBuf, sizeof(savedThreshBuf), "%s", zSavedThresh);
+    hadSavedThresh = 1;
+  }
+
+  snprintf(zDb, sizeof(zDb), "%s/test_wal_ckpt_fallback_%d.db",
+           DOLTLITE_TEST_TMPDIR, (int)getpid());
+  removeDbFiles(zDb);
+
+  rc = open_db(zDb, &db);
+  check("wal_ckpt_fb: open initial", rc==SQLITE_OK && db!=0);
+  if( !db ) return;
+
+  rc = execSql(db,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+      "INSERT INTO t VALUES(1, 'base');"
+      "SELECT dolt_commit('-A', '-m', 'c1');"
+      "SELECT dolt_gc();");
+  check("wal_ckpt_fb: base commit and gc", rc==SQLITE_OK);
+
+  cs = doltliteGetChunkStore(db);
+  check("wal_ckpt_fb: have store", cs!=0);
+  if( cs ){
+    baseNChunks = cs->index.nChunks;
+    baseRefsHash = cs->refs.refsHash;
+  }
+  check("wal_ckpt_fb: base manifest populated",
+        baseNChunks>0 && !prollyHashIsEmpty(&baseRefsHash));
+
+#ifdef _WIN32
+  _putenv_s("DOLTLITE_WAL_CHECKPOINT_CHUNKS", "1");
+  _putenv_s("DOLTLITE_WAL_CHECKPOINT_THRESHOLD", "1");
+#else
+  setenv("DOLTLITE_WAL_CHECKPOINT_CHUNKS", "1", 1);
+  setenv("DOLTLITE_WAL_CHECKPOINT_THRESHOLD", "1", 1);
+#endif
+
+  rc = execSql(db, "INSERT INTO t VALUES(2, 'c2');");
+  check("wal_ckpt_fb: second write with checkpoint", rc==SQLITE_OK);
+
+  cs = doltliteGetChunkStore(db);
+  if( cs ){
+    ckptRefsHash = cs->refs.refsHash;
+    check("wal_ckpt_fb: tree checkpoint written",
+          CS_CHECKPOINT_IS_TREE(cs->wal.checkpointMagic));
+    check("wal_ckpt_fb: checkpoint advances refsHash",
+          prollyHashCompare(&ckptRefsHash, &baseRefsHash)!=0);
+    for(i=0; i<cs->staging.nRecent; i++){
+      if( prollyHashCompare(&cs->staging.aRecent[i].hash, &ckptRefsHash)==0 ){
+        refsBodyOff = cs->staging.aRecent[i].offset + 4;
+        break;
+      }
+    }
+    if( refsBodyOff<0 ){
+      for(i=0; i<cs->index.nIndex; i++){
+        if( prollyHashCompare(&cs->index.aIndex[i].hash, &ckptRefsHash)==0 ){
+          refsBodyOff = cs->index.aIndex[i].offset + 4;
+          break;
+        }
+      }
+    }
+  }
+  check("wal_ckpt_fb: located ckpt refs chunk", refsBodyOff>=0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  fp = fopen(zDb, "r+b");
+  check("wal_ckpt_fb: open raw db for corrupt", fp!=0);
+  if( fp && refsBodyOff>=0 ){
+    check("wal_ckpt_fb: seek refs body",
+          fseek(fp, (long)refsBodyOff, SEEK_SET)==0);
+    check("wal_ckpt_fb: read refs byte", fread(&b, 1, 1, fp)==1);
+    b ^= 0xff;
+    check("wal_ckpt_fb: seek refs body write",
+          fseek(fp, (long)refsBodyOff, SEEK_SET)==0);
+    check("wal_ckpt_fb: write corrupt refs byte", fwrite(&b, 1, 1, fp)==1);
+  }
+  if( fp ) fclose(fp);
+
+  rc = open_db(zDb, &db);
+  check("wal_ckpt_fb: reopen after refs corrupt", rc==SQLITE_OK && db!=0);
+  if( db ){
+    (void)execSqlSilent(db, "SELECT 1 FROM t");
+    cs = doltliteGetChunkStore(db);
+    check("wal_ckpt_fb: restored nChunks",
+          cs!=0 && cs->index.nChunks==baseNChunks);
+    check("wal_ckpt_fb: restored refsHash",
+          cs!=0 && prollyHashCompare(&cs->refs.refsHash, &baseRefsHash)==0);
+    check("wal_ckpt_fb: lazy index cleared",
+          cs!=0 && cs->index.lazy.active==0);
+    sqlite3_close(db);
+    db = 0;
+  }
+  removeDbFiles(zDb);
+
+  snprintf(zDb2, sizeof(zDb2), "%s/test_wal_ckpt_leaf_fb_%d.db",
+           DOLTLITE_TEST_TMPDIR, (int)getpid());
+  removeDbFiles(zDb2);
+
+  rc = open_db(zDb2, &db);
+  check("wal_ckpt_fb: open multi-level db", rc==SQLITE_OK && db!=0);
+  if( db ){
+    rc = execSql(db,
+        "CREATE TABLE t(id INTEGER PRIMARY KEY, v BLOB);"
+        "WITH RECURSIVE cnt(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM cnt WHERE x<400) "
+        "INSERT INTO t SELECT x, randomblob(4096) FROM cnt;");
+    check("wal_ckpt_fb: multi-level insert", rc==SQLITE_OK);
+    cs = doltliteGetChunkStore(db);
+    if( cs && CS_CHECKPOINT_IS_TREE(cs->wal.checkpointMagic)
+     && cs->wal.nCheckpointRun>0 ){
+      const ChunkIndexRun *pLast = &cs->wal.aCheckpointRun[cs->wal.nCheckpointRun-1];
+      if( pLast->iRootOffset > pLast->iDataEnd ){
+        leafStartOff = pLast->iDataEnd;
+        leafEndOff = pLast->iRootOffset;
+      }
+    }
+    check("wal_ckpt_fb: multi-level tree has leaf before root",
+          leafStartOff>=0 && leafEndOff>leafStartOff);
+    sqlite3_close(db);
+    db = 0;
+  }
+
+#ifdef _WIN32
+  _putenv_s("DOLTLITE_WAL_CHECKPOINT_CHUNKS",
+            hadSavedChunks ? savedChunksBuf : "");
+  _putenv_s("DOLTLITE_WAL_CHECKPOINT_THRESHOLD",
+            hadSavedThresh ? savedThreshBuf : "");
+#else
+  if( hadSavedChunks ){
+    setenv("DOLTLITE_WAL_CHECKPOINT_CHUNKS", savedChunksBuf, 1);
+  }else{
+    unsetenv("DOLTLITE_WAL_CHECKPOINT_CHUNKS");
+  }
+  if( hadSavedThresh ){
+    setenv("DOLTLITE_WAL_CHECKPOINT_THRESHOLD", savedThreshBuf, 1);
+  }else{
+    unsetenv("DOLTLITE_WAL_CHECKPOINT_THRESHOLD");
+  }
+#endif
+
+  fp = fopen(zDb2, "r+b");
+  check("wal_ckpt_fb: open raw db2 for leaf corrupt", fp!=0);
+  if( fp && leafStartOff>=0 ){
+    i64 off = leafStartOff;
+    int nCorrupted = 0;
+    while( off + 25 < leafEndOff ){
+      unsigned char hdr[25];
+      u32 len;
+      if( fseek(fp, (long)off, SEEK_SET)!=0 ) break;
+      if( fread(hdr, 1, 25, fp)!=25 ) break;
+      if( hdr[0]!=1 ) break;
+      len = (u32)hdr[21] | ((u32)hdr[22]<<8) | ((u32)hdr[23]<<16) | ((u32)hdr[24]<<24);
+      if( len==0 || off + 25 + (i64)len > leafEndOff ) break;
+      if( fseek(fp, (long)(off + 25), SEEK_SET)!=0 ) break;
+      if( fread(&b, 1, 1, fp)!=1 ) break;
+      b ^= 0xff;
+      if( fseek(fp, (long)(off + 25), SEEK_SET)!=0 ) break;
+      if( fwrite(&b, 1, 1, fp)!=1 ) break;
+      nCorrupted++;
+      off += 25 + (i64)len;
+    }
+    check("wal_ckpt_fb: corrupted checkpoint leaf pages", nCorrupted>=2);
+  }
+  if( fp ) fclose(fp);
+
+  rc = open_db(zDb2, &db);
+  check("wal_ckpt_fb: reopen db2 succeeds", rc==SQLITE_OK && db!=0);
+  if( db ){
+    check("wal_ckpt_fb: db2 row count intact",
+          strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "400")==0);
+    check("wal_ckpt_fb: db2 integrity check ok",
+          strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
+    cs = doltliteGetChunkStore(db);
+    check("wal_ckpt_fb: db2 lazy index cleared",
+          cs!=0 && cs->index.lazy.active==0);
+    sqlite3_close(db);
+  }
+  removeDbFiles(zDb2);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -23497,7 +23708,8 @@ static const RegressionCase aCases[] = {
   { "remote_refs_error_rollback", "Remote Refs Error Rollback Test", run_remote_refs_error_rollback },
   { "wal_tail_replay_rollback_nrecent", "WAL Tail Replay Rollback nRecent Test", run_wal_tail_replay_rollback_nrecent },
   { "cv_without_rowid_pk_delete", "Constraint Violation Delete On PK-Only WITHOUT ROWID Table", run_cv_without_rowid_pk_delete },
-  { "chunk_store_put_int_overflow", "Chunk Store Put Int Overflow Test", run_chunk_store_put_int_overflow }
+  { "chunk_store_put_int_overflow", "Chunk Store Put Int Overflow Test", run_chunk_store_put_int_overflow },
+  { "wal_checkpoint_fallback_restores_manifest", "WAL Checkpoint Fallback Restores Manifest Test", run_wal_checkpoint_fallback_restores_manifest }
 };
 
 static int run_case_by_name(const char *zName){
