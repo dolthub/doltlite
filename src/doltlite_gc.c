@@ -1110,8 +1110,13 @@ static int gcRewriteFile(
         chunkFileSetHandle(&cs->file, pNewFile);
         chunkFileSetSize(&cs->file, finalSize);
         walStateSetDataSize(&cs->wal, 0);
-      }else if( pNewFile ){
-        sqlite3OsCloseFree(pNewFile);
+      }else{
+        if( pNewFile ){
+          sqlite3OsCloseFree(pNewFile);
+        }
+        if( chunkFileGetHandle(&cs->file)==0 ){
+          cs->openPending = 1;
+        }
       }
     }
     if( !*pReplaced && pTmpFile ){

@@ -1319,6 +1319,13 @@ int chunkStoreGet(
     return chunkStoreVerifyChunk(hash, ppData, pnData, cs->pStats);
   }
 
+  if( !cs->isMemory && cs->file.pFile == 0 && cs->openPending
+   && !cs->snapshotPinned ){
+    int changed = 0;
+    rc = chunkStoreRefreshIfChanged(cs, &changed);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
   {
     ChunkIndexEntry *e;
     ChunkIndexEntry indexEntry;
@@ -1338,15 +1345,16 @@ int chunkStoreGet(
 
     if( cs->file.pFile == 0 ){
       ChunkMemSeg *pSeg;
-      const u8 *pChunk = csMemChunk(cs, e->offset, e->size, &pSeg);
+      const u8 *pChunk;
+      if( !cs->isMemory ) return SQLITE_CANTOPEN;
+      pChunk = csMemChunk(cs, e->offset, e->size, &pSeg);
       if( pChunk ){
         u8 *pCopy = (u8 *)sqlite3_malloc(e->size);
         if( pCopy == 0 ) return SQLITE_NOMEM;
         memcpy(pCopy, pChunk, e->size);
         *ppData = pCopy;
         *pnData = e->size;
-        if( cs->isMemory ) return SQLITE_OK;
-        return chunkStoreVerifyChunk(hash, ppData, pnData, cs->pStats);
+        return SQLITE_OK;
       }
       return SQLITE_CORRUPT;
     }

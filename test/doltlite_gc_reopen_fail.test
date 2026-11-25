@@ -1,0 +1,103 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set testprefix doltlite-gc-reopen-fail
+
+set armed 0
+set saw_tmp 0
+set reopen_fails 0
+set fail_mode ioerr
+
+proc gc_reopen_vfs {method filename args} {
+  if {!$::armed} {return SQLITE_OK}
+  set tail [file tail $filename]
+  if {$method eq "xOpen"} {
+    if {$tail eq "test.db-gc-tmp"} {
+      set ::saw_tmp 1
+      return SQLITE_OK
+    }
+    if {$::saw_tmp && $tail eq "test.db"} {
+      incr ::reopen_fails
+      if {$::fail_mode eq "cantopen"} {
+        gcreopenvfs cantopenerr 1 0
+        return SQLITE_OK
+      }
+      return SQLITE_IOERR
+    }
+  }
+  return SQLITE_OK
+}
+
+testvfs gcreopenvfs
+gcreopenvfs filter {xOpen}
+gcreopenvfs script gc_reopen_vfs
+
+proc setup_gc_db {} {
+  catch {db close}
+  forcedelete test.db
+  sqlite3 db test.db -vfs gcreopenvfs
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO t VALUES(1, 'one'), (2, 'two');
+    SELECT dolt_commit('-Am', 'c1');
+    UPDATE t SET v='two-v2' WHERE id=2;
+    SELECT dolt_commit('-am', 'c2');
+    UPDATE t SET v='two-v3' WHERE id=2;
+    SELECT dolt_reset('--hard', 'HEAD~1');
+    INSERT INTO t VALUES(3, 'three');
+    SELECT dolt_commit('-am', 'c3');
+  }
+}
+
+foreach {tc mode} {
+  1 cantopen
+  2 ioerr
+} {
+  setup_gc_db
+  set c1 [db one {SELECT dolt_hashof('HEAD~1')}]
+  set saw_tmp 0
+  set reopen_fails 0
+  set fail_mode $mode
+  set armed 1
+
+  do_test $tc.1 {
+    set rc [catch {db eval {SELECT dolt_gc()}} msg]
+    list $rc $::saw_tmp $::reopen_fails
+  } {1 1 3}
+
+  do_test $tc.2 {
+    set rc [catch {db eval {SELECT dolt_merge_base('HEAD', 'HEAD~1')}} msg]
+    set err [sqlite3_errcode db]
+    list $rc [expr {$err ne "SQLITE_CORRUPT"}] $err
+  } [list 1 1 [expr {$mode eq "cantopen" ? "SQLITE_CANTOPEN" : "SQLITE_IOERR"}]]
+
+  set armed 0
+
+  do_test $tc.3 {
+    db one {SELECT dolt_merge_base('HEAD', 'HEAD~1')}
+  } $c1
+
+  do_execsql_test $tc.4 {
+    SELECT id, v FROM t ORDER BY id;
+  } {1 one 2 two 3 three}
+
+  do_execsql_test $tc.5 {
+    INSERT INTO t VALUES(4, 'four');
+    SELECT id, v FROM t ORDER BY id;
+    PRAGMA integrity_check;
+  } {1 one 2 two 3 three 4 four ok}
+
+  do_test $tc.6 {
+    set res [db one {SELECT dolt_gc()}]
+    regexp {chunks removed.*chunks kept} $res
+  } {1}
+
+  do_execsql_test $tc.7 {
+    SELECT id, v FROM t ORDER BY id;
+    PRAGMA integrity_check;
+  } {1 one 2 two 3 three 4 four ok}
+}
+
+catch {db close}
+gcreopenvfs delete
+finish_test
