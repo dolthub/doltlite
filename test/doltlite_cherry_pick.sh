@@ -1496,8 +1496,8 @@ run_test "cp_revert_blocked_during_active_merge" \
    SELECT id || ':' || v FROM t ORDER BY id;" \
   "Error near line 2: Merge has 1 conflict(s). Resolve and then commit with dolt_commit.
 1
-Error near line 4: cannot cherry-pick while a merge is in progress
-Error near line 5: cannot revert while a merge is in progress
+Error near line 4: cannot cherry-pick with unresolved conflicts
+Error near line 5: cannot revert with unresolved conflicts
 Error near line 6: no cherry-pick in progress
 Error near line 7: no cherry-pick in progress
 Error near line 8: no revert in progress
