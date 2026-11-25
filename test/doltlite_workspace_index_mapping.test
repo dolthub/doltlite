@@ -89,4 +89,48 @@ foreach {layout schema suffix} {
   }
 }
 
+foreach {idxKind idxSql} {
+  plain  {CREATE INDEX idx_b ON t(b)}
+  unique {CREATE UNIQUE INDEX idx_b ON t(b)}
+} {
+  foreach mutation {insert delete} {
+    reset_db
+    execsql "
+      CREATE TABLE t(a INT, b TEXT, PRIMARY KEY(a, b)) WITHOUT ROWID;
+      $idxSql;
+      INSERT INTO t VALUES(1, 'alpha'), (2, 'beta');
+      SELECT dolt_commit('-Am', 'base');
+    "
+    if {$mutation eq "insert"} {
+      execsql {INSERT INTO t VALUES(3, 'gamma')}
+    } else {
+      execsql {DELETE FROM t WHERE a=1 AND b='alpha'}
+    }
+    set name workspace-index-keyonly-without-rowid-$idxKind-$mutation
+    do_execsql_test $name-discard {
+      DELETE FROM dolt_workspace_t;
+      SELECT count(*) FROM dolt_workspace_t;
+    } {0}
+    foreach connection {live reopen} {
+      if {$connection eq "reopen"} {
+        db close
+        sqlite3 db [file normalize test.db]
+      }
+      do_execsql_test $name-$connection-rows {
+        SELECT a, b FROM t NOT INDEXED ORDER BY a, b;
+        SELECT a, b FROM t INDEXED BY idx_b ORDER BY b, a;
+        SELECT a, b FROM t INDEXED BY idx_b WHERE b='gamma';
+        PRAGMA integrity_check;
+      } {1 alpha 2 beta 1 alpha 2 beta ok}
+    }
+    if {$idxKind eq "unique" && $mutation eq "insert"} {
+      do_execsql_test $name-reuse-unique {
+        INSERT INTO t VALUES(4, 'gamma');
+        SELECT a, b FROM t INDEXED BY idx_b WHERE b='gamma';
+        PRAGMA integrity_check;
+      } {4 gamma ok}
+    }
+  }
+}
+
 finish_test
