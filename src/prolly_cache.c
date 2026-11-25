@@ -600,6 +600,7 @@ static int cacheKeepPrefixes(ProllyCache *cache, ProllyCacheEntry *pEntry){
     }
     memset(pData+nCompact, 0, PROLLY_NODE_BUFFER_SLOP);
   }
+  cacheWideForget(cache, pEntry);
   pNode->aKeyOff = (const u32*)(pData + ((const u8*)pNode->aKeyOff-pNode->pData));
   pNode->aValOff = (const u32*)(pData + ((const u8*)pNode->aValOff-pNode->pData));
   pNode->pKeyData = pData + (pNode->pKeyData-pNode->pData);
@@ -652,7 +653,7 @@ i64 prollyCacheCompactBytes(const ProllyNode *pNode){
 
 void prollyCacheReleaseScan(ProllyCache *cache, ProllyCacheEntry *entry){
   if( (entry->bScanOnly & PROLLY_CACHE_SCAN_ONLY) && !entry->bTransient
-   && entry->nRef==1
+   && !entry->bWideFull && entry->nRef==1
    && entry->node.level==0 && !entry->node.nValuePrefix ){
     lruRemove(entry);
     entry->pLruNext = &cache->lruTail;
