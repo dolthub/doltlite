@@ -22652,6 +22652,79 @@ static void run_nonlocal_attach_oom_no_leak(void){
   removeDbFiles(dbpath);
 }
 
+static void run_clean_close_marker_respects_shared_lock(void){
+  ChunkStore csA, csR, csCheck, csB, csVerify;
+  ProllyHash h1, chunkHash;
+  static const u8 payload[] = "clean-close-shared-lock-payload";
+  sqlite3_vfs *pVfs = sqlite3_vfs_find(0);
+  sqlite3_int64 sizeBeforeClose = 0;
+  sqlite3_int64 sizeWhileLocked = 0;
+  sqlite3_int64 sizeAfterCleanClose = 0;
+  char dbpath[256];
+
+  printf("=== Clean Close Marker Respects Shared Lock Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_clean_close_shared_lock");
+  removeDbFiles(dbpath);
+  memset(&csA, 0, sizeof(csA));
+  memset(&csR, 0, sizeof(csR));
+  memset(&csCheck, 0, sizeof(csCheck));
+  memset(&csB, 0, sizeof(csB));
+  memset(&csVerify, 0, sizeof(csVerify));
+  prollyHashCompute("branch-tip", 10, &h1);
+
+  check("ccm_open_writer",
+        chunkStoreOpen(&csA, pVfs, dbpath,
+                       SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("ccm_add_branch", chunkStoreAddBranch(&csA, "main", &h1)==SQLITE_OK);
+  check("ccm_put_chunk",
+        chunkStorePut(&csA, payload, (int)sizeof(payload), &chunkHash)==SQLITE_OK);
+  check("ccm_serialize_refs", chunkStoreSerializeRefs(&csA)==SQLITE_OK);
+  check("ccm_commit", chunkStoreCommit(&csA)==SQLITE_OK);
+  check("ccm_not_clean_after_commit", csA.wal.cleanCloseMarker==0);
+  check("ccm_size_before_close",
+        csA.file.pFile->pMethods->xFileSize(csA.file.pFile, &sizeBeforeClose)==SQLITE_OK
+        && sizeBeforeClose>0);
+
+  check("ccm_open_reader",
+        chunkStoreOpen(&csR, pVfs, dbpath,
+                       SQLITE_OPEN_READONLY|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("ccm_reader_shared_lock",
+        csR.file.pFile->pMethods->xLock(csR.file.pFile, SQLITE_LOCK_SHARED)==SQLITE_OK);
+
+  chunkStoreClose(&csA);
+
+  check("ccm_size_unchanged_under_shared",
+        csR.file.pFile->pMethods->xFileSize(csR.file.pFile, &sizeWhileLocked)==SQLITE_OK
+        && sizeWhileLocked==sizeBeforeClose);
+
+  check("ccm_concurrent_reader_still_opens",
+        chunkStoreOpen(&csCheck, pVfs, dbpath,
+                       SQLITE_OPEN_READONLY|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("ccm_marker_skipped_under_shared", csCheck.wal.cleanCloseMarker==0);
+  chunkStoreClose(&csCheck);
+
+  check("ccm_reader_unlock",
+        csR.file.pFile->pMethods->xUnlock(csR.file.pFile, SQLITE_LOCK_NONE)==SQLITE_OK);
+  chunkStoreClose(&csR);
+
+  check("ccm_reopen_writer_uncontended",
+        chunkStoreOpen(&csB, pVfs, dbpath,
+                       SQLITE_OPEN_READWRITE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("ccm_reopen_still_unmarked", csB.wal.cleanCloseMarker==0);
+  chunkStoreClose(&csB);
+
+  check("ccm_open_verify",
+        chunkStoreOpen(&csVerify, pVfs, dbpath,
+                       SQLITE_OPEN_READONLY|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("ccm_marker_written_uncontended", csVerify.wal.cleanCloseMarker==1);
+  check("ccm_size_grew_uncontended",
+        csVerify.file.pFile->pMethods->xFileSize(csVerify.file.pFile, &sizeAfterCleanClose)==SQLITE_OK
+        && sizeAfterCleanClose>sizeBeforeClose);
+  chunkStoreClose(&csVerify);
+
+  removeDbFiles(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -22952,7 +23025,8 @@ static const RegressionCase aCases[] = {
   { "fast_intleaf_skips_degenerate_schema_rows", "Fast IntLeaf Skips Degenerate Schema Rows Test", run_fast_intleaf_skips_degenerate_schema_rows },
   { "cursor_prev_mutmap_no_double_dec", "Cursor Previous MutMap No Double-Decrement Test", run_cursor_prev_mutmap_no_double_dec },
   { "dolt_schemas_step_err_and_oom", "dolt_schemas Step Error Propagation And OOM Leak Test", run_dolt_schemas_step_err_and_oom },
-  { "nonlocal_attach_oom_no_leak", "Nonlocal Attach OOM No Leak Test", run_nonlocal_attach_oom_no_leak }
+  { "nonlocal_attach_oom_no_leak", "Nonlocal Attach OOM No Leak Test", run_nonlocal_attach_oom_no_leak },
+  { "clean_close_marker_respects_shared_lock", "Clean Close Marker Respects Shared Lock Test", run_clean_close_marker_respects_shared_lock }
 };
 
 static int run_case_by_name(const char *zName){
