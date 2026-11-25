@@ -1497,6 +1497,33 @@ static int conflictsFkViolationsAdded(
   return 0;
 }
 
+static char *conflictsUniqueConstraintError(
+  sqlite3 *db,
+  const char *zTable,
+  Index *pIdx
+){
+  sqlite3_str *pMsg = sqlite3_str_new(db);
+  int i;
+  sqlite3_str_appendall(pMsg, "UNIQUE constraint failed: ");
+  if( !pIdx ){
+    sqlite3_str_appendf(pMsg, "%s", zTable);
+  }else if( pIdx->aColExpr ){
+    sqlite3_str_appendf(pMsg, "index '%q'", pIdx->zName);
+  }else{
+    for(i=0; i<pIdx->nKeyCol; i++){
+      int col = pIdx->aiColumn[i];
+      if( col>=0 && col<pIdx->pTable->nCol ){
+        sqlite3_str_appendf(pMsg, "%s%s.%s", i ? ", " : "",
+            pIdx->pTable->zName, pIdx->pTable->aCol[col].zCnName);
+      }else{
+        sqlite3_str_appendf(pMsg, "%sindex '%q'", i ? ", " : "",
+            pIdx->zName);
+      }
+    }
+  }
+  return sqlite3_str_finish(pMsg);
+}
+
 static void conflictsResolveParsedFunc(
   sqlite3_context *ctx,
   int useOurs,
@@ -1668,13 +1695,21 @@ static void conflictsResolveParsedFunc(
             aRow[j].nVal = cr->nTheirVal;
           }
           if( rc==SQLITE_OK ){
+            Index *pUniqueIdx = 0;
             rc = doltliteApplyRawRowMutations(db, azTables[i],
-                                              aRow, table.nConflicts, 0, 0);
+                                              aRow, table.nConflicts,
+                                              1, &pUniqueIdx);
+            if( rc==SQLITE_CONSTRAINT_UNIQUE ){
+              zOwnedError = conflictsUniqueConstraintError(db, azTables[i],
+                                                           pUniqueIdx);
+              if( !zOwnedError ) rc = SQLITE_NOMEM;
+              zError = zOwnedError;
+            }
           }
           sqlite3_free(aRow);
           if( rc!=SQLITE_OK ){
             freeConflictTable(&table);
-            zError = "failed to apply theirs value";
+            if( !zError ) zError = "failed to apply theirs value";
             goto resolve_error;
           }
         }

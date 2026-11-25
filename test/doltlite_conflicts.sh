@@ -422,6 +422,92 @@ SELECT dolt_conflicts_resolve('--theirs','parent');
 ROLLBACK;" \
   "resolving conflicts for table parent created foreign key violations" "$DBFK2"
 
+DBU1=/tmp/test_conf_uniq1_$$.db; rm -f "$DBU1"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, u TEXT UNIQUE);
+CREATE TABLE other(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'a');
+INSERT INTO other VALUES (1, 'base');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('b');
+UPDATE t SET u = 'c' WHERE id = 1;
+INSERT INTO t VALUES (2, 'b');
+UPDATE other SET v = 'main' WHERE id = 1;
+SELECT dolt_commit('-am', 'main');
+SELECT dolt_checkout('b');
+UPDATE t SET u = 'b' WHERE id = 1;
+UPDATE other SET v = 'theirs' WHERE id = 1;
+SELECT dolt_commit('-am', 'b');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DBU1" > /dev/null 2>&1
+
+run_test_error_match "unique_theirs_collision_rejected" \
+  "BEGIN; SELECT dolt_merge('b');
+SELECT dolt_conflicts_resolve('--theirs', 't');
+ROLLBACK;" \
+  "UNIQUE constraint failed: t\\.u" "$DBU1"
+
+run_test_error_output_match "unique_theirs_collision_rolls_back_state" \
+  "BEGIN; SELECT dolt_merge('b');
+SELECT dolt_conflicts_resolve('--theirs', 't');
+SELECT 'UQ1|' || (SELECT group_concat(id || ':' || u, ',') FROM (SELECT id, u FROM t ORDER BY id)) || '|' || (SELECT num_conflicts FROM dolt_conflicts WHERE \"table\"='t') || '|' || (SELECT integrity_check FROM pragma_integrity_check);
+ROLLBACK;" \
+  "^UQ1\\|1:c,2:b\\|1\\|ok$" "$DBU1" 'Merge has [1-9][0-9]* conflict\(s\)|UNIQUE constraint failed: t\.u'
+
+run_test_error_output_match "unique_theirs_multi_table_rolls_back_all" \
+  "BEGIN; SELECT dolt_merge('b');
+SELECT dolt_conflicts_resolve('--theirs', 'other', 't');
+SELECT 'UQ2|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT v FROM other WHERE id=1) || '|' || (SELECT u FROM t WHERE id=1);
+ROLLBACK;" \
+  "^UQ2\\|2\\|main\\|c$" "$DBU1" 'Merge has [1-9][0-9]* conflict\(s\)|UNIQUE constraint failed: t\.u'
+
+run_test_error_output_match "unique_ours_after_rejected_theirs_succeeds" \
+  "BEGIN; SELECT dolt_merge('b');
+SELECT dolt_conflicts_resolve('--theirs', 't');
+SELECT dolt_conflicts_resolve('--ours', 't');
+SELECT 'UQ3|' || (SELECT group_concat(id || ':' || u, ',') FROM (SELECT id, u FROM t ORDER BY id)) || '|' || (SELECT count(*) FROM dolt_conflicts WHERE \"table\"='t') || '|' || (SELECT integrity_check FROM pragma_integrity_check);
+ROLLBACK;" \
+  "^UQ3\\|1:c,2:b\\|0\\|ok$" "$DBU1" 'Merge has [1-9][0-9]* conflict\(s\)|UNIQUE constraint failed: t\.u'
+
+DBU2=/tmp/test_conf_uniq2_$$.db; rm -f "$DBU2"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, u TEXT UNIQUE);
+INSERT INTO t VALUES (1, 'a'), (2, 'b');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('b');
+UPDATE t SET u = 'c' WHERE id = 1;
+UPDATE t SET u = 'd' WHERE id = 2;
+SELECT dolt_commit('-am', 'main');
+SELECT dolt_checkout('b');
+UPDATE t SET u = 'd' WHERE id = 1;
+UPDATE t SET u = 'c' WHERE id = 2;
+SELECT dolt_commit('-am', 'b');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DBU2" > /dev/null 2>&1
+
+run_test_error_output_match "unique_theirs_swap_succeeds" \
+  "BEGIN; SELECT dolt_merge('b');
+SELECT dolt_conflicts_resolve('--theirs', 't');
+SELECT 'UQ4|' || (SELECT group_concat(id || ':' || u, ',') FROM (SELECT id, u FROM t ORDER BY id)) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT integrity_check FROM pragma_integrity_check);
+ROLLBACK;" \
+  "^UQ4\\|1:d,2:c\\|0\\|ok$" "$DBU2" 'Merge has [1-9][0-9]* conflict\(s\)'
+
+DBU3=/tmp/test_conf_uniq3_$$.db; rm -f "$DBU3"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, u TEXT UNIQUE);
+INSERT INTO t VALUES (1, 'a'), (2, NULL);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('b');
+UPDATE t SET u = 'c' WHERE id = 1;
+SELECT dolt_commit('-am', 'main');
+SELECT dolt_checkout('b');
+UPDATE t SET u = NULL WHERE id = 1;
+SELECT dolt_commit('-am', 'b');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DBU3" > /dev/null 2>&1
+
+run_test_error_output_match "unique_theirs_nulls_allowed" \
+  "BEGIN; SELECT dolt_merge('b');
+SELECT dolt_conflicts_resolve('--theirs', 't');
+SELECT 'UQ5|' || (SELECT count(*) FROM t WHERE u IS NULL) || '|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT integrity_check FROM pragma_integrity_check);
+ROLLBACK;" \
+  "^UQ5\\|2\\|0\\|ok$" "$DBU3" 'Merge has [1-9][0-9]* conflict\(s\)'
+
+rm -f "$DBU1" "$DBU2" "$DBU3"
 rm -f "$DBFK1" "$DBFK2"
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14"
 dltest_finish
