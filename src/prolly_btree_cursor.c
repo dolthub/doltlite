@@ -599,9 +599,12 @@ static int mergeFirst(BtCursor *pCur, int *pRes){
 }
 
 int mergeLast(BtCursor *pCur, int *pRes){
+  ProllyMutMapIter it;
   int rc = ensureCursorMutMapOrder(pCur);
   if( rc!=SQLITE_OK ) return rc;
-  pCur->mmIdx = pCur->pMutMap->nEntries - 1;
+  rc = prollyMutMapIterLast(&it, pCur->pMutMap);
+  if( rc!=SQLITE_OK ) return rc;
+  pCur->mmIdx = it.idx;
   pCur->mergeSrc = MERGE_SRC_TREE;
   return mergeScan(pCur, -1, pRes);
 }
