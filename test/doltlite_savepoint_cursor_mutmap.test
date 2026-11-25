@@ -167,7 +167,34 @@ do_test doltlite_savepoint_cursor_mutmap-1.4 {
   set wr_desc
 } {2:d:insD 2:c:origC 2:b:updB 4:d:insD 4:c:origC 4:b:updB}
 
-do_execsql_test doltlite_savepoint_cursor_mutmap-1.5 {
+do_test doltlite_savepoint_cursor_mutmap-1.5 {
+  execsql {
+    BEGIN;
+    SAVEPOINT sp_tbl;
+    CREATE TABLE t_ephem(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO t_ephem VALUES(1, 'e1'), (2, 'e2'), (3, 'e3');
+  }
+
+  set stmt [sqlite3_prepare_v2 db {
+    SELECT driver.k, t_ephem.v
+      FROM driver LEFT JOIN t_ephem ON t_ephem.id = driver.k
+     ORDER BY driver.k
+  } -1]
+  set rc1 [sqlite3_step $stmt]
+  set row1 [list [sqlite3_column_int $stmt 0] [sqlite3_column_text $stmt 1]]
+
+  execsql {
+    ROLLBACK TO sp_tbl;
+    RELEASE sp_tbl;
+  }
+
+  set rc2 [sqlite3_step $stmt]
+  sqlite3_finalize $stmt
+  execsql { ROLLBACK; }
+  list $rc1 $row1 $rc2
+} {SQLITE_ROW {1 e1} SQLITE_ABORT}
+
+do_execsql_test doltlite_savepoint_cursor_mutmap-1.6 {
   PRAGMA integrity_check;
 } {ok}
 
