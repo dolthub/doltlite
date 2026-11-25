@@ -9179,9 +9179,9 @@ static int vec1QueryToSql(Vec1Csr *pCsr){
     const char *zOp = "";
     if( p->vop==VEC1_OP_IN ){
       int jj;
-      sqlite3_str_appendf(pWhere, "%sc%d IN(?%d", zAnd, p->iMeta, iNextVar++);
-      for(jj=2; jj<=p->iVal; jj++){
-        sqlite3_str_appendf(pWhere, ", ?%d", iNextVar++);
+      sqlite3_str_appendf(pWhere, "%sc%d IN(", zAnd, p->iMeta);
+      for(jj=0; jj<p->iVal; jj++){
+        sqlite3_str_appendf(pWhere, "%s?%d", jj ? ", " : "", iNextVar++);
       }
       ii += (int)p->iVal;
       sqlite3_str_appendf(pWhere, ")");
