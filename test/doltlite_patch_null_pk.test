@@ -1,0 +1,194 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# Non-INTEGER PRIMARY KEY on a rowid table allows multiple NULL PK rows.
+# Replaying dolt_patch must constrain the rowid alias so only the targeted
+# NULL-PK row is updated/deleted and sibling NULL-PK rows stay intact.
+
+foreach {name pktype} {
+  text_pk TEXT
+  int_pk  INT
+} {
+  reset_db
+  db eval "
+    CREATE TABLE t(rowid $pktype PRIMARY KEY, v TEXT);
+    INSERT INTO t(_rowid_,rowid,v)
+      VALUES(10,NULL,'a'),(20,NULL,'b'),(30,NULL,'keep'),(40,'k1','c');
+    SELECT dolt_commit('-Am','base');
+    UPDATE t SET v='a2' WHERE _rowid_=10;
+    DELETE FROM t WHERE _rowid_=20;
+    INSERT INTO t(_rowid_,rowid,v) VALUES(50,NULL,'new');
+    UPDATE t SET v='c2' WHERE rowid='k1';
+  "
+  set query {SELECT _rowid_,coalesce(rowid,'<NULL>'),v FROM t ORDER BY _rowid_}
+  set base {10 <NULL> a 20 <NULL> b 30 <NULL> keep 40 k1 c}
+  set target {10 <NULL> a2 30 <NULL> keep 40 k1 c2 50 <NULL> new}
+  set forward [db eval {
+    SELECT statement FROM dolt_patch('HEAD','WORKING')
+     ORDER BY statement_order
+  }]
+  set reverse [db eval {
+    SELECT statement FROM dolt_patch('WORKING','HEAD')
+     ORDER BY statement_order
+  }]
+
+  do_test doltlite_patch_null_pk-$name-sql {
+    set forward
+  } [list \
+    {UPDATE "t" SET "v"='a2' WHERE "rowid" IS NULL AND "_rowid_"=10;} \
+    {DELETE FROM "t" WHERE "rowid" IS NULL AND "_rowid_"=20;} \
+    {UPDATE "t" SET "v"='c2' WHERE "rowid"='k1';} \
+    {INSERT INTO "t"("_rowid_","rowid","v") VALUES (50,NULL,'new');} \
+  ]
+
+  db eval {SELECT dolt_reset('--hard')}
+  foreach direction {forward reverse} expected [list $target $base] {
+    do_test doltlite_patch_null_pk-$name-$direction {
+      foreach statement [set $direction] { db eval $statement }
+      db close
+      sqlite3 db test.db
+      db eval $query
+    } $expected
+  }
+}
+
+# Fallback to oid when both rowid and _rowid_ are shadowed.
+reset_db
+db eval {
+  CREATE TABLE t(rowid TEXT PRIMARY KEY, _rowid_ TEXT, v TEXT);
+  INSERT INTO t(oid,rowid,_rowid_,v)
+    VALUES(10,NULL,'x1','a'),(20,NULL,'x2','b'),(30,NULL,'x3','keep');
+  SELECT dolt_commit('-Am','base');
+  UPDATE t SET v='a2' WHERE oid=10;
+  DELETE FROM t WHERE oid=20;
+  INSERT INTO t(oid,rowid,_rowid_,v) VALUES(40,NULL,'x4','new');
+}
+set query {SELECT oid,coalesce(rowid,'<NULL>'),_rowid_,v FROM t ORDER BY oid}
+set base {10 <NULL> x1 a 20 <NULL> x2 b 30 <NULL> x3 keep}
+set target {10 <NULL> x1 a2 30 <NULL> x3 keep 40 <NULL> x4 new}
+set forward [db eval {
+  SELECT statement FROM dolt_patch('HEAD','WORKING') ORDER BY statement_order
+}]
+set reverse [db eval {
+  SELECT statement FROM dolt_patch('WORKING','HEAD') ORDER BY statement_order
+}]
+do_test doltlite_patch_null_pk-oid-fallback-sql {
+  set forward
+} [list \
+  {UPDATE "t" SET "v"='a2' WHERE "rowid" IS NULL AND "oid"=10;} \
+  {DELETE FROM "t" WHERE "rowid" IS NULL AND "oid"=20;} \
+  {INSERT INTO "t"("oid","rowid","_rowid_","v") VALUES (40,NULL,'x4','new');} \
+]
+db eval {SELECT dolt_reset('--hard')}
+foreach direction {forward reverse} expected [list $target $base] {
+  do_test doltlite_patch_null_pk-oid-fallback-$direction {
+    foreach statement [set $direction] { db eval $statement }
+    db close
+    sqlite3 db test.db
+    db eval $query
+  } $expected
+}
+
+# Updating PK between NULL and non-NULL while sibling NULL-PK rows exist.
+reset_db
+db eval {
+  CREATE TABLE t(rowid TEXT PRIMARY KEY, v TEXT);
+  INSERT INTO t(_rowid_,rowid,v)
+    VALUES(10,NULL,'a'),(20,NULL,'keep'),(30,'k1','c');
+  SELECT dolt_commit('-Am','base');
+  UPDATE t SET rowid='k0' WHERE _rowid_=10;
+  UPDATE t SET rowid=NULL WHERE rowid='k1';
+}
+set query {SELECT _rowid_,coalesce(rowid,'<NULL>'),v FROM t ORDER BY _rowid_}
+set base {10 <NULL> a 20 <NULL> keep 30 k1 c}
+set target {10 k0 a 20 <NULL> keep 30 <NULL> c}
+set forward [db eval {
+  SELECT statement FROM dolt_patch('HEAD','WORKING') ORDER BY statement_order
+}]
+set reverse [db eval {
+  SELECT statement FROM dolt_patch('WORKING','HEAD') ORDER BY statement_order
+}]
+db eval {SELECT dolt_reset('--hard')}
+foreach direction {forward reverse} expected [list $target $base] {
+  do_test doltlite_patch_null_pk-pk-transition-$direction {
+    foreach statement [set $direction] { db eval $statement }
+    db close
+    sqlite3 db test.db
+    db eval $query
+  } $expected
+}
+
+# ADD COLUMN with default + explicit NULL on one NULL-PK row.
+reset_db
+db eval {
+  CREATE TABLE t(rowid TEXT PRIMARY KEY, v TEXT);
+  INSERT INTO t(_rowid_,rowid,v) VALUES(10,NULL,'a'),(20,NULL,'b');
+  SELECT dolt_commit('-Am','base');
+  ALTER TABLE t ADD COLUMN c INT DEFAULT 7;
+  UPDATE t SET c=NULL WHERE _rowid_=10;
+}
+set forward [db eval {
+  SELECT statement FROM dolt_patch('HEAD','WORKING') ORDER BY statement_order
+}]
+db eval {SELECT dolt_reset('--hard')}
+do_test doltlite_patch_null_pk-add-column-default-null {
+  foreach statement $forward { db eval $statement }
+  db close
+  sqlite3 db test.db
+  db eval {SELECT _rowid_,coalesce(rowid,'<NULL>'),v,coalesce(c,'<NULL>') FROM t ORDER BY _rowid_}
+} {10 <NULL> a <NULL> 20 <NULL> b 7}
+
+# When every rowid alias is shadowed, NULL-PK changes error, non-NULL succeed.
+foreach {operation sql} {
+  insert {INSERT INTO t VALUES(NULL,'x2','o2','b')}
+  update {UPDATE t SET v='a2' WHERE rowid IS NULL}
+  delete {DELETE FROM t WHERE rowid IS NULL}
+} {
+  reset_db
+  db eval {
+    CREATE TABLE t(rowid TEXT PRIMARY KEY, _rowid_ TEXT, oid TEXT, v TEXT);
+    INSERT INTO t VALUES(NULL,'x1','o1','a'),('k1','x0','o0','k');
+    SELECT dolt_commit('-Am','base');
+  }
+  db eval $sql
+  do_catchsql_test doltlite_patch_null_pk-all-shadowed-$operation {
+    SELECT statement FROM dolt_patch('HEAD','WORKING');
+  } {1 {dolt_patch: table 't' shadows every rowid alias}}
+}
+
+reset_db
+db eval {
+  CREATE TABLE t(rowid TEXT PRIMARY KEY, _rowid_ TEXT, oid TEXT, v TEXT);
+  INSERT INTO t VALUES(NULL,'x1','o1','a'),('k1','x0','o0','k');
+  SELECT dolt_commit('-Am','base');
+  UPDATE t SET v='k2' WHERE rowid='k1';
+}
+do_test doltlite_patch_null_pk-all-shadowed-nonnull-ok {
+  db eval {SELECT statement FROM dolt_patch('HEAD','WORKING')}
+} {{UPDATE "t" SET "v"='k2' WHERE "rowid"='k1';}}
+
+# Non-NULL PK tables (single TEXT PK and composite PK) emit unchanged WHERE.
+reset_db
+db eval {
+  CREATE TABLE s(pk TEXT PRIMARY KEY, v TEXT);
+  CREATE TABLE c(a TEXT, b TEXT, v TEXT, PRIMARY KEY(a, b));
+  INSERT INTO s VALUES('k1','v1'),('k2','v2');
+  INSERT INTO c VALUES('a1','b1','v1'),('a2','b2','v2');
+  SELECT dolt_commit('-Am','base');
+  UPDATE s SET v='v1b' WHERE pk='k1';
+  DELETE FROM s WHERE pk='k2';
+  UPDATE c SET v='v1b' WHERE a='a1' AND b='b1';
+  DELETE FROM c WHERE a='a2' AND b='b2';
+}
+do_test doltlite_patch_null_pk-nonnull-unchanged {
+  db eval {
+    SELECT statement FROM dolt_patch('HEAD','WORKING') ORDER BY statement_order
+  }
+} [list \
+  {UPDATE "c" SET "v"='v1b' WHERE "a"='a1' AND "b"='b1';} \
+  {DELETE FROM "c" WHERE "a"='a2' AND "b"='b2';} \
+  {UPDATE "s" SET "v"='v1b' WHERE "pk"='k1';} \
+  {DELETE FROM "s" WHERE "pk"='k2';} \
+]
+
+finish_test
