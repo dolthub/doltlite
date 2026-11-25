@@ -2,7 +2,7 @@
 
 #include "prolly_btree_int.h"
 
-static int keyInfoHasUnsupportedCollation(
+int keyInfoHasUnsupportedCollation(
   const KeyInfo *pKeyInfo,
   int nField
 ){
@@ -23,7 +23,7 @@ static int keyInfoHasUnsupportedCollation(
   return 0;
 }
 
-static int unpackedRecordHasNocaseNul(
+int unpackedRecordHasNocaseNul(
   const KeyInfo *pKeyInfo,
   const UnpackedRecord *pIdxKey
 ){

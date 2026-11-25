@@ -898,6 +898,8 @@ int saveCursorPosition(BtCursor*);
 int restoreCursorPosition(BtCursor*, int*);
 int prollyBtCursorSeekMergedAtOrAfter(BtCursor*, const u8*, int, int*);
 int countTreeEntries(Btree*, Pgno, i64*);
+int keyInfoHasUnsupportedCollation(const KeyInfo*, int);
+int unpackedRecordHasNocaseNul(const KeyInfo*, const UnpackedRecord*);
 int sortKeyFromUnpackedForCount(BtCursor*, UnpackedRecord*, u8**, int*, int*);
 int materializeDeferredMergedSeekBackward(BtCursor *pCur);
 int tableEntryIsTableRoot(Btree*, struct TableEntry*, int*);
