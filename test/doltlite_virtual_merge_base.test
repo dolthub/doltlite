@@ -521,4 +521,58 @@ foreach {name tipEdit mainEdit expect} {
   execsql ROLLBACK
 }
 
+foreach {order d1 d2} {
+  rename-first 2025-01-01T00:00:01Z 2025-01-01T00:00:02Z
+  unique-first 2025-01-01T00:00:02Z 2025-01-01T00:00:01Z
+} {
+  reset_db
+  execsql "
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, c TEXT);
+    INSERT INTO t VALUES(1,10,'c1'),(2,20,'c2');
+    SELECT dolt_commit('-Am','base','--date','2025-01-01T00:00:00Z');
+    SELECT dolt_branch('side');
+
+    ALTER TABLE t RENAME TO t2;
+    SELECT dolt_commit('-Am','left','--date','$d1');
+    SELECT dolt_tag('left');
+
+    SELECT dolt_checkout('side');
+    CREATE TABLE new_t(id INTEGER PRIMARY KEY, a INT, c TEXT, UNIQUE(c));
+    INSERT INTO new_t SELECT id,a,c FROM t;
+    DROP TABLE t;
+    ALTER TABLE new_t RENAME TO t;
+    SELECT dolt_commit('-Am','right','--date','$d2');
+
+    SELECT dolt_checkout('main');
+    SELECT dolt_merge('side','--no-ff','-m','mm');
+    SELECT dolt_checkout('side');
+    SELECT dolt_merge('left','--no-ff','-m','sm');
+
+    SELECT dolt_checkout('main');
+    INSERT INTO t2 VALUES(3,30,'c3');
+    SELECT dolt_commit('-am','main-more');
+
+    SELECT dolt_checkout('side');
+    INSERT INTO t2 VALUES(4,40,'c4');
+    SELECT dolt_commit('-am','side-more');
+
+    SELECT dolt_checkout('main');
+  "
+  do_test virtual-base-rename-autoindex-$order-merge {
+    lindex [catchsql {SELECT dolt_merge('side')}] 0
+  } 0
+  do_test virtual-base-rename-autoindex-$order-state {
+    set r [execsql {
+      SELECT id,a,c FROM t2 ORDER BY id;
+      SELECT count(*) FROM sqlite_schema
+       WHERE name LIKE 'sqlite_autoindex_t2_%';
+      SELECT count(*) FROM dolt_conflicts;
+      SELECT count(*) FROM dolt_schema_conflicts;
+      SELECT count(*) FROM dolt_log WHERE message='virtual merge base';
+      PRAGMA integrity_check;
+    }]
+    lappend r [lindex [catchsql {INSERT INTO t2 VALUES(9,90,'c1')}] 0]
+  } {1 10 c1 2 20 c2 3 30 c3 4 40 c4 1 0 0 0 ok 1}
+}
+
 finish_test
