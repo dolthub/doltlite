@@ -945,7 +945,7 @@ int mergeColDefaultsLoad(
   if( rc!=SQLITE_OK ) goto done;
 
   zQuery = sqlite3_mprintf(
-      "SELECT cid, dflt_value, type FROM pragma_table_xinfo(%Q) ORDER BY cid",
+      "SELECT cid, dflt_value FROM pragma_table_xinfo(%Q) ORDER BY cid",
       zTable);
   if( !zQuery ){ rc = SQLITE_NOMEM; goto done; }
   rc = sqlite3_prepare_v2(tmp, zQuery, -1, &pStmt, 0);
@@ -954,13 +954,13 @@ int mergeColDefaultsLoad(
   if( rc!=SQLITE_DONE ) goto done;
   sqlite3_reset(pStmt);
 
-  if( bTrackKnown && nCol>0 ){
+  if( nCol>0 ){
     pTab = sqlite3FindTable(tmp, zTable, "main");
     if( !pTab || pTab->nCol!=nCol ){ rc = SQLITE_CORRUPT; goto done; }
-    pOut->aKnown = sqlite3_malloc(nCol);
-    if( !pOut->aKnown ){ rc = SQLITE_NOMEM; goto done; }
-  }
-  if( nCol>0 ){
+    if( bTrackKnown ){
+      pOut->aKnown = sqlite3_malloc(nCol);
+      if( !pOut->aKnown ){ rc = SQLITE_NOMEM; goto done; }
+    }
     pOut->aVal = sqlite3_malloc(nCol * (int)sizeof(DoltliteSerialValue));
     pOut->apOwned = sqlite3_malloc(nCol * (int)sizeof(u8*));
     if( !pOut->aVal || !pOut->apOwned ){ rc = SQLITE_NOMEM; goto done; }
@@ -975,11 +975,10 @@ int mergeColDefaultsLoad(
   while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
     int cid = sqlite3_column_int(pStmt, 0);
     const char *zDflt = (const char*)sqlite3_column_text(pStmt, 1);
-    const char *zType = (const char*)sqlite3_column_text(pStmt, 2);
     sqlite3_stmt *pEval = 0;
     char *zEval;
     if( cid<0 || cid>=pOut->nCol ) continue;
-    if( pTab ){
+    if( bTrackKnown ){
       int bKnown;
       rc = mergeColBackfillKnown(tmp, pTab, cid, &bKnown);
       if( rc!=SQLITE_OK ) goto done;
@@ -992,8 +991,7 @@ int mergeColDefaultsLoad(
      && sqlite3_step(pEval)==SQLITE_ROW ){
       DoltliteSerialValue *m = &pOut->aVal[cid];
       sqlite3_value *pVal = sqlite3_column_value(pEval, 0);
-      sqlite3ValueApplyAffinity(
-          pVal, sqlite3AffinityType(zType ? zType : "", 0), SQLITE_UTF8);
+      sqlite3ValueApplyAffinity(pVal, pTab->aCol[cid].affinity, SQLITE_UTF8);
       switch( sqlite3_value_type(pVal) ){
         case SQLITE_INTEGER:
           m->eType = SQLITE_INTEGER;
@@ -1048,38 +1046,18 @@ done:
 }
 
 
-static char parsedColumnAffinity(const ParsedColumn *pCol){
-  const u8 *z;
-  int token = 0;
-  i64 n;
-  if( !pCol || !pCol->zDef || !pCol->zDef[0] ) return SQLITE_AFF_NUMERIC;
-  z = (const u8 *)pCol->zDef;
-  while( *z && (n = sqlite3GetToken(z, &token))>0
-        && (token==TK_SPACE || token==TK_COMMENT) ){
-    z += n;
-  }
-  if( *z && (n = sqlite3GetToken(z, &token))>0 ) z += n;
-  while( *z && (n = sqlite3GetToken(z, &token))>0
-        && (token==TK_SPACE || token==TK_COMMENT) ){
-    z += n;
-  }
-  if( !*z ) return SQLITE_AFF_NUMERIC;
-  return sqlite3AffinityType((const char *)z, 0);
-}
-
 /* True when a column kept its position but the merged declaration
 ** would store a different serial type than this side wrote. */
 static int sideAffinityDiffers(
-  ParsedColumn *aMerged, int nMerged,
-  ParsedColumn *aSide, int nSide,
+  const char *aMergedAff, int nMerged,
+  const char *aSideAff, int nSide,
   const int *aMap
 ){
   int j;
   for(j=0; j<nSide; j++){
     int dst = aMap[j];
     if( dst<0 || dst>=nMerged ) continue;
-    if( parsedColumnAffinity(&aMerged[dst])
-     != parsedColumnAffinity(&aSide[j]) ) return 1;
+    if( aMergedAff[dst]!=aSideAff[j] ) return 1;
   }
   return 0;
 }
@@ -1199,7 +1177,7 @@ static void relayoutFieldValue(
 
 static int mergeRecordLayoutLoad(
   const char *zSql, const char *zTable, int nCol,
-  int *aRecord, int *pnRecord, DoltliteColInfo *pCi
+  int *aRecord, int *pnRecord, char *aAff, DoltliteColInfo *pCi
 ){
   sqlite3 *tmp = 0;
   Table *pTab;
@@ -1212,12 +1190,19 @@ static int mergeRecordLayoutLoad(
     if( !pTab || pTab->nCol!=nCol ){
       rc = SQLITE_CORRUPT;
     }else{
-      Index *pPk = HasRowid(pTab) ? 0 : sqlite3PrimaryKeyIndex(pTab);
-      *pnRecord = pTab->nNVCol;
-      for(i=0; i<nCol; i++){
-        aRecord[i] = (pTab->aCol[i].colFlags & COLFLAG_VIRTUAL) ? -1
-            : pPk ? sqlite3TableColumnToIndex(pPk, i)
-            : sqlite3TableColumnToStorage(pTab, i);
+      if( aRecord && pnRecord ){
+        Index *pPk = HasRowid(pTab) ? 0 : sqlite3PrimaryKeyIndex(pTab);
+        *pnRecord = pTab->nNVCol;
+        for(i=0; i<nCol; i++){
+          aRecord[i] = (pTab->aCol[i].colFlags & COLFLAG_VIRTUAL) ? -1
+              : pPk ? sqlite3TableColumnToIndex(pPk, i)
+              : sqlite3TableColumnToStorage(pTab, i);
+        }
+      }
+      if( aAff ){
+        for(i=0; i<nCol; i++){
+          aAff[i] = pTab->aCol[i].affinity;
+        }
       }
       if( pCi ) rc = doltliteGetColumnNames(tmp, zTable, pCi);
     }
@@ -1250,6 +1235,8 @@ int normalizeSideToMergedLayout(
   int *aMap = 0;
   int *aMergedRecord = 0;
   int *aTheirsRecord = 0;
+  char *aOursAff = 0;
+  char *aTheirsAff = 0;
   int nMerged;
   int nMergedRecord = 0;
   int nTheirsRecord = 0;
@@ -1338,8 +1325,10 @@ int normalizeSideToMergedLayout(
       (nTheirs>0 ? nTheirs : 1) * (int)sizeof(int));
   aOursAnc = sqlite3_malloc((nOurs>0 ? nOurs : 1) * (int)sizeof(int));
   aTheirsAnc = sqlite3_malloc((nTheirs>0 ? nTheirs : 1) * (int)sizeof(int));
+  aOursAff = sqlite3_malloc(nOurs>0 ? nOurs : 1);
+  aTheirsAff = sqlite3_malloc(nTheirs>0 ? nTheirs : 1);
   if( !aMap || !aMergedRecord || !aTheirsRecord
-   || !aOursAnc || !aTheirsAnc ){
+   || !aOursAnc || !aTheirsAnc || !aOursAff || !aTheirsAff ){
     rc = SQLITE_NOMEM;
     goto done;
   }
@@ -1374,14 +1363,19 @@ int normalizeSideToMergedLayout(
     aTheirsRecord[j] = parsedColumnIsVirtual(&aTheirs[j])
         ? -1 : nTheirsRecord++;
   }
-  if( !isIntKey ){
+  if( !isIntKey || bSameKey ){
     rc = mergeRecordLayoutLoad(zOursSql, zTable, nOurs,
-        aMergedRecord, &nMergedRecord, 0);
+        isIntKey ? 0 : aMergedRecord,
+        isIntKey ? 0 : &nMergedRecord,
+        bSameKey ? aOursAff : 0, 0);
     if( rc==SQLITE_OK ){
       rc = mergeRecordLayoutLoad(zTheirsSql, zTable, nTheirs,
-          aTheirsRecord, &nTheirsRecord, &sideCi);
+          isIntKey ? 0 : aTheirsRecord,
+          isIntKey ? 0 : &nTheirsRecord,
+          bSameKey ? aTheirsAff : 0,
+          isIntKey ? 0 : &sideCi);
     }
-    sideCiInit = 1;
+    if( !isIntKey ) sideCiInit = 1;
     if( rc!=SQLITE_OK ) goto done;
   }
   for(j=0; j<nTheirs; j++){
@@ -1473,7 +1467,7 @@ mapped:
   ** A changed affinity still rewrites each field, so a TEXT column
   ** does not keep the other side's integer. */
   if( nDropped==0 && !bFillSharedDefaults
-   && !(bSameKey && sideAffinityDiffers(aOurs, nOurs, aTheirs, nTheirs, aMap)) ){
+   && !(bSameKey && sideAffinityDiffers(aOursAff, nOurs, aTheirsAff, nTheirs, aMap)) ){
     int bSamePositions = 1;
     for(j=0; j<nTheirs; j++){
       if( aMap[j]!=j || aTheirsRecord[j]!=aMergedRecord[aMap[j]] ){
@@ -1599,8 +1593,8 @@ mapped:
       relayoutFieldValue(pVal, &info, src, m);
       aSupplied[tgt] = 1;
       if( bSameKey && aMap[j]<nOurs ){
-        char affTo = parsedColumnAffinity(&aOurs[aMap[j]]);
-        char affFrom = parsedColumnAffinity(&aTheirs[j]);
+        char affTo = aOursAff[aMap[j]];
+        char affFrom = aTheirsAff[j];
         if( affTo!=affFrom ){
           u8 *pOwned = 0;
           rc = relayoutApplyAffinity(db, m, affTo, &pOwned);
@@ -1635,8 +1629,8 @@ mapped:
         relayoutFieldValue(pKeyRec, &kinfo, src, &aMem[tgt]);
         aSupplied[tgt] = 1;
         if( bSameKey && aMap[j]<nOurs ){
-          char affTo = parsedColumnAffinity(&aOurs[aMap[j]]);
-          char affFrom = parsedColumnAffinity(&aTheirs[j]);
+          char affTo = aOursAff[aMap[j]];
+          char affFrom = aTheirsAff[j];
           if( affTo!=affFrom ){
             u8 *pOwned = 0;
             rc = relayoutApplyAffinity(db, &aMem[tgt], affTo, &pOwned);
@@ -1725,6 +1719,8 @@ done:
   sqlite3_free(aTheirsRecord);
   sqlite3_free(aOursAnc);
   sqlite3_free(aTheirsAnc);
+  sqlite3_free(aOursAff);
+  sqlite3_free(aTheirsAff);
   freeColumns(aAnc, nAnc);
   freeColumns(aOurs, nOurs);
   freeColumns(aTheirs, nTheirs);

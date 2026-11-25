@@ -3003,5 +3003,85 @@ run_test "merge_dropped_view_ours_no_triggers" "SELECT count(*) FROM sqlite_mast
 
 rm -f "$DB_VTR1" "$DB_VTR2" "$DB_VTR3" "$DB_VTR4"
 
+DB_AFF1=/tmp/test_merge_aff1_$$.db; rm -f "$DB_AFF1"
+$DOLTLITE "$DB_AFF1" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, code TEXT);
+INSERT INTO t VALUES (1, '001');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('b');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, code TEXT CONSTRAINT ck CHECK(code != ''));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_commit('-Am', 'main constraint');
+SELECT dolt_checkout('b');
+INSERT INTO t VALUES (2, '007');
+SELECT dolt_commit('-Am', 'b row');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_text_constraint_affinity_ok" "SELECT dolt_merge('b');" "^[0-9a-f]{40}$" "$DB_AFF1"
+run_test "merge_text_constraint_preserves_text" "SELECT id || ':' || code || ':' || typeof(code) FROM t ORDER BY id;" "1:001:text
+2:007:text" "$DB_AFF1"
+
+DB_AFF2=/tmp/test_merge_aff2_$$.db; rm -f "$DB_AFF2"
+$DOLTLITE "$DB_AFF2" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES (1, '001');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('b');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, val);
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_commit('-Am', 'main untyped');
+SELECT dolt_checkout('b');
+INSERT INTO t VALUES (2, '007');
+SELECT dolt_commit('-Am', 'b row');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_untyped_col_affinity_ok" "SELECT dolt_merge('b');" "^[0-9a-f]{40}$" "$DB_AFF2"
+run_test "merge_untyped_col_preserves_text" "SELECT id || ':' || val || ':' || typeof(val) FROM t ORDER BY id;" "1:001:text
+2:007:text" "$DB_AFF2"
+
+DB_AFF3=/tmp/test_merge_aff3_$$.db; rm -f "$DB_AFF3"
+$DOLTLITE "$DB_AFF3" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, x INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('b');
+ALTER TABLE t ADD COLUMN u DEFAULT '007';
+SELECT dolt_commit('-Am', 'main add untyped');
+SELECT dolt_checkout('b');
+ALTER TABLE t ADD COLUMN v TEXT DEFAULT 'hi';
+INSERT INTO t(id, x) VALUES (2, 20);
+SELECT dolt_commit('-Am', 'b add v');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_untyped_default_affinity_ok" "SELECT dolt_merge('b');" "^[0-9a-f]{40}$" "$DB_AFF3"
+run_test "merge_untyped_default_preserves_text" "SELECT id || ':' || u || ':' || typeof(u) FROM t ORDER BY id;" "1:007:text
+2:007:text" "$DB_AFF3"
+
+DB_AFF4=/tmp/test_merge_aff4_$$.db; rm -f "$DB_AFF4"
+$DOLTLITE "$DB_AFF4" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES (1, '1');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('b');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, val INTEGER);
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_commit('-Am', 'main integer');
+SELECT dolt_checkout('b');
+INSERT INTO t VALUES (2, '007');
+SELECT dolt_commit('-Am', 'b row');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_genuine_text_to_int_ok" "SELECT dolt_merge('b');" "^[0-9a-f]{40}$" "$DB_AFF4"
+run_test "merge_genuine_text_to_int_coerces" "SELECT id || ':' || val || ':' || typeof(val) FROM t ORDER BY id;" "1:1:integer
+2:7:integer" "$DB_AFF4"
+
+rm -f "$DB_AFF1" "$DB_AFF2" "$DB_AFF3" "$DB_AFF4"
+
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95" "$DB96" "$DB97" "$DB98" "$DB99" "$DB100" "$DB101" "$DB102" "$DB103" "$DB104" "$DB105" "$DB106" "$DB107" "$DB108" "$DB109" "$DB110" "$DB111" "$DB112" "$DB113" "$DB114" "$DB115" "$DB116" "$DB117" "$DB118" "$DB119" "$DB120" "$DB121" "$DB122"
 dltest_finish
