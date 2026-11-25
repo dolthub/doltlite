@@ -158,6 +158,8 @@ jobs:
             static_ext: ".lib"
 
     runs-on: ${{ matrix.os }}
+    env:
+      OPTS: -DSQLITE_ENABLE_COLUMN_METADATA
 
     steps:
     - uses: actions/checkout@v4
@@ -197,11 +199,18 @@ jobs:
         make -j$(nproc) 'T.link=$(T.cc.sqlite) -static' doltlite.exe
         make -j$(nproc) doltlite-lib
 
-    - name: Verify Windows runtime dependencies
+    - name: Verify Windows runtime dependencies and column metadata exports
       if: runner.os == 'Windows'
       shell: msys2 {0}
       run: |
         bash test/windows_runtime_dependencies.sh build/doltlite.exe build/libdoltlite.dll
+        bash test/release_column_metadata_exports.sh build/libdoltlite.dll
+
+    - name: Verify column metadata exports (Unix)
+      if: runner.os != 'Windows'
+      env:
+        LIB_EXT: ${{ matrix.lib_ext }}
+      run: bash test/release_column_metadata_exports.sh "build/libdoltlite${LIB_EXT}"
 
     - name: Load Windows DLL without MSYS2 runtime dependencies
       if: runner.os == 'Windows'
@@ -764,7 +773,7 @@ jobs:
     - uses: shivammathur/setup-php@v2
       with:
         php-version: '8.3'
-        extensions: ffi
+        extensions: ffi, pdo_sqlite
         tools: composer
 
     - name: Install native build dependencies
@@ -780,6 +789,11 @@ jobs:
       with:
         name: source
         path: release-assets
+
+    - name: Test PDO with the packaged shared library
+      run: |
+        version="${TAG#v}"
+        bash test/release_pdo_sqlite.sh "release-assets/doltlite-lib-linux-x64-${version}.zip"
 
     - name: Assemble and install the Composer snapshot
       run: |
