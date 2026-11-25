@@ -23,6 +23,15 @@ proc tvfs_cb {method file args} {
       if {$method eq "xWrite" && $::stuck==1} { set ::stuck 2; return SQLITE_IOERR }
       if {$method eq "xTruncate"} { return SQLITE_IOERR }
     }
+    partial_init {
+      if {$method eq "xWrite" && [lindex $args 1] == 0} {
+        set fd [open $file wb]
+        puts -nonewline $fd [string repeat "D" 64]
+        close $fd
+        set ::mode off
+        return SQLITE_IOERR
+      }
+    }
   }
   return SQLITE_OK
 }
@@ -173,6 +182,37 @@ do_test 4.5 {
   sqlite3 db test.db
   db eval {SELECT group_concat(k) FROM t; PRAGMA integrity_check}
 } {1,2,3,4 ok}
+
+# Partial write failure of the initial offset-0 manifest on a brand-new empty
+# database must truncate the file back to 0 bytes rather than leaving a
+# corrupt <168-byte stub on disk.
+tvfs script tvfs_cb
+do_test 5.1 {
+  catch {db close}
+  forcedelete test.db
+  set ::mode partial_init
+  catch {sqlite3 db test.db -vfs tvfs}
+  set fired [expr {$::mode eq "off"}]
+  set ::mode off
+  list $fired [file size test.db]
+} {1 0}
+do_test 5.2 {
+  sqlite3 db2 test.db
+  set r [db2 eval {PRAGMA integrity_check}]
+  db2 close
+  set r
+} {ok}
+do_test 5.3 {
+  catch {db close}
+  sqlite3 db test.db
+  db eval {
+    CREATE TABLE t(k INTEGER PRIMARY KEY, v);
+    INSERT INTO t VALUES(1,'a');
+  }
+  db close
+  sqlite3 db test.db
+  db eval {SELECT k, v FROM t; PRAGMA integrity_check}
+} {1 a ok}
 
 catch {db close}
 tvfs delete

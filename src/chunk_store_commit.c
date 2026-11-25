@@ -644,6 +644,7 @@ static int csCommitToFile(
     csSerializeManifest(cs, manifest);
     csManifestSeal(manifest, 0);
     CRASH_CHECK_WRITE();
+    writeOff = CHUNK_MANIFEST_SIZE;
     rc = sqlite3OsWrite(cs->file.pFile, manifest, CHUNK_MANIFEST_SIZE, 0);
     if( rc != SQLITE_OK ) goto commit_done;
   }
@@ -667,10 +668,10 @@ static int csCommitToFile(
         int toWrite = remaining > 65536 ? 65536 : (int)remaining;
         CRASH_CHECK_WRITE();
         rc = sqlite3OsWrite(cs->file.pFile, pSrc, toWrite, writeOff);
-        if( rc != SQLITE_OK ) goto commit_done;
         pSrc += toWrite;
         writeOff += toWrite;
         remaining -= toWrite;
+        if( rc != SQLITE_OK ) goto commit_done;
       }
     }else{
       for( i = 0; i < cs->staging.nPending; i++ ){
@@ -682,8 +683,8 @@ static int csCommitToFile(
         bufOff = pe->offset + 4;
         CRASH_CHECK_WRITE();
         rc = sqlite3OsWrite(cs->file.pFile, recHdr, CS_WAL_CHUNK_HDR_SIZE, writeOff);
-        if( rc != SQLITE_OK ) goto commit_done;
         writeOff += CS_WAL_CHUNK_HDR_SIZE;
+        if( rc != SQLITE_OK ) goto commit_done;
 
         {
           const u8 *pSrc = cs->staging.pWriteBuf + bufOff;
@@ -738,9 +739,9 @@ static int csCommitToFile(
     CRASH_CHECK_WRITE();
     rootOff = writeOff;
     rc = sqlite3OsWrite(cs->file.pFile, rootRec, sizeof(rootRec), writeOff);
-    if( rc != SQLITE_OK ) goto commit_done;
     contentEnd = rootEnd;
     writeOff = nextOff;
+    if( rc != SQLITE_OK ) goto commit_done;
   }
 
   CRASH_CHECK_WRITE();
