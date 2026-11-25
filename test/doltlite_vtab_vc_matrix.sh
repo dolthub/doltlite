@@ -748,6 +748,54 @@ case "$result" in
   *) note_fail "reset_changed_module_vtab_nothing_to_commit" "expected nothing to commit, got: $result";;
 esac
 
+scenario "named dolt_add of dropped vtab removes shadow rows from staged master"
+newdb
+run_sql "CREATE VIRTUAL TABLE v USING fts5(body);
+INSERT INTO v VALUES ('hello');
+SELECT dolt_commit('-Am', 'add vtab');
+DROP TABLE v;
+SELECT dolt_add('v');
+SELECT dolt_commit('-m', 'drop vtab');" "$DB" > /dev/null
+check "add_dropped_vtab_clean_reopen" "0
+ok
+0" "$(run_sql "SELECT dolt_reset('--hard');
+SELECT count(*) FROM sqlite_master WHERE name LIKE 'v%';
+PRAGMA integrity_check;
+SELECT count(*) FROM dolt_status;" "$DB" | tail -n 3)"
+
+newdb
+run_sql "CREATE VIRTUAL TABLE v USING fts5(body);
+INSERT INTO v VALUES ('hello');
+CREATE VIRTUAL TABLE rt USING rtree(id, x0, x1);
+INSERT INTO rt VALUES (1, 0, 1);
+CREATE TABLE other(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO other VALUES (1, 'orig');
+CREATE TABLE v_notes(id INTEGER PRIMARY KEY, note TEXT);
+INSERT INTO v_notes VALUES (1, 'keep');
+SELECT dolt_commit('-Am', 'init');
+DROP TABLE v;
+DROP TABLE rt;
+DROP TABLE v_notes;
+UPDATE other SET val='dirty' WHERE id=1;
+SELECT dolt_add('v', 'rt');
+SELECT dolt_commit('-m', 'drop vtabs');" "$DB" > /dev/null
+check "add_dropped_vtab_leaves_other_and_prefix_table_unstaged" "other|0|modified
+v_notes|0|deleted" "$(run_sql "SELECT table_name||'|'||staged||'|'||status FROM dolt_status ORDER BY table_name;" "$DB")"
+cp "$DB" "$DB.headcopy"
+check "add_dropped_vtab_head_clean_and_preserves_siblings" "0
+0
+orig
+keep
+ok
+0" "$(run_sql "SELECT dolt_reset('--hard');
+SELECT count(*) FROM sqlite_master WHERE name='v' OR (name LIKE 'v\_%' ESCAPE '\' AND name!='v_notes');
+SELECT count(*) FROM sqlite_master WHERE name='rt' OR name LIKE 'rt\_%' ESCAPE '\';
+SELECT val FROM other WHERE id=1;
+SELECT note FROM v_notes WHERE id=1;
+PRAGMA integrity_check;
+SELECT count(*) FROM dolt_status;" "$DB.headcopy" | tail -n 6)"
+rm -f "$DB.headcopy"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then

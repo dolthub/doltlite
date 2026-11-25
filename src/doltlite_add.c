@@ -773,39 +773,80 @@ static int addStageShadowTablesOf(
   return SQLITE_OK;
 }
 
+static Module *addVtabModuleFromSql(sqlite3 *db, const char *zSql){
+  const char *z = zSql;
+  int type = 0, n = 0;
+  char *zMod;
+  Module *pMod;
+  if( !z ) return 0;
+  while( *z ){
+    n = sqlite3GetToken((const u8*)z, &type);
+    if( n==0 ) return 0;
+    z += n;
+    if( type==TK_USING ) break;
+  }
+  if( type!=TK_USING ) return 0;
+  while( *z ){
+    n = sqlite3GetToken((const u8*)z, &type);
+    if( n==0 ) return 0;
+    if( type!=TK_SPACE ) break;
+    z += n;
+  }
+  if( n==0 ) return 0;
+  zMod = sqlite3_mprintf("%.*s", n, z);
+  if( !zMod ) return 0;
+  sqlite3Dequote(zMod);
+  pMod = (Module*)sqlite3HashFind(&db->aModule, zMod);
+  sqlite3_free(zMod);
+  return pMod;
+}
+
 /* Drop staged shadow entries of a dropped vtab via staged "<zTable>_"
 ** tables whose parent is CREATE VIRTUAL TABLE and missing from working. */
-static void addRemoveShadowEntriesOfDroppedVtab(
+static int addRemoveShadowEntriesOfDroppedVtab(
+  sqlite3 *db,
   struct TableEntry *aStaged,
   int *pnStaged,
   SchemaEntry *aStagedSchema,
   int nStagedSchema,
   struct TableEntry *aWorking,
   int nWorking,
-  const char *zTable
+  const char *zTable,
+  char ***pazTouched,
+  int *pnTouched
 ){
   SchemaEntry *pParent;
+  Module *pMod;
+  int (*xShadowName)(const char*) = 0;
   size_t nPrefix;
   int i, k;
 
   pParent = findSchemaEntry(aStagedSchema, nStagedSchema, zTable);
   if( !pParent || !pParent->zSql
    || sqlite3_strnicmp(pParent->zSql, "CREATE VIRTUAL", 14)!=0 ){
-    return;
+    return SQLITE_OK;
+  }
+  pMod = addVtabModuleFromSql(db, pParent->zSql);
+  if( pMod && pMod->pModule && pMod->pModule->iVersion>=3 ){
+    xShadowName = pMod->pModule->xShadowName;
   }
   nPrefix = strlen(zTable);
   for(i=0; i<nStagedSchema; i++){
+    const char *zShadow = aStagedSchema[i].zName;
+    char **azNew;
+    char *zOwn;
     if( !aStagedSchema[i].zType
      || strcmp(aStagedSchema[i].zType, "table")!=0
-     || !aStagedSchema[i].zName
-     || sqlite3_strnicmp(aStagedSchema[i].zName, zTable, (int)nPrefix)!=0
-     || aStagedSchema[i].zName[nPrefix]!='_'
-     || doltliteFindTableByName(aWorking, nWorking, aStagedSchema[i].zName) ){
+     || !zShadow
+     || sqlite3_strnicmp(zShadow, zTable, (int)nPrefix)!=0
+     || zShadow[nPrefix]!='_'
+     || (xShadowName && !xShadowName(zShadow + nPrefix + 1))
+     || doltliteFindTableByName(aWorking, nWorking, zShadow) ){
       continue;
     }
     for(k=0; k<*pnStaged; ){
       if( aStaged[k].zName
-       && sqlite3_stricmp(aStaged[k].zName, aStagedSchema[i].zName)==0 ){
+       && sqlite3_stricmp(aStaged[k].zName, zShadow)==0 ){
         sqlite3_free(aStaged[k].zName);
         if( k+1<*pnStaged ){
           memmove(&aStaged[k], &aStaged[k+1],
@@ -816,7 +857,19 @@ static void addRemoveShadowEntriesOfDroppedVtab(
       }
       k++;
     }
+    addRemoveIndexEntriesOfTable(aStaged, pnStaged,
+                                 aStagedSchema, nStagedSchema, zShadow);
+    azNew = sqlite3_realloc((void*)*pazTouched,
+                            (*pnTouched+1)*(int)sizeof(char*));
+    zOwn = azNew ? sqlite3_mprintf("%s", zShadow) : 0;
+    if( azNew ) *pazTouched = azNew;
+    if( !azNew || !zOwn ){
+      sqlite3_free(zOwn);
+      return SQLITE_NOMEM;
+    }
+    (*pazTouched)[(*pnTouched)++] = zOwn;
   }
+  return SQLITE_OK;
 }
 
 static int addStageNamedTables(
@@ -1048,9 +1101,15 @@ static int addStageNamedTables(
         }
         addRemoveIndexEntriesOfTable(aStaged, &nStaged,
                                      aStagedSchema, nStagedSchema, zTable);
-        addRemoveShadowEntriesOfDroppedVtab(aStaged, &nStaged,
-                                            aStagedSchema, nStagedSchema,
-                                            aWorking, nWorking, zTable);
+        rc = addRemoveShadowEntriesOfDroppedVtab(db, aStaged, &nStaged,
+                                                 aStagedSchema, nStagedSchema,
+                                                 aWorking, nWorking, zTable,
+                                                 &azTouched, &nTouched);
+        if( rc!=SQLITE_OK ){
+          ADDNAMED_FREE_ALL();
+          sqlite3_result_error_code(context, rc);
+          return rc;
+        }
         ADDNAMED_TOUCH(zTable);
         updateMaster = 1;
       }
