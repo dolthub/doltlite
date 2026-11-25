@@ -63,7 +63,7 @@ void csPendHTReset(struct ChunkStore *cs);
 void csRecentHTClear(struct ChunkStore *cs);
 int csGrowPending(struct ChunkStore *cs);
 int csGrowRecent(struct ChunkStore *cs, int nAdd);
-int csGrowWriteBuf(struct ChunkStore *cs, int nNeeded);
+int csGrowWriteBuf(struct ChunkStore *cs, i64 nNeeded);
 int csSearchPending(struct ChunkStore *cs, const ProllyHash *pHash, int *pIdx);
 int csSearchRecent(struct ChunkStore *cs, const ProllyHash *pHash, int *pIdx);
 int csMemSeal(struct ChunkStore *cs);
