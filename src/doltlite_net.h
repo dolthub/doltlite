@@ -87,6 +87,23 @@ static inline int doltliteSocketTimedOut(void) {
 #endif
 }
 
+static inline int doltliteSocketWouldBlock(int fd) {
+#ifdef _WIN32
+  int err = WSAGetLastError();
+  (void)fd;
+  return err == WSAEWOULDBLOCK || err == WSAEINTR;
+#else
+  int err = errno;
+  if (err == EINTR) return 1;
+  if (err == EAGAIN || err == EWOULDBLOCK) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    errno = err;
+    return flags >= 0 && (flags & O_NONBLOCK) != 0;
+  }
+  return 0;
+#endif
+}
+
 static inline int doltliteSocketSetBlocking(int fd, int blocking) {
 #ifdef _WIN32
   u_long mode = blocking ? 0 : 1;
