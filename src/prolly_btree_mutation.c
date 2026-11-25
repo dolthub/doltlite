@@ -1521,6 +1521,7 @@ static int btCursorInsertImpl(
         }
         pCur->flushSeekEdits = 0;
       } else {
+        CLEAR_CACHED_PAYLOAD(pCur);
         pCur->eState = CURSOR_INVALID;
         pCur->flushSeekEdits = 0;
       }
@@ -1528,6 +1529,7 @@ static int btCursorInsertImpl(
     }
   }
 
+  CLEAR_CACHED_PAYLOAD(pCur);
   rc = flushMutMap(pCur);
   if( rc!=SQLITE_OK ) return rc;
   {
@@ -1582,6 +1584,7 @@ int flushIfNeeded(BtCursor *pCur){
           if( rc!=SQLITE_OK ) return rc;
         } else if( p->eState!=CURSOR_REQUIRESEEK
                 && p->eState!=CURSOR_INVALID ){
+          CLEAR_CACHED_PAYLOAD(p);
           prollyCursorReleaseAll(&p->pCur);
         }
       }
@@ -1595,6 +1598,7 @@ int flushIfNeeded(BtCursor *pCur){
     if( rc!=SQLITE_OK ) return rc;
   }
 
+  CLEAR_CACHED_PAYLOAD(pCur);
   rc = flushMutMap(pCur);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -1673,6 +1677,7 @@ int flushDeferredEdits(Btree *pBtree, BtShared *pBt){
 static int btreeDeleteImmediate(BtCursor *pCur){
   int rc;
 
+  CLEAR_CACHED_PAYLOAD(pCur);
   rc = flushMutMap(pCur);
   if( rc!=SQLITE_OK ){
     return rc;
