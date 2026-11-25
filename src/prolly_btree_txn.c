@@ -2417,6 +2417,11 @@ static void rollbackAbandonWriteTxn(Btree *p, BtShared *pBt){
   p->inTrans = TRANS_NONE;
   p->inTransaction = TRANS_NONE;
   btreeDiscardAllSavepoints(p);
+  p->bSchemaChangedTxn = 0;
+  p->bMasterRootChangedTxn = 0;
+  p->bTxnCheckout = 0;
+  sqlite3_free(p->zTxnLeftDirty);
+  p->zTxnLeftDirty = 0;
   btreeReleaseTxnGraphLock(pBt);
   btreeUnpinSnapshot(pBt);
 }
@@ -2554,12 +2559,8 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
       p->bCatalogDropped = 1;
       p->iLoadedWorkingStateVersion = pBt->iWorkingStateVersion - 1;
       resetConnectionSchema(p);
-      p->inTrans = TRANS_NONE;
-      p->inTransaction = TRANS_NONE;
-      btreeDiscardAllSavepoints(p);
       chunkStoreRollback(pBt->pStore);
-      btreeReleaseTxnGraphLock(pBt);
-      btreeUnpinSnapshot(pBt);
+      rollbackAbandonWriteTxn(p, pBt);
       return rc;
     }
     if( bSchemaChangedRollback ){
@@ -2606,8 +2607,7 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
                                    &p->vc.constraintViolationsHash);
       if( rc!=SQLITE_OK ){
         sqlite3_free(catData);
-        btreeReleaseTxnGraphLock(pBt);
-        btreeUnpinSnapshot(pBt);
+        rollbackAbandonWriteTxn(p, pBt);
         return rc;
       }
       prollyHashCompute(wsBuf, WS_TOTAL_SIZE, &wsHashWouldBe);
