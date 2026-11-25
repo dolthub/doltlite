@@ -6685,7 +6685,7 @@ static int vec1NextMethod(sqlite3_vtab_cursor *cur){
     pCsr->bSeek = 0;
     if( pCsr->iCurrentRes>=pCsr->nCurrentRes ){
       /* If this is a streaming query, try to get some more results. */
-      if( pCsr->pQuery->bStreaming ){
+      if( pCsr->pQuery->bStreaming && pCsr->pQuery->K>0 ){
         rc = vec1StreamingNext(pCsr);
       }
 
@@ -8516,6 +8516,11 @@ static int vec1DoKANNQuery(Vec1Csr *pCsr){
   Vec1Tab *pTab = (Vec1Tab*)(pCsr->base.pVtab);
   Vec1Query *pQuery = pCsr->pQuery;
   Vec1AnnHeap *pHeap = &pQuery->heap;
+
+  if( pQuery->K==0 ){
+    pCsr->nCurrentRes = 0;
+    return SQLITE_OK;
+  }
 
   /* Table of distances used for ANN queries against the PQ quantized 
   ** vectors in the %_idx table. This is an array of (nCodebook * 256)

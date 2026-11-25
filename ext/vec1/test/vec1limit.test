@@ -90,8 +90,56 @@ foreach {tn K} {
   } {1 {vec1: K must be an integer value between 0 and 33554432}}
 }
 
+#-------------------------------------------------------------------------
+# K = 0 / LIMIT 0 across trained, flat, and none modes (and streaming:1).
+#
+set q8 [db one {SELECT vec1_from_json('[1,2,3,4,5,6,7,8]')}]
+set lim0 0
 
+foreach {tn sql} {
+  1 { SELECT rowid FROM docs($q8) LIMIT 0 }
+  2 { SELECT rowid FROM docs($q8) LIMIT $lim0 }
+  3 { SELECT rowid FROM docs($q8, 0) }
+  4 { SELECT rowid FROM docs($q8, '{K:0}') }
+  5 { SELECT rowid FROM docs($q8, '{K:0, streaming:1}') }
+  6 { SELECT rowid FROM docs($q8, '{streaming:1}') LIMIT $lim0 }
+} {
+  do_execsql_test 3.1.$tn $sql {}
+}
 
+do_execsql_test 3.2.0 {
+  CREATE VIRTUAL TABLE docs_flat USING vec1(embedding, title, category);
+  INSERT INTO docs_flat(rowid, embedding, title, category)
+  SELECT id, v, title, cat FROM corpus WHERE id <= 50;
+  INSERT INTO docs_flat(cmd, arg) VALUES('rebuild', '{index:"flat"}');
+}
+
+foreach {tn sql} {
+  1 { SELECT rowid FROM docs_flat($q8) LIMIT 0 }
+  2 { SELECT rowid FROM docs_flat($q8) LIMIT $lim0 }
+  3 { SELECT rowid FROM docs_flat($q8, 0) }
+  4 { SELECT rowid FROM docs_flat($q8, '{K:0}') }
+  5 { SELECT rowid FROM docs_flat($q8, '{K:0, streaming:1}') }
+  6 { SELECT rowid FROM docs_flat($q8, '{streaming:1}') LIMIT $lim0 }
+} {
+  do_execsql_test 3.2.$tn $sql {}
+}
+
+do_execsql_test 3.3.0 {
+  CREATE VIRTUAL TABLE docs_none USING vec1(embedding, title, category);
+  INSERT INTO docs_none(rowid, embedding, title, category)
+  SELECT id, v, title, cat FROM corpus WHERE id <= 50;
+  INSERT INTO docs_none(cmd, arg) VALUES('rebuild', '{index:"none"}');
+}
+
+foreach {tn sql} {
+  1 { SELECT rowid FROM docs_none($q8) LIMIT 0 }
+  2 { SELECT rowid FROM docs_none($q8) LIMIT $lim0 }
+  3 { SELECT rowid FROM docs_none($q8, 0) }
+  4 { SELECT rowid FROM docs_none($q8, '{K:0}') }
+} {
+  do_execsql_test 3.3.$tn $sql {}
+}
 
 finish_test
 
