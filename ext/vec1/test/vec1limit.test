@@ -141,5 +141,27 @@ foreach {tn sql} {
   do_execsql_test 3.3.$tn $sql {}
 }
 
+#-------------------------------------------------------------------------
+# 64-bit LIMIT values exceeding 32-bit INT_MAX must not truncate to 32-bit.
+#
+foreach {tn lim} {
+  1 4294967297
+  2 4294967296
+  3 2147483648
+  4 9223372036854775807
+} {
+  do_catchsql_test 4.1.$tn "
+    SELECT rowid FROM docs(\$q8) LIMIT $lim
+  " {1 {vec1: K must be an integer value between 0 and 33554432}}
+}
+
+do_execsql_test 4.2.1 {
+  SELECT count(*) FROM (SELECT rowid FROM docs($q8, 5) LIMIT 4294967297)
+} {5}
+
+do_execsql_test 4.2.2 {
+  SELECT count(*) FROM (SELECT rowid FROM docs($q8, 5) LIMIT 4294967296)
+} {5}
+
 finish_test
 

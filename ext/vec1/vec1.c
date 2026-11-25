@@ -9073,7 +9073,7 @@ static int vec1SetupKANNQuery(
     while( (c = idxStr[iIdxStr++])!='\0' ){
       sqlite3_value *pVal = argv[iArg++];
       if( c==VEC1_OP_LIMIT ){
-        int iVal = sqlite3_value_int(pVal);
+        i64 iVal = sqlite3_value_int64(pVal);
         if( iVal>=0 && (p->K==VEC1_SMALLEST_INT64 || p->K>0) ){
           /* A non-negative LIMIT clause. If no K value was specified, use
           ** this value as K.  Or, if a K value was specified, use the
