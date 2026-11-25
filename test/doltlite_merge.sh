@@ -3354,5 +3354,162 @@ run_test "merge_long_message_exact" \
   "SELECT message FROM dolt_log LIMIT 1;" "$LONG_MERGE_MSG" "$DB_LONGMSG"
 rm -f "$DB_LONGMSG"
 
+DB_IDX_MOD1=/tmp/test_merge_idx_mod1_$$.db; rm -f "$DB_IDX_MOD1"
+$DOLTLITE "$DB_IDX_MOD1" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT);
+CREATE INDEX idx ON t(a);
+INSERT INTO t VALUES (1, 10, 100);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('theirs');
+DROP INDEX idx;
+CREATE INDEX idx ON t(b);
+SELECT dolt_commit('-Am', 'ours redefine idx');
+SELECT dolt_checkout('theirs');
+DROP INDEX idx;
+INSERT INTO t VALUES (2, 20, 200);
+SELECT dolt_commit('-Am', 'theirs drop idx + insert');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_ours_redef_idx_theirs_drop_with_rows_exec" \
+  "SELECT dolt_merge('theirs');" "^[0-9a-f]{40}$" "$DB_IDX_MOD1"
+run_test "merge_ours_redef_idx_theirs_drop_with_rows_schema" \
+  "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx';" \
+  "CREATE INDEX idx ON t(b)" "$DB_IDX_MOD1"
+run_test "merge_ours_redef_idx_theirs_drop_with_rows_ic" \
+  "PRAGMA integrity_check;" "ok" "$DB_IDX_MOD1"
+run_test "merge_ours_redef_idx_theirs_drop_with_rows_query" \
+  "SELECT id || ',' || a || ',' || b FROM t INDEXED BY idx WHERE b = 200;" \
+  "2,20,200" "$DB_IDX_MOD1"
+rm -f "$DB_IDX_MOD1"
+
+DB_IDX_MOD2=/tmp/test_merge_idx_mod2_$$.db; rm -f "$DB_IDX_MOD2"
+$DOLTLITE "$DB_IDX_MOD2" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT);
+CREATE INDEX idx ON t(a);
+INSERT INTO t VALUES (1, 10, 100);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('theirs');
+DROP INDEX idx;
+CREATE INDEX idx ON t(b);
+SELECT dolt_commit('-Am', 'ours redefine idx');
+SELECT dolt_checkout('theirs');
+DROP INDEX idx;
+SELECT dolt_commit('-Am', 'theirs drop idx');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_ours_redef_idx_theirs_drop_no_rows_exec" \
+  "SELECT dolt_merge('theirs');" "^[0-9a-f]{40}$" "$DB_IDX_MOD2"
+run_test "merge_ours_redef_idx_theirs_drop_no_rows_schema" \
+  "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx';" \
+  "CREATE INDEX idx ON t(b)" "$DB_IDX_MOD2"
+run_test "merge_ours_redef_idx_theirs_drop_no_rows_ic" \
+  "PRAGMA integrity_check;" "ok" "$DB_IDX_MOD2"
+rm -f "$DB_IDX_MOD2"
+
+DB_IDX_MOD3=/tmp/test_merge_idx_mod3_$$.db; rm -f "$DB_IDX_MOD3"
+$DOLTLITE "$DB_IDX_MOD3" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT);
+CREATE INDEX idx ON t(a);
+INSERT INTO t VALUES (1, 10, 100);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('theirs');
+ALTER TABLE t RENAME COLUMN b TO b2;
+DROP INDEX idx;
+CREATE INDEX idx ON t(b2);
+SELECT dolt_commit('-Am', 'ours rename + redefine idx');
+SELECT dolt_checkout('theirs');
+DROP INDEX idx;
+INSERT INTO t VALUES (2, 20, 200);
+SELECT dolt_commit('-Am', 'theirs drop idx + insert');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_ours_rename_redef_idx_theirs_drop_with_rows_exec" \
+  "SELECT dolt_merge('theirs');" "^[0-9a-f]{40}$" "$DB_IDX_MOD3"
+run_test "merge_ours_rename_redef_idx_theirs_drop_with_rows_schema" \
+  "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx';" \
+  "CREATE INDEX idx ON t(\"b2\")" "$DB_IDX_MOD3"
+run_test "merge_ours_rename_redef_idx_theirs_drop_with_rows_ic" \
+  "PRAGMA integrity_check;" "ok" "$DB_IDX_MOD3"
+run_test "merge_ours_rename_redef_idx_theirs_drop_with_rows_query" \
+  "SELECT id || ',' || a || ',' || b2 FROM t INDEXED BY idx WHERE b2 = 200;" \
+  "2,20,200" "$DB_IDX_MOD3"
+rm -f "$DB_IDX_MOD3"
+
+DB_IDX_MOD4=/tmp/test_merge_idx_mod4_$$.db; rm -f "$DB_IDX_MOD4"
+$DOLTLITE "$DB_IDX_MOD4" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT);
+CREATE INDEX idx ON t(a);
+INSERT INTO t VALUES (1, 10, 100);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('theirs');
+ALTER TABLE t RENAME COLUMN b TO b2;
+DROP INDEX idx;
+CREATE INDEX idx ON t(b2);
+SELECT dolt_commit('-Am', 'ours rename + redefine idx');
+SELECT dolt_checkout('theirs');
+DROP INDEX idx;
+SELECT dolt_commit('-Am', 'theirs drop idx');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_ours_rename_redef_idx_theirs_drop_no_rows_exec" \
+  "SELECT dolt_merge('theirs');" "^[0-9a-f]{40}$" "$DB_IDX_MOD4"
+run_test "merge_ours_rename_redef_idx_theirs_drop_no_rows_schema" \
+  "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx';" \
+  "CREATE INDEX idx ON t(\"b2\")" "$DB_IDX_MOD4"
+run_test "merge_ours_rename_redef_idx_theirs_drop_no_rows_ic" \
+  "PRAGMA integrity_check;" "ok" "$DB_IDX_MOD4"
+rm -f "$DB_IDX_MOD4"
+
+DB_IDX_MOD5=/tmp/test_merge_idx_mod5_$$.db; rm -f "$DB_IDX_MOD5"
+$DOLTLITE "$DB_IDX_MOD5" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT);
+CREATE INDEX idx ON t(a);
+INSERT INTO t VALUES (1, 10, 100);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('theirs');
+DROP INDEX idx;
+SELECT dolt_commit('-Am', 'ours drop idx');
+SELECT dolt_checkout('theirs');
+DROP INDEX idx;
+CREATE INDEX idx ON t(b);
+INSERT INTO t VALUES (2, 20, 200);
+SELECT dolt_commit('-Am', 'theirs redefine idx + insert');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_ours_drop_idx_theirs_redef_with_rows_exec" \
+  "SELECT dolt_merge('theirs');" "^[0-9a-f]{40}$" "$DB_IDX_MOD5"
+run_test "merge_ours_drop_idx_theirs_redef_with_rows_schema" \
+  "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx';" \
+  "CREATE INDEX idx ON t(b)" "$DB_IDX_MOD5"
+run_test "merge_ours_drop_idx_theirs_redef_with_rows_ic" \
+  "PRAGMA integrity_check;" "ok" "$DB_IDX_MOD5"
+run_test "merge_ours_drop_idx_theirs_redef_with_rows_query" \
+  "SELECT id || ',' || a || ',' || b FROM t INDEXED BY idx WHERE b = 200;" \
+  "2,20,200" "$DB_IDX_MOD5"
+rm -f "$DB_IDX_MOD5"
+
+DB_IDX_MOD6=/tmp/test_merge_idx_mod6_$$.db; rm -f "$DB_IDX_MOD6"
+$DOLTLITE "$DB_IDX_MOD6" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT);
+CREATE INDEX idx ON t(a);
+INSERT INTO t VALUES (1, 10, 100);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('theirs');
+ALTER TABLE t RENAME COLUMN a TO a2;
+SELECT dolt_commit('-Am', 'ours rename col only');
+SELECT dolt_checkout('theirs');
+DROP INDEX idx;
+SELECT dolt_commit('-Am', 'theirs drop idx');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_ours_rename_only_idx_theirs_drop_exec" \
+  "SELECT dolt_merge('theirs');" "^[0-9a-f]{40}$" "$DB_IDX_MOD6"
+run_test "merge_ours_rename_only_idx_theirs_drop_gone" \
+  "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='idx';" \
+  "0" "$DB_IDX_MOD6"
+run_test "merge_ours_rename_only_idx_theirs_drop_ic" \
+  "PRAGMA integrity_check;" "ok" "$DB_IDX_MOD6"
+rm -f "$DB_IDX_MOD6"
+
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95" "$DB96" "$DB97" "$DB98" "$DB99" "$DB100" "$DB101" "$DB102" "$DB103" "$DB104" "$DB105" "$DB106" "$DB107" "$DB108" "$DB109" "$DB110" "$DB111" "$DB112" "$DB113" "$DB114" "$DB115" "$DB116" "$DB117" "$DB118" "$DB119" "$DB120" "$DB121" "$DB122"
 dltest_finish

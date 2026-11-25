@@ -658,7 +658,13 @@ int rebuildDisjointSchemaRows(
     }
     if( !hasSchemaConflictTable(aConflictTables, nConflictTables, pSe->zTblName)
      && findSchemaEntry(aAncSchema, nAncSchema, pSe->zName)
-     && !findSchemaEntry(aTheirsSchema, nTheirsSchema, pSe->zName) ){
+     && !findSchemaEntry(aTheirsSchema, nTheirsSchema, pSe->zName)
+     && (!schemaEntryChangedByName(aAncSchema, nAncSchema,
+                                   aOursSchema, nOursSchema,
+                                   pSe->zName)
+      || mergeIndexRenamedOnly(aAncSchema, nAncSchema,
+                               aOursSchema, nOursSchema,
+                               pSe->zName)) ){
       /* Theirs dropped it. */
       continue;
     }
