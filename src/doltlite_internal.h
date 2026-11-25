@@ -1700,6 +1700,10 @@ static SQLITE_INLINE struct TableEntry *addNameIndexFind(
 int amTableStagedByName(
   struct TableEntry *aStaged, int nStaged, const char *zTbl
 );
+int doltliteSchemaEntryIsVtab(const SchemaEntry *p);
+int doltliteVtabShadowNameMatch(
+  sqlite3 *db, const SchemaEntry *pVtab, const char *zShadow
+);
 void addRemoveIndexEntriesOfTable(
   struct TableEntry *aStaged, int *pnStaged,
   SchemaEntry *aStagedSchema, int nStagedSchema, const char *zTable

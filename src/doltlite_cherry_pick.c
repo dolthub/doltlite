@@ -175,6 +175,22 @@ static int applyNameInList(char **az, int n, const char *zName){
   return 0;
 }
 
+static int applyVtabConflicted(
+  sqlite3 *db,
+  const SchemaEntry *pVtab,
+  char **azNames,
+  int nNames
+){
+  int i;
+  if( applyNameInList(azNames, nNames, pVtab->zName) ) return 1;
+  for(i=0; i<nNames; i++){
+    if( azNames[i] && doltliteVtabShadowNameMatch(db, pVtab, azNames[i]) ){
+      return 1;
+    }
+  }
+  return 0;
+}
+
 /* Tables with merge artifacts keep their pre-merge staged data and schema,
 ** while working keeps the merged catalog. */
 static int applyStageCleanTables(
@@ -265,8 +281,10 @@ static int applyStageCleanTables(
     if( rc!=SQLITE_OK ) goto stage_done;
   }
 
-  if( nMerged>0 ){
-    azTouched = sqlite3_malloc64((sqlite3_uint64)nMerged * sizeof(*azTouched));
+  if( nMerged + nMergedSchema + nBaseSchema > 0 ){
+    azTouched = sqlite3_malloc64(
+        ((sqlite3_uint64)nMerged + nMergedSchema + nBaseSchema)
+        * sizeof(*azTouched));
     if( !azTouched ){
       rc = SQLITE_NOMEM;
       goto stage_done;
@@ -277,6 +295,16 @@ static int applyStageCleanTables(
     if( applyNameInList(names.az, names.n, aMerged[i].zName) ) continue;
     if( sqlite3_stricmp(aMerged[i].zName, "dolt_rebase")==0 ) continue;
     azTouched[nTouched++] = aMerged[i].zName;
+  }
+  for(i=0; i<nMergedSchema; i++){
+    if( !doltliteSchemaEntryIsVtab(&aMergedSchema[i]) ) continue;
+    if( applyVtabConflicted(db, &aMergedSchema[i], names.az, names.n) ) continue;
+    azTouched[nTouched++] = aMergedSchema[i].zName;
+  }
+  for(i=0; i<nBaseSchema; i++){
+    if( !doltliteSchemaEntryIsVtab(&aBaseSchema[i]) ) continue;
+    if( applyVtabConflicted(db, &aBaseSchema[i], names.az, names.n) ) continue;
+    azTouched[nTouched++] = aBaseSchema[i].zName;
   }
 
   pWorkMaster = doltliteFindTableByNumber(aMerged, nMerged, 1);

@@ -248,6 +248,35 @@ static int addWriteStagedCatalog(
   return rc;
 }
 
+static Module *addVtabModuleFromSql(sqlite3 *db, const char *zSql);
+
+int doltliteSchemaEntryIsVtab(const SchemaEntry *p){
+  return p && p->zType && strcmp(p->zType, "table")==0
+      && p->zName && p->iRootpage==0
+      && p->zSql && sqlite3_strnicmp(p->zSql, "CREATE VIRTUAL", 14)==0;
+}
+
+int doltliteVtabShadowNameMatch(
+  sqlite3 *db,
+  const SchemaEntry *pVtab,
+  const char *zShadow
+){
+  Module *pMod;
+  int (*xShadowName)(const char*) = 0;
+  size_t nPrefix;
+  if( !doltliteSchemaEntryIsVtab(pVtab) || !zShadow ) return 0;
+  nPrefix = strlen(pVtab->zName);
+  if( sqlite3_strnicmp(zShadow, pVtab->zName, (int)nPrefix)!=0
+   || zShadow[nPrefix]!='_' ){
+    return 0;
+  }
+  pMod = addVtabModuleFromSql(db, pVtab->zSql);
+  if( pMod && pMod->pModule && pMod->pModule->iVersion>=3 ){
+    xShadowName = pMod->pModule->xShadowName;
+  }
+  return xShadowName ? xShadowName(zShadow + nPrefix + 1) : 1;
+}
+
 static int addComposeStageAllMaster(
   sqlite3 *db,
   struct TableEntry *aWorking,
@@ -256,6 +285,12 @@ static int addComposeStageAllMaster(
   struct TableEntry *aStaged,
   int nStaged,
   const u8 *aKeepStaged,
+  const SchemaEntry *aWorkSchema,
+  int nWorkSchema,
+  const u8 *aUseWorkVtab,
+  const SchemaEntry *aStagedSchema,
+  int nStagedSchema,
+  const u8 *aKeepStagedVtab,
   struct TableEntry *aNew,
   int nNew
 ){
@@ -265,12 +300,13 @@ static int addComposeStageAllMaster(
   struct TableEntry *pNewMaster;
   ProllyHash composedRoot;
   int nTouched = 0;
+  int nMaxTouched = nWorking + nStaged + nWorkSchema + nStagedSchema;
   int i;
   int rc = SQLITE_OK;
 
-  if( nWorking+nStaged>0 ){
+  if( nMaxTouched>0 ){
     azTouched = sqlite3_malloc64(
-        ((sqlite3_uint64)nWorking+nStaged) * sizeof(*azTouched));
+        (sqlite3_uint64)nMaxTouched * sizeof(*azTouched));
     if( !azTouched ) return SQLITE_NOMEM;
   }
   for(i=0; i<nWorking; i++){
@@ -281,6 +317,18 @@ static int addComposeStageAllMaster(
   for(i=0; i<nStaged; i++){
     if( aStaged[i].iTable>1 && aStaged[i].zName && !aKeepStaged[i] ){
       azTouched[nTouched++] = aStaged[i].zName;
+    }
+  }
+  for(i=0; i<nWorkSchema; i++){
+    if( doltliteSchemaEntryIsVtab(&aWorkSchema[i])
+     && (!aUseWorkVtab || aUseWorkVtab[i]) ){
+      azTouched[nTouched++] = aWorkSchema[i].zName;
+    }
+  }
+  for(i=0; i<nStagedSchema; i++){
+    if( doltliteSchemaEntryIsVtab(&aStagedSchema[i])
+     && (!aKeepStagedVtab || !aKeepStagedVtab[i]) ){
+      azTouched[nTouched++] = aStagedSchema[i].zName;
     }
   }
   pWorkingMaster = doltliteFindTableByNumber(aWorking, nWorking, 1);
@@ -489,6 +537,8 @@ static int addStageAllTables(
   SchemaEntry *aStagedSchema = 0;
   u8 *aUseWorking = 0;
   u8 *aKeepStaged = 0;
+  u8 *aUseWorkVtab = 0;
+  u8 *aKeepStagedVtab = 0;
   int nWorking = 0;
   int nStaged = 0;
   int nHead = 0;
@@ -525,14 +575,27 @@ static int addStageAllTables(
     rc = doltliteLoadCatalog(db, &headHash, &aHead, &nHead, 0);
     if( rc!=SQLITE_OK ) goto stage_all_done;
   }
+  if( !bForce || onPlan ){
+    rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), pWorkingHash,
+                               &aWorkSchema, &nWorkSchema);
+    if( rc==SQLITE_OK && !prollyHashIsEmpty(&stagedHash) ){
+      rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), &stagedHash,
+                                 &aStagedSchema, &nStagedSchema);
+    }
+    if( rc!=SQLITE_OK ) goto stage_all_done;
+  }
   aUseWorking = sqlite3_malloc64((sqlite3_uint64)nWorking+1);
   aKeepStaged = sqlite3_malloc64((sqlite3_uint64)nStaged+1);
-  if( !aUseWorking || !aKeepStaged ){
+  aUseWorkVtab = sqlite3_malloc64((sqlite3_uint64)nWorkSchema+1);
+  aKeepStagedVtab = sqlite3_malloc64((sqlite3_uint64)nStagedSchema+1);
+  if( !aUseWorking || !aKeepStaged || !aUseWorkVtab || !aKeepStagedVtab ){
     rc = SQLITE_NOMEM;
     goto stage_all_done;
   }
   memset(aUseWorking, 0, nWorking);
   memset(aKeepStaged, 0, nStaged);
+  memset(aUseWorkVtab, 0, nWorkSchema);
+  memset(aKeepStagedVtab, 0, nStagedSchema);
   rc = addNameIndexInit(&workingIdx, aWorking, nWorking);
   if( rc!=SQLITE_OK ) goto stage_all_done;
   workingIdxInit = 1;
@@ -553,6 +616,28 @@ static int addStageAllTables(
     }
     aUseWorking[k] = !ignored;
     if( ignored ) useWorkingHash = 0;
+  }
+
+  for(k=0; k<nWorkSchema; k++){
+    int ignored = 0;
+    if( !doltliteSchemaEntryIsVtab(&aWorkSchema[k]) ) continue;
+    if( !bForce ){
+      rc = addCheckIgnoreAt(db, context, aWorkSchema[k].zName, &ignored,
+          pStagedOut ? pWorkingHash : 0, &pIgnore);
+      if( rc!=SQLITE_OK ) goto stage_all_done;
+    }
+    aUseWorkVtab[k] = !ignored;
+    if( ignored ){
+      int j;
+      useWorkingHash = 0;
+      for(j=0; j<nWorking; j++){
+        if( aWorking[j].iTable>1 && aWorking[j].zName
+         && doltliteVtabShadowNameMatch(db, &aWorkSchema[k],
+                                        aWorking[j].zName) ){
+          aUseWorking[j] = 0;
+        }
+      }
+    }
   }
 
   for(k=0; k<nStaged && !bForce; k++){
@@ -577,18 +662,56 @@ static int addStageAllTables(
     if( ignored ) useWorkingHash = 0;
   }
 
+  for(k=0; k<nStagedSchema && !bForce; k++){
+    int ignored = 0;
+    int w, foundWork = 0;
+    if( !doltliteSchemaEntryIsVtab(&aStagedSchema[k]) ) continue;
+    for(w=0; w<nWorkSchema; w++){
+      if( doltliteSchemaEntryIsVtab(&aWorkSchema[w])
+       && sqlite3_stricmp(aWorkSchema[w].zName, aStagedSchema[k].zName)==0 ){
+        ignored = !aUseWorkVtab[w];
+        foundWork = 1;
+        break;
+      }
+    }
+    if( !foundWork ){
+      rc = addCheckIgnoreAt(db, context, aStagedSchema[k].zName, &ignored,
+          pStagedOut ? pWorkingHash : 0, &pIgnore);
+      if( rc!=SQLITE_OK ) goto stage_all_done;
+      if( !ignored ){
+        int j;
+        for(j=0; j<nStaged; j++){
+          if( aKeepStaged[j] && aStaged[j].iTable>1 && aStaged[j].zName
+           && doltliteVtabShadowNameMatch(db, &aStagedSchema[k],
+                                          aStaged[j].zName) ){
+            ignored = 1;
+            break;
+          }
+        }
+      }
+    }
+    aKeepStagedVtab[k] = ignored;
+    if( ignored ){
+      useWorkingHash = 0;
+      if( !foundWork ){
+        int j;
+        for(j=0; j<nStaged; j++){
+          if( aStaged[j].iTable>1 && aStaged[j].zName
+           && !addNameIndexFind(&workingIdx, aStaged[j].zName)
+           && doltliteVtabShadowNameMatch(db, &aStagedSchema[k],
+                                          aStaged[j].zName) ){
+            aKeepStaged[j] = 1;
+          }
+        }
+      }
+    }
+  }
+
   if( useWorkingHash ){
     if( pStagedOut ) *pStagedOut = *pWorkingHash;
     else rc = doltliteSetSessionStaged(db, pWorkingHash);
     goto stage_all_done;
   }
-  rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), pWorkingHash,
-                             &aWorkSchema, &nWorkSchema);
-  if( rc==SQLITE_OK && !prollyHashIsEmpty(&stagedHash) ){
-    rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), &stagedHash,
-                               &aStagedSchema, &nStagedSchema);
-  }
-  if( rc!=SQLITE_OK ) goto stage_all_done;
 
   /* Plan-only edits must retain the staged hash, including its master. */
   if( skippedPlan ){
@@ -633,6 +756,8 @@ static int addStageAllTables(
   doltliteAlignStagedEntriesToWorking(aWorking, nWorking, aNew, nNew);
   rc = addComposeStageAllMaster(db,
       aWorking, nWorking, aUseWorking, aStaged, nStaged, aKeepStaged,
+      aWorkSchema, nWorkSchema, aUseWorkVtab,
+      aStagedSchema, nStagedSchema, aKeepStagedVtab,
       aNew, nNew);
   if( rc==SQLITE_OK ) rc = addWriteStagedCatalog(db, cs, aNew, nNew, pStagedOut,
       pStagedOut ? pWorkingHash : 0);
@@ -642,6 +767,8 @@ stage_all_done:
   if( workingIdxInit ) addNameIndexFree(&workingIdx);
   sqlite3_free(aUseWorking);
   sqlite3_free(aKeepStaged);
+  sqlite3_free(aUseWorkVtab);
+  sqlite3_free(aKeepStagedVtab);
   freeSchemaEntries(aWorkSchema, nWorkSchema);
   freeSchemaEntries(aStagedSchema, nStagedSchema);
   doltliteFreeCatalog(aHead, nHead);

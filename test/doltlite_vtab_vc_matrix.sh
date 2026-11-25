@@ -796,6 +796,81 @@ PRAGMA integrity_check;
 SELECT count(*) FROM dolt_status;" "$DB.headcopy" | tail -n 6)"
 rm -f "$DB.headcopy"
 
+scenario "commit -Am with dolt_ignore stages vtab schema row and respects ignored vtabs"
+newdb
+run_sql "CREATE TABLE keep(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO keep VALUES(1, 'ok');
+INSERT INTO dolt_ignore VALUES('tmp_*', 1), ('ign_vtab', 1);
+SELECT dolt_commit('-Am', 'init');
+CREATE TABLE tmp_scratch(id INTEGER PRIMARY KEY);
+INSERT INTO tmp_scratch VALUES(1);
+CREATE VIRTUAL TABLE docs USING fts5(body);
+INSERT INTO docs(rowid, body) VALUES(1, 'hello world');
+CREATE VIRTUAL TABLE ign_vtab USING fts5(body);
+INSERT INTO ign_vtab(rowid, body) VALUES(1, 'secret');
+SELECT dolt_commit('-Am', 'add docs with ignore');" "$DB" > /dev/null
+tip=$(run_sql "SELECT dolt_hashof('HEAD');" "$DB" | tr -d '[:space:]')
+check "addA_with_ignore_stages_vtab_and_skips_ignored_vtab" "1
+1|hello world
+0
+0
+ok" "$(run_sql "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='docs';
+SELECT rowid||'|'||body FROM docs WHERE docs MATCH 'hello';
+SELECT count(*) FROM sqlite_master WHERE name='tmp_scratch';
+SELECT count(*) FROM sqlite_master WHERE name='ign_vtab' OR name LIKE 'ign_vtab\_%' ESCAPE '\';
+PRAGMA integrity_check;" "$DB/$tip")"
+
+run_sql "DROP TABLE ign_vtab;
+DROP TABLE docs;
+SELECT dolt_commit('-Am', 'drop docs with ignore');" "$DB" > /dev/null
+tip=$(run_sql "SELECT dolt_hashof('HEAD');" "$DB" | tr -d '[:space:]')
+check "addA_with_ignore_drops_vtab_schema_row" "0
+ok" "$(run_sql "SELECT count(*) FROM sqlite_master WHERE name='docs' OR name LIKE 'docs\_%' ESCAPE '\';
+PRAGMA integrity_check;" "$DB/$tip")"
+
+scenario "commit -a after dropping tracked vtab removes vtab schema row"
+newdb
+run_sql "CREATE TABLE keep(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO keep VALUES(1, 'a');
+CREATE VIRTUAL TABLE docs USING fts5(body);
+INSERT INTO docs(rowid, body) VALUES(1, 'alpha');
+SELECT dolt_commit('-Am', 'init');
+DROP TABLE docs;
+SELECT dolt_commit('-a', '-m', 'drop docs');" "$DB" > /dev/null
+tip=$(run_sql "SELECT dolt_hashof('HEAD');" "$DB" | tr -d '[:space:]')
+check "commit_a_drop_vtab_removes_schema_row" "0
+ok" "$(run_sql "SELECT count(*) FROM sqlite_master WHERE name='docs' OR name LIKE 'docs\_%' ESCAPE '\';
+PRAGMA integrity_check;" "$DB/$tip")"
+
+scenario "conflicted cherry-pick adding a vtab stages vtab schema row with shadows"
+newdb
+run_sql "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1, 'base');
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('feat');
+UPDATE t SET v='main' WHERE id=1;
+SELECT dolt_commit('-Am', 'main edit');
+SELECT dolt_checkout('feat');
+UPDATE t SET v='feat' WHERE id=1;
+CREATE VIRTUAL TABLE docs USING fts5(body);
+INSERT INTO docs(rowid, body) VALUES(1, 'picked text');
+SELECT dolt_commit('-Am', 'feat edit and vtab');
+SELECT dolt_checkout('main');" "$DB" > /dev/null
+feat_tip=$(run_sql "SELECT dolt_hashof('feat');" "$DB" | tr -d '[:space:]')
+run_sql "BEGIN;
+SELECT dolt_cherry_pick('$feat_tip');
+SELECT dolt_conflicts_resolve('--ours', 't');
+SELECT dolt_commit('-m', 'resolved cherry-pick');
+COMMIT;" "$DB" > /dev/null
+tip=$(run_sql "SELECT dolt_hashof('HEAD');" "$DB" | tr -d '[:space:]')
+check "cherry_pick_conflict_commits_vtab_schema_row" "1
+1|picked text
+main
+ok" "$(run_sql "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='docs';
+SELECT rowid||'|'||body FROM docs WHERE docs MATCH 'picked';
+SELECT v FROM t WHERE id=1;
+PRAGMA integrity_check;" "$DB/$tip")"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then
