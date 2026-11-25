@@ -785,4 +785,31 @@ run_test "slice_dropped_table_still_diffs" \
 0" "$DBABS"
 rm -f "$DBABS"
 
+DBROWID=/tmp/test_diff_table_rowid_$$.db; rm -f "$DBROWID"
+dltest_run_sql "CREATE TABLE ti(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO ti VALUES(1,'a'),(2,'b'),(3,'c'),(4,'d');
+CREATE TABLE tc(k1 TEXT, k2 INT, v TEXT, PRIMARY KEY(k1, k2)) WITHOUT ROWID;
+INSERT INTO tc VALUES('a',1,'x'),('a',2,'y'),('b',1,'z'),('b',2,'w');
+SELECT dolt_commit('-Am','c1');
+UPDATE ti SET v='B' WHERE id=2;
+DELETE FROM ti WHERE id=3;
+INSERT INTO ti VALUES(5,'e'),(6,'f');
+UPDATE tc SET v='Y' WHERE k1='a' AND k2=2;
+DELETE FROM tc WHERE k1='b' AND k2=1;
+INSERT INTO tc VALUES('c',1,'u'),('c',2,'v');
+SELECT dolt_commit('-Am','c2');" "$DBROWID" >/dev/null
+run_test "rowid_distinct_intkey_all" \
+  "SELECT count(DISTINCT _rowid_), count(*) FROM dolt_diff_ti;" \
+  "8|8" "$DBROWID"
+run_test "rowid_distinct_intkey_commit_pair" \
+  "SELECT count(DISTINCT _rowid_), count(*) FROM dolt_diff_ti WHERE to_commit=(SELECT commit_hash FROM dolt_log WHERE message='c2');" \
+  "4|4" "$DBROWID"
+run_test "rowid_distinct_without_rowid_all" \
+  "SELECT count(DISTINCT _rowid_), count(*) FROM dolt_diff_tc;" \
+  "8|8" "$DBROWID"
+run_test "rowid_distinct_without_rowid_commit_pair" \
+  "SELECT count(DISTINCT _rowid_), count(*) FROM dolt_diff_tc WHERE to_commit=(SELECT commit_hash FROM dolt_log WHERE message='c2');" \
+  "4|4" "$DBROWID"
+rm -f "$DBROWID"
+
 dltest_finish
