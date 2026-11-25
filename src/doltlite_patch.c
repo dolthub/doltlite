@@ -985,14 +985,30 @@ static int patchValuesEqual(const PatchValue *a, const PatchValue *b){
   }
 }
 
+static int patchHasNullPk(
+  const PatchSchema *pSchema,
+  const u8 *pRec, int nRec,
+  i64 intKey
+){
+  int i;
+  PatchValue v;
+  for(i=0; i<pSchema->col.nCol; i++){
+    if( pSchema->aPk[i]<=0 ) continue;
+    patchGetValue(pSchema, pRec, nRec, intKey, i, &v);
+    if( v.eType==SQLITE_NULL ) return 1;
+  }
+  return 0;
+}
+
 static void patchAppendWhere(
   sqlite3_str *pStr,
   const PatchSchema *pSchema,
   const PatchSchema *pTo,
   const u8 *pRec, int nRec,
-  i64 intKey
+  i64 intKey,
+  int isIntKey
 ){
-  int i, j, nPk = 0;
+  int i, j, nPk = 0, bNullPk = 0;
   PatchValue v;
   sqlite3_str_appendall(pStr," WHERE ");
   for(i=0; i<pSchema->col.nCol; i++) if( pSchema->aPk[i]>0 ) nPk++;
@@ -1011,24 +1027,34 @@ static void patchAppendWhere(
     assert( j<pTo->col.nCol );
     patchAppendIdent(pStr,pTo->col.azName[j]);
     patchGetValue(pSchema,pRec,nRec,intKey,i,&v);
-    if( v.eType==SQLITE_NULL ) sqlite3_str_appendall(pStr," IS NULL");
-    else{
+    if( v.eType==SQLITE_NULL ){
+      sqlite3_str_appendall(pStr," IS NULL");
+      bNullPk = 1;
+    }else{
       sqlite3_str_appendchar(pStr,1,'=');
       patchAppendValue(pStr,&v);
     }
   }
+  if( bNullPk && isIntKey ){
+    const char *zRowid = patchRowidName(pTo);
+    assert( zRowid!=0 );
+    sqlite3_str_appendall(pStr," AND ");
+    patchAppendIdent(pStr,zRowid);
+    sqlite3_str_appendf(pStr,"=%lld",intKey);
+  }
 }
 
 static int patchAppendInsert(PatchCursor *pCur, const char *zTable,
-  const PatchSchema *pTo, const u8 *pRec, int nRec, i64 intKey){
+  const PatchSchema *pTo, const u8 *pRec, int nRec, i64 intKey, int isIntKey){
   sqlite3_str *pStr;
   PatchValue v;
   const char *zRowid;
   char *zSql;
-  int i, nPk = 0, rc;
-  for(i=0; i<pTo->col.nCol; i++) if( pTo->aPk[i]>0 ) nPk++;
-  zRowid = nPk==0 ? patchRowidName(pTo) : 0;
-  if( nPk==0 && !zRowid ){
+  int i, bNeedRowid, rc;
+  bNeedRowid = !patchHasPrimaryKey(pTo)
+            || (isIntKey && patchHasNullPk(pTo, pRec, nRec, intKey));
+  zRowid = bNeedRowid ? patchRowidName(pTo) : 0;
+  if( bNeedRowid && !zRowid ){
     patchSetError(pCur->base.pVtab,
       "dolt_patch: table '%s' shadows every rowid alias",zTable);
     return SQLITE_ERROR;
@@ -1059,11 +1085,13 @@ static int patchAppendInsert(PatchCursor *pCur, const char *zTable,
 
 static int patchAppendDelete(PatchCursor *pCur, const char *zTable,
   const PatchSchema *pFrom, const PatchSchema *pTo,
-  const u8 *pRec, int nRec, i64 intKey){
+  const u8 *pRec, int nRec, i64 intKey, int isIntKey){
   sqlite3_str *pStr;
   char *zSql;
   int rc;
-  if( !patchHasPrimaryKey(pTo) && !patchRowidName(pTo) ){
+  int bNeedRowid = !patchHasPrimaryKey(pTo)
+                || (isIntKey && patchHasNullPk(pFrom, pRec, nRec, intKey));
+  if( bNeedRowid && !patchRowidName(pTo) ){
     patchSetError(pCur->base.pVtab,
       "dolt_patch: table '%s' shadows every rowid alias",zTable);
     return SQLITE_ERROR;
@@ -1071,7 +1099,7 @@ static int patchAppendDelete(PatchCursor *pCur, const char *zTable,
   pStr = sqlite3_str_new(0);
   sqlite3_str_appendall(pStr,"DELETE FROM ");
   patchAppendIdent(pStr,zTable);
-  patchAppendWhere(pStr,pFrom,pTo,pRec,nRec,intKey);
+  patchAppendWhere(pStr,pFrom,pTo,pRec,nRec,intKey,isIntKey);
   zSql = sqlite3_str_finish(pStr);
   if( !zSql ) return SQLITE_NOMEM;
   rc = patchAppendRow(pCur,zTable,"data",zSql);
@@ -1081,12 +1109,15 @@ static int patchAppendDelete(PatchCursor *pCur, const char *zTable,
 
 static int patchAppendUpdate(PatchCursor *pCur, const char *zTable,
   const PatchSchema *pFrom, const PatchSchema *pTo,
-  const u8 *pOld, int nOld, const u8 *pNew, int nNew, i64 intKey){
+  const u8 *pOld, int nOld, const u8 *pNew, int nNew, i64 intKey,
+  int isIntKey){
   sqlite3_str *pStr;
   PatchValue oldV, newV;
   char *zSql;
   int i, j, nSet = 0, rc;
-  if( !patchHasPrimaryKey(pTo) && !patchRowidName(pTo) ){
+  int bNeedRowid = !patchHasPrimaryKey(pTo)
+                || (isIntKey && patchHasNullPk(pFrom, pOld, nOld, intKey));
+  if( bNeedRowid && !patchRowidName(pTo) ){
     patchSetError(pCur->base.pVtab,
       "dolt_patch: table '%s' shadows every rowid alias",zTable);
     return SQLITE_ERROR;
@@ -1112,7 +1143,7 @@ static int patchAppendUpdate(PatchCursor *pCur, const char *zTable,
     sqlite3_free(zSql);
     return rc;
   }
-  patchAppendWhere(pStr,pFrom,pTo,pOld,nOld,intKey);
+  patchAppendWhere(pStr,pFrom,pTo,pOld,nOld,intKey,isIntKey);
   zSql = sqlite3_str_finish(pStr);
   if( !zSql ) return SQLITE_NOMEM;
   rc = patchAppendRow(pCur,zTable,"data",zSql);
@@ -1133,6 +1164,9 @@ static int patchAppendChange(
   int nNew = pChange->nNewVal;
   u8 *pOldKey = 0, *pNewKey = 0;
   int nOldKey = 0, nNewKey = 0;
+  int isIntKey = ((pTable->pToTable ? pTable->pToTable->flags
+                                    : pTable->pFromTable->flags)
+                  & PROLLY_NODE_INTKEY)!=0;
   int rc;
   if( pTable->pFromSchema && nOld==0 && pChange->type!=PROLLY_DIFF_ADD ){
     rc = doltliteRecordFromClusteredKey(pFrom->db,pTable->zFromName,
@@ -1147,13 +1181,14 @@ static int patchAppendChange(
     if( pNewKey ){ pNew=pNewKey; nNew=nNewKey; }
   }
   if( pChange->type==PROLLY_DIFF_ADD ){
-    rc = patchAppendInsert(pCur,pTable->zToName,pTo,pNew,nNew,pChange->intKey);
+    rc = patchAppendInsert(pCur,pTable->zToName,pTo,pNew,nNew,pChange->intKey,
+                           isIntKey);
   }else if( pChange->type==PROLLY_DIFF_DELETE ){
     rc = patchAppendDelete(pCur,pTable->zToName,pFrom,pTo,
-                           pOld,nOld,pChange->intKey);
+                           pOld,nOld,pChange->intKey,isIntKey);
   }else{
     rc = patchAppendUpdate(pCur,pTable->zToName,pFrom,pTo,pOld,nOld,pNew,nNew,
-                           pChange->intKey);
+                           pChange->intKey,isIntKey);
   }
 done:
   sqlite3_free(pOldKey);
