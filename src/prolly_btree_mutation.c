@@ -2056,6 +2056,18 @@ int prollyBtCursorPayloadChecked(BtCursor *pCur, u32 offset, u32 amt, void *pBuf
   int nVal;
   int rc;
 
+  if( pCur->eState==CURSOR_REQUIRESEEK ){
+    int differentRow = 0;
+    rc = restoreCursorPosition(pCur, &differentRow);
+    if( rc!=SQLITE_OK ) return rc;
+    if( differentRow ){
+      pCur->eState = CURSOR_INVALID;
+      return SQLITE_ABORT;
+    }
+  }
+  if( pCur->eState==CURSOR_FAULT ){
+    return pCur->skipNext ? pCur->skipNext : SQLITE_ABORT;
+  }
   if( pCur->eState!=CURSOR_VALID ){
     return SQLITE_ABORT;
   }
@@ -2114,6 +2126,18 @@ int prollyBtCursorPutData(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
   int hasSavedIntKey = 0;
   BtreePayload payload;
 
+  if( pCur->eState==CURSOR_REQUIRESEEK ){
+    int differentRow = 0;
+    rc = restoreCursorPosition(pCur, &differentRow);
+    if( rc!=SQLITE_OK ) return rc;
+    if( differentRow ){
+      pCur->eState = CURSOR_INVALID;
+      return SQLITE_ABORT;
+    }
+  }
+  if( pCur->eState==CURSOR_FAULT ){
+    return pCur->skipNext ? pCur->skipNext : SQLITE_ABORT;
+  }
   if( pCur->eState!=CURSOR_VALID ){
     return SQLITE_ABORT;
   }
@@ -2144,7 +2168,10 @@ int prollyBtCursorPutData(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
      && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
       ProllyMutMapEntry *pEntry;
       int rcEntry = currentMutMapEntry(pCur, &pEntry);
-      if( rcEntry!=SQLITE_OK ) return rcEntry;
+      if( rcEntry!=SQLITE_OK ){
+        sqlite3_free(pNew);
+        return rcEntry;
+      }
       payload.nKey = prollyMutMapEntryIntKey(pEntry);
     }else{
       payload.nKey = prollyCursorIntKey(&pCur->pCur);

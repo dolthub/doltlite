@@ -21779,6 +21779,133 @@ static void run_push_refreshes_before_reading_refs(void){
   removeDbFiles(zRemote2);
 }
 
+static void run_incrblob_payload_putdata_requireseek(void){
+  char dbpath[512];
+  sqlite3 *db = 0;
+  Btree *pBt = 0;
+  BtCursor *pBlobCur = 0;
+  BtCursor *pOther = 0;
+  Pgno iRoot = 0;
+  BtreePayload payload;
+  static const u8 rec1[12] = { 0x02, 0x20, '0','1','2','3','4','5','6','7','8','9' };
+  static const u8 rec2[12] = { 0x02, 0x20, 'a','b','c','d','e','f','g','h','i','j' };
+  static const u8 rec3[12] = { 0x02, 0x20, 'k','l','m','n','o','p','q','r','s','t' };
+  char buf[16];
+  int nCur, rc, res = 0;
+  const char *zSavedDrain = getenv("DOLTLITE_MUTMAP_DRAIN_BYTES");
+  char savedDrainBuf[64];
+  int hadSavedDrain = 0;
+
+  printf("=== Incrblob PayloadChecked/PutData RequireSeek Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_incrblob_requireseek_c");
+  removeDbFiles(dbpath);
+  check("ib_reqseek_open", open_db(dbpath, &db)==SQLITE_OK);
+  check("ib_reqseek_begin",
+        execSql(db, "BEGIN; CREATE TABLE _lock(id INTEGER PRIMARY KEY);")
+        ==SQLITE_OK);
+
+  pBt = db->aDb[0].pBt;
+  check("ib_reqseek_btree", pBt!=0 && sqlite3BtreeIsDoltliteFormat(pBt));
+  sqlite3BtreeEnter(pBt);
+  nCur = sqlite3BtreeCursorSize();
+  pBlobCur = sqlite3_malloc(nCur);
+  pOther = sqlite3_malloc(nCur);
+  check("ib_reqseek_alloc", pBlobCur!=0 && pOther!=0);
+  if( !pBlobCur || !pOther ){
+    sqlite3_free(pBlobCur);
+    sqlite3_free(pOther);
+    sqlite3BtreeLeave(pBt);
+    sqlite3_close(db);
+    removeDbFiles(dbpath);
+    return;
+  }
+  sqlite3BtreeCursorZero(pBlobCur);
+  sqlite3BtreeCursorZero(pOther);
+
+  rc = sqlite3BtreeCreateTable(pBt, &iRoot, BTREE_INTKEY);
+  check("ib_reqseek_create", rc==SQLITE_OK && iRoot>0);
+  rc = sqlite3BtreeCursor(pBt, iRoot, BTREE_WRCSR, 0, pBlobCur);
+  check("ib_reqseek_open_blob", rc==SQLITE_OK);
+  sqlite3BtreeIncrblobCursor(pBlobCur);
+  rc = sqlite3BtreeCursor(pBt, iRoot, BTREE_WRCSR, 0, pOther);
+  check("ib_reqseek_open_other", rc==SQLITE_OK);
+
+  memset(&payload, 0, sizeof(payload));
+  payload.nKey = 1;
+  payload.pData = rec1;
+  payload.nData = (int)sizeof(rec1);
+  rc = sqlite3BtreeInsert(pOther, &payload, 0, 0);
+  check("ib_reqseek_ins1", rc==SQLITE_OK);
+
+  rc = sqlite3BtreeTableMoveto(pBlobCur, 1, 0, &res);
+  check("ib_reqseek_seek1", rc==SQLITE_OK && res==0);
+
+  payload.nKey = 2;
+  payload.pData = rec2;
+  payload.nData = (int)sizeof(rec2);
+  rc = sqlite3BtreeInsert(pOther, &payload, 0, 0);
+  check("ib_reqseek_ins2", rc==SQLITE_OK);
+  check("ib_reqseek_moved_after_ins2", sqlite3BtreeCursorHasMoved(pBlobCur)!=0);
+
+  memset(buf, 0, sizeof(buf));
+  rc = sqlite3BtreePayloadChecked(pBlobCur, 2, 10, buf);
+  check("ib_reqseek_payload_ok", rc==SQLITE_OK);
+  check("ib_reqseek_payload_val", memcmp(buf, "0123456789", 10)==0);
+
+  payload.nKey = 3;
+  payload.pData = rec3;
+  payload.nData = (int)sizeof(rec3);
+  rc = sqlite3BtreeInsert(pOther, &payload, 0, 0);
+  check("ib_reqseek_ins3", rc==SQLITE_OK);
+  check("ib_reqseek_moved_after_ins3", sqlite3BtreeCursorHasMoved(pBlobCur)!=0);
+
+  rc = sqlite3BtreePutData(pBlobCur, 4, 4, (void*)"WXYZ");
+  check("ib_reqseek_putdata_ok", rc==SQLITE_OK);
+  memset(buf, 0, sizeof(buf));
+  rc = sqlite3BtreePayloadChecked(pBlobCur, 2, 10, buf);
+  check("ib_reqseek_readback_ok", rc==SQLITE_OK);
+  check("ib_reqseek_readback_val", memcmp(buf, "01WXYZ6789", 10)==0);
+
+  if( zSavedDrain ){
+    snprintf(savedDrainBuf, sizeof(savedDrainBuf), "%s", zSavedDrain);
+    hadSavedDrain = 1;
+  }
+  setenv("DOLTLITE_MUTMAP_DRAIN_BYTES", "1", 1);
+
+  rc = sqlite3BtreePutData(pBlobCur, 2, 2, (void*)"AA");
+  check("ib_reqseek_drain_put1", rc==SQLITE_OK);
+  rc = sqlite3BtreePutData(pBlobCur, 10, 2, (void*)"ZZ");
+  check("ib_reqseek_drain_put2", rc==SQLITE_OK);
+  memset(buf, 0, sizeof(buf));
+  rc = sqlite3BtreePayloadChecked(pBlobCur, 2, 10, buf);
+  check("ib_reqseek_drain_read_ok", rc==SQLITE_OK);
+  check("ib_reqseek_drain_read_val", memcmp(buf, "AAWXYZ67ZZ", 10)==0);
+
+  if( hadSavedDrain ){
+    setenv("DOLTLITE_MUTMAP_DRAIN_BYTES", savedDrainBuf, 1);
+  }else{
+    unsetenv("DOLTLITE_MUTMAP_DRAIN_BYTES");
+  }
+
+  rc = sqlite3BtreeTableMoveto(pOther, 1, 0, &res);
+  check("ib_reqseek_seek_del1", rc==SQLITE_OK && res==0);
+  rc = sqlite3BtreeDelete(pOther, 0);
+  check("ib_reqseek_del1", rc==SQLITE_OK);
+  check("ib_reqseek_payload_after_del",
+        sqlite3BtreePayloadChecked(pBlobCur, 2, 4, buf)==SQLITE_ABORT);
+  check("ib_reqseek_putdata_after_del",
+        sqlite3BtreePutData(pBlobCur, 2, 4, (void*)"BBBB")==SQLITE_ABORT);
+
+  sqlite3BtreeCloseCursor(pBlobCur);
+  sqlite3BtreeCloseCursor(pOther);
+  sqlite3BtreeLeave(pBt);
+  sqlite3_free(pBlobCur);
+  sqlite3_free(pOther);
+  execSqlSilent(db, "ROLLBACK;");
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -22074,7 +22201,8 @@ static const RegressionCase aCases[] = {
   { "compacted_noop_commit", "Compacted No-op Commit Test", run_compacted_noop_commit },
   { "opfs_like_vfs", "OPFS-like VFS File Database Test", run_opfs_like_vfs },
   { "opfs_large_transaction", "OPFS Large Transaction Test", run_opfs_large_transaction },
-  { "push_refreshes_before_reading_refs", "Push Refreshes Before Reading Refs Test", run_push_refreshes_before_reading_refs }
+  { "push_refreshes_before_reading_refs", "Push Refreshes Before Reading Refs Test", run_push_refreshes_before_reading_refs },
+  { "incrblob_payload_putdata_requireseek", "Incrblob PayloadChecked/PutData RequireSeek Test", run_incrblob_payload_putdata_requireseek }
 };
 
 static int run_case_by_name(const char *zName){
