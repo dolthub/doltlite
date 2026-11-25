@@ -2319,4 +2319,83 @@ else
 fi
 rm -f "$DBRB_EDIT"
 
+# Non-interactive rebase must reject when another rebase is already active,
+# both on the working branch and on the mirrored default branch, preserving
+# the active rebase state for --continue and --abort.
+DBRB_ACT=/tmp/test_rebase_active_linear_$$.db
+rm -f "$DBRB_ACT"
+"$DOLTLITE" "$DBRB_ACT" >/dev/null <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+SELECT dolt_checkout('-b', 'other');
+INSERT INTO t VALUES (100, 100);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'o1');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b', 'feat');
+INSERT INTO t VALUES (2, 2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (10, 10);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm1');
+SELECT dolt_checkout('feat');
+SELECT dolt_rebase('-i', 'main');
+SQL
+run_test_error_match "linear_rebase_rejected_on_mirrored_default_branch" \
+  "SELECT dolt_rebase('other');" \
+  "rebase already in progress; use --continue or --abort" \
+  "$DBRB_ACT"
+run_test "linear_rebase_rejected_preserves_continue" \
+  "SELECT dolt_rebase('--continue');
+   SELECT active_branch();
+   SELECT group_concat(id || '=' || v, ',') FROM (SELECT id, v FROM t ORDER BY id);" \
+  "Successfully rebased and updated refs/heads/feat
+feat
+1=1,2=2,10=10" \
+  "$DBRB_ACT"
+run_test "linear_rebase_rejected_preserves_main_branch" \
+  "SELECT dolt_checkout('main');
+   SELECT group_concat(id || '=' || v, ',') FROM (SELECT id, v FROM t ORDER BY id);" \
+  "0
+1=1,10=10" \
+  "$DBRB_ACT"
+rm -f "$DBRB_ACT"
+
+DBRB_ACT2=/tmp/test_rebase_active_same_session_$$.db
+seed_two_conflict_repo "$DBRB_ACT2"
+RB_ACT2_OUT=$(echo "SELECT dolt_checkout('feat');
+SELECT dolt_rebase('-i', 'main');
+SELECT dolt_rebase('main');
+SELECT 'BR|' || active_branch();
+SELECT dolt_rebase('--abort');
+SELECT 'AFTER_ABORT|' || active_branch();" | "$DOLTLITE" "$DBRB_ACT2" 2>&1)
+if echo "$RB_ACT2_OUT" | grep -q 'rebase already in progress; use --continue or --abort' \
+   && echo "$RB_ACT2_OUT" | grep -q '^BR|dolt_rebase_feat$' \
+   && echo "$RB_ACT2_OUT" | grep -q 'Interactive rebase aborted' \
+   && echo "$RB_ACT2_OUT" | grep -q '^AFTER_ABORT|feat$'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_rejected_same_session_interactive\n  full: $RB_ACT2_OUT"
+fi
+rm -f "$DBRB_ACT2"
+
+DBRB_ACT3=/tmp/test_rebase_active_conflict_pause_$$.db
+seed_two_conflict_repo "$DBRB_ACT3"
+RB_ACT3_OUT=$(echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('main');
+SELECT dolt_rebase('main');
+SELECT dolt_rebase('--abort');
+SELECT 'AFTER_ABORT|' || active_branch();" | "$DOLTLITE" "$DBRB_ACT3" 2>&1)
+if echo "$RB_ACT3_OUT" | grep -q 'rebase already in progress; use --continue or --abort' \
+   && echo "$RB_ACT3_OUT" | grep -q 'Interactive rebase aborted' \
+   && echo "$RB_ACT3_OUT" | grep -q '^AFTER_ABORT|feat$'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: linear_rebase_rejected_during_conflict_pause\n  full: $RB_ACT3_OUT"
+fi
+rm -f "$DBRB_ACT3"
+
 dltest_finish
