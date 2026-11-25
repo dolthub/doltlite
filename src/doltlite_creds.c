@@ -1564,7 +1564,7 @@ int doltliteCredsResolve(
     }
     sqlite3_free(path);
     sqlite3_free(ownedDir);
-    if (url) {
+    if (url && strstr(url, "://")) {
       key = doltliteCredsRemoteKey(url);
       if (!key) goto oom;
       for (setting = settings; setting; setting = setting->next) {
@@ -1618,6 +1618,12 @@ int doltliteCredsResolve(
   }
   goto done;
 oom:
+  doltliteCredsFree(*out);
+  *out = NULL;
+  if (source) {
+    sqlite3_free(*source);
+    *source = NULL;
+  }
   sqlite3_free(*error);
   *error = dlStrDup("out of memory resolving credentials");
   rc = DOLTLITE_CREDS_ERROR;
