@@ -921,6 +921,47 @@ int sortKeyHasWideNumericDesc(const u8 *pKey, int nKey, int *pHas){
   return SQLITE_OK;
 }
 
+int sortKeyInfoHasAscBeforeDesc(const KeyInfo *pKeyInfo, int nField){
+  int i;
+  if( !pKeyInfo || !pKeyInfo->aSortFlags ) return 0;
+  if( nField > pKeyInfo->nAllField ) nField = pKeyInfo->nAllField;
+  for(i=0; i<nField && i+1<pKeyInfo->nAllField; i++){
+    if( !(pKeyInfo->aSortFlags[i] & KEYINFO_ORDER_DESC)
+     && (pKeyInfo->aSortFlags[i+1] & KEYINFO_ORDER_DESC) ){
+      return 1;
+    }
+  }
+  return 0;
+}
+
+int sortKeyUnpackedHasWideNumericDesc(
+  const KeyInfo *pKeyInfo,
+  const UnpackedRecord *pIdxKey
+){
+  int i;
+  int nField;
+  if( !pKeyInfo || !pKeyInfo->aSortFlags || !pIdxKey ) return 0;
+  nField = pIdxKey->nField < pKeyInfo->nAllField
+    ? pIdxKey->nField : pKeyInfo->nAllField;
+  for(i=0; i<nField && i+1<pKeyInfo->nAllField; i++){
+    const Mem *pMem;
+    if( (pKeyInfo->aSortFlags[i] & KEYINFO_ORDER_DESC)
+     || !(pKeyInfo->aSortFlags[i+1] & KEYINFO_ORDER_DESC) ){
+      continue;
+    }
+    pMem = &pIdxKey->aMem[i];
+    if( pMem->flags & (MEM_Int|MEM_IntReal) ){
+      if( pMem->u.i>=9007199254740992LL || pMem->u.i<=-9007199254740992LL ){
+        return 1;
+      }
+    }else if( (pMem->flags & MEM_Real)
+           && (pMem->u.r>=9007199254740992.0 || pMem->u.r<=-9007199254740992.0) ){
+      return 1;
+    }
+  }
+  return 0;
+}
+
 /* A record serial type of the field's class: enough for OP_IsType, which
 ** only asks NULL / integer / real / text / blob of the header cache. */
 static u32 sortKeyFieldSerialClass(const SortKeyField *pField){

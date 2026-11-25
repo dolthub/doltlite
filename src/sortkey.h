@@ -116,5 +116,7 @@ int sortKeyFieldOffset(
   const u8 *pSortKey, int nSortKey, const KeyInfo *pKeyInfo, int iField
 );
 int sortKeyHasWideNumericDesc(const u8*, int, int*);
+int sortKeyInfoHasAscBeforeDesc(const KeyInfo*, int);
+int sortKeyUnpackedHasWideNumericDesc(const KeyInfo*, const UnpackedRecord*);
 
 #endif

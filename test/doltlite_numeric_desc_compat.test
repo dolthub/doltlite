@@ -160,4 +160,109 @@ foreach phase {pending reopened} {
   } {ok}
 }
 
+reset_db
+do_execsql_test numeric-desc-compat-cached-idx-cmp-setup {
+  CREATE TABLE t_idx(id INTEGER PRIMARY KEY, a INTEGER, b INTEGER);
+  CREATE INDEX idx_ab ON t_idx(a ASC, b DESC);
+  INSERT INTO t_idx VALUES (1, -100, 1), (2, 1, 1);
+} {}
+
+do_test numeric-desc-compat-cached-idx-cmp-wide-pos {
+  set s_le [sqlite3_prepare_v2 db {
+    SELECT a, b FROM t_idx INDEXED BY idx_ab
+    WHERE a >= 1 AND a <= 9007199254740993
+  } -1 TAIL]
+  set r0 [sqlite3_step $s_le]
+  set first [list [sqlite3_column_int64 $s_le 0] [sqlite3_column_int64 $s_le 1]]
+  db eval {
+    INSERT INTO t_idx VALUES
+      (3, 9007199254740992, 10),
+      (4, 9007199254740993, 20),
+      (5, 9007199254740994, 30);
+  }
+  set rows [list $first]
+  while {[sqlite3_step $s_le] eq "SQLITE_ROW"} {
+    lappend rows [list [sqlite3_column_int64 $s_le 0] [sqlite3_column_int64 $s_le 1]]
+  }
+  sqlite3_finalize $s_le
+  list $r0 [lsort -integer -index 0 $rows]
+} {SQLITE_ROW {{1 1} {9007199254740992 10} {9007199254740993 20}}}
+
+do_test numeric-desc-compat-cached-idx-cmp-wide-neg {
+  db eval {DELETE FROM t_idx WHERE id > 2}
+  set s_neg [sqlite3_prepare_v2 db {
+    SELECT a, b FROM t_idx INDEXED BY idx_ab
+    WHERE a <= 1 AND a >= -9007199254740994
+    ORDER BY a DESC, b ASC
+  } -1 TAIL]
+  set r0 [sqlite3_step $s_neg]
+  set first [list [sqlite3_column_int64 $s_neg 0] [sqlite3_column_int64 $s_neg 1]]
+  db eval {
+    INSERT INTO t_idx VALUES
+      (6, -9007199254740994, 40),
+      (7, -9007199254740993, 50),
+      (8, -9007199254740992, 60);
+  }
+  set rows [list $first]
+  while {[sqlite3_step $s_neg] eq "SQLITE_ROW"} {
+    lappend rows [list [sqlite3_column_int64 $s_neg 0] [sqlite3_column_int64 $s_neg 1]]
+  }
+  sqlite3_finalize $s_neg
+  list $r0 [lsort -integer -index 0 $rows]
+} {SQLITE_ROW {{-9007199254740994 40} {-9007199254740993 50} {-9007199254740992 60} {-100 1} {1 1}}}
+
+do_test numeric-desc-compat-cached-idx-cmp-wide-neg-fwd {
+  db eval {DELETE FROM t_idx WHERE id > 2}
+  set s_neg_fwd [sqlite3_prepare_v2 db {
+    SELECT a, b FROM t_idx INDEXED BY idx_ab
+    WHERE a >= -100000000000000000 AND a <= -9007199254740993
+  } -1 TAIL]
+  db eval {
+    INSERT INTO t_idx VALUES
+      (10, -100000000000000000, 1),
+      (11, -9007199254740994, 40),
+      (12, -9007199254740993, 50),
+      (13, -9007199254740992, 60);
+  }
+  set rows {}
+  while {[sqlite3_step $s_neg_fwd] eq "SQLITE_ROW"} {
+    lappend rows [list [sqlite3_column_int64 $s_neg_fwd 0] [sqlite3_column_int64 $s_neg_fwd 1]]
+  }
+  sqlite3_finalize $s_neg_fwd
+  lsort -integer -index 0 $rows
+} {{-100000000000000000 1} {-9007199254740994 40} {-9007199254740993 50}}
+
+do_execsql_test numeric-desc-compat-cached-idx-cmp-queries {
+  DELETE FROM t_idx;
+  INSERT INTO t_idx VALUES
+    (1, -9007199254740993, 40),
+    (2, -9007199254740992, 30),
+    (3, 9007199254740992, 10),
+    (4, 9007199254740993, 20);
+  SELECT a, b FROM t_idx INDEXED BY idx_ab
+    WHERE a >= 9007199254740992 AND a <= 9007199254740993 ORDER BY a;
+  SELECT a, b FROM t_idx INDEXED BY idx_ab
+    WHERE a < 9007199254740993 ORDER BY a;
+  SELECT a, b FROM t_idx INDEXED BY idx_ab
+    WHERE a > 9007199254740992 ORDER BY a;
+  SELECT a, b FROM t_idx INDEXED BY idx_ab
+    WHERE a >= -9007199254740993 AND a <= -9007199254740992 ORDER BY a;
+} {9007199254740992 10 9007199254740993 20 -9007199254740993 40 -9007199254740992 30 9007199254740992 10 9007199254740993 20 -9007199254740993 40 -9007199254740992 30}
+
+do_test numeric-desc-compat-cached-idx-cmp-custom-rev {
+  proc rev_coll {a b} { string compare $b $a }
+  db collate rev rev_coll
+  db eval {
+    CREATE TEMP TABLE t_rev(id INTEGER PRIMARY KEY, k TEXT COLLATE rev);
+    CREATE INDEX idx_rev ON t_rev(k COLLATE rev);
+    INSERT INTO t_rev VALUES (1,'a'),(2,'b'),(3,'c'),(4,'d');
+  }
+  list \
+    [db eval {SELECT k FROM t_rev INDEXED BY idx_rev WHERE k BETWEEN 'd' AND 'b' ORDER BY k}] \
+    [db eval {SELECT k FROM t_rev INDEXED BY idx_rev WHERE k < 'b' ORDER BY k}] \
+    [db eval {SELECT k FROM t_rev INDEXED BY idx_rev WHERE k <= 'b' ORDER BY k}] \
+    [db eval {SELECT k FROM t_rev INDEXED BY idx_rev WHERE k > 'c' ORDER BY k}] \
+    [db eval {SELECT k FROM t_rev INDEXED BY idx_rev WHERE k >= 'c' ORDER BY k}]
+} {{d c b} {d c} {d c b} {b a} {c b a}}
+
 finish_test

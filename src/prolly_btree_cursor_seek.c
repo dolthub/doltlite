@@ -627,23 +627,6 @@ static int indexMovetoEqDeleted(
   return SQLITE_OK;
 }
 
-static int unpackedRecordHasWideNumericDescPrefix(
-  const KeyInfo *pKeyInfo,
-  const UnpackedRecord *pIdxKey
-){
-  int i = pIdxKey->nField - 1;
-  const Mem *pMem;
-  if( i<0 || i+1>=pKeyInfo->nAllField || !pKeyInfo->aSortFlags
-   || (pKeyInfo->aSortFlags[i] & KEYINFO_ORDER_DESC)
-   || !(pKeyInfo->aSortFlags[i+1] & KEYINFO_ORDER_DESC) ) return 0;
-  pMem = &pIdxKey->aMem[i];
-  if( pMem->flags & (MEM_Int|MEM_IntReal) ){
-    return pMem->u.i>=9007199254740992LL || pMem->u.i<=-9007199254740992LL;
-  }
-  return (pMem->flags & MEM_Real)
-      && (pMem->u.r>=9007199254740992.0 || pMem->u.r<=-9007199254740992.0);
-}
-
 static int indexMovetoCustomCollation(
   BtCursor *pCur,
   UnpackedRecord *pIdxKey,
@@ -669,7 +652,7 @@ static int indexMovetoCustomCollation(
   ** bytes after a NUL, so an equality seek has to compare the records. */
   hasNocaseNul = unpackedRecordHasNocaseNul(pCur->pKeyInfo, pIdxKey);
   if( !hasNocaseNul
-   && !unpackedRecordHasWideNumericDescPrefix(pCur->pKeyInfo, pIdxKey)
+   && !sortKeyUnpackedHasWideNumericDesc(pCur->pKeyInfo, pIdxKey)
    && (!(exactMutMapKey || pIdxKey->nField >= pCur->pKeyInfo->nAllField)
        || !keyInfoHasUnsupportedCollation(
             pCur->pKeyInfo,
@@ -1726,6 +1709,7 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
 ){
   const u8 *pKey = 0;
   int nKey = 0;
+  int bAscBeforeDesc = 0;
 
   if( !pCur || pCur->pCurOps!=&prollyCursorOps || pCur->curIntKey ){
     return SQLITE_NOTFOUND;
@@ -1733,10 +1717,19 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
   if( pCur->eState!=CURSOR_VALID || !pIdxKey || !pCur->pKeyInfo ){
     return SQLITE_NOTFOUND;
   }
-  /* Sort keys disagree with NOCASE once a probe contains a NUL. */
-  if( !bStorageOrder
-   && unpackedRecordHasNocaseNul(pCur->pKeyInfo, pIdxKey) ){
-    return SQLITE_NOTFOUND;
+  /* Sort keys disagree with SQL order on custom collations, NOCASE NULs,
+  ** and ASC wide numerics preceding a DESC column. */
+  if( !bStorageOrder ){
+    if( keyInfoHasUnsupportedCollation(pCur->pKeyInfo, (int)pIdxKey->nField)
+     || unpackedRecordHasNocaseNul(pCur->pKeyInfo, pIdxKey) ){
+      return SQLITE_NOTFOUND;
+    }
+    bAscBeforeDesc = sortKeyInfoHasAscBeforeDesc(pCur->pKeyInfo,
+                                                 (int)pIdxKey->nField);
+    if( bAscBeforeDesc
+     && sortKeyUnpackedHasWideNumericDesc(pCur->pKeyInfo, pIdxKey) ){
+      return SQLITE_NOTFOUND;
+    }
   }
   /* A table root's key holds only the primary key. A probe that also bounds
   ** a non-key column compares past it, against the record. */
@@ -1757,6 +1750,13 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
     prollyCursorKey(&pCur->pCur, &pKey, &nKey);
   }else{
     return SQLITE_NOTFOUND;
+  }
+
+  if( bAscBeforeDesc ){
+    int hasWideDesc = 0;
+    int rc = sortKeyHasWideNumericDesc(pKey, nKey, &hasWideDesc);
+    if( rc!=SQLITE_OK ) return rc;
+    if( hasWideDesc ) return SQLITE_NOTFOUND;
   }
 
   if( prollyBtCursorCursorHasHint(pCur, BTREE_SEEK_EQ)
