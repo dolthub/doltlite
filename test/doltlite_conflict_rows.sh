@@ -201,4 +201,25 @@ SELECT 'BA|' || (SELECT count(*) FROM dolt_conflicts) || '|' || count(*) || '|' 
 dltest_assert_equal "bulk_delete_file_stays_small" "$(( $(wc -c < "$DB") < 10000000 ))" "1"
 rm -f "$DB"
 
+DB=/tmp/test_cfrow_cv_wor_pk_$$.db
+rm -f "$DB"
+echo "CREATE TABLE p(k INT PRIMARY KEY);
+CREATE TABLE c(k INT PRIMARY KEY, FOREIGN KEY(k) REFERENCES p(k)) WITHOUT ROWID;
+INSERT INTO c VALUES(1);
+SELECT dolt_commit('-Am','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "cv_without_rowid_pk_rowid_stable" "BEGIN;
+SELECT dolt_verify_constraints('--all');
+CREATE TEMP TABLE r1 AS SELECT rowid AS rid, k FROM dolt_constraint_violations_c;
+CREATE TEMP TABLE r2 AS SELECT k, rowid AS rid FROM dolt_constraint_violations_c;
+SELECT r1.rid = r2.rid FROM r1 JOIN r2 USING(k);
+ROLLBACK;" "1
+1" "$DB"
+run_test "cv_without_rowid_pk_delete_where" "BEGIN;
+SELECT dolt_verify_constraints('--all');
+DELETE FROM dolt_constraint_violations_c WHERE k = 1;
+SELECT count(*) FROM dolt_constraint_violations_c;
+COMMIT;" "1
+0" "$DB"
+rm -f "$DB"
+
 dltest_finish

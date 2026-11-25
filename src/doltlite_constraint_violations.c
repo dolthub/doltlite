@@ -742,13 +742,18 @@ static int cvrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     sqlite3_result_text(ctx, violationTypeName(r->violationType), -1, SQLITE_STATIC);
   }else if( col >= 1 && col <= nUserCols ){
     if( r->nVal==0 && r->nKey>0 ){
-      /* PK-only clustered rows store an empty value; rebuild from the key. */
+      /* PK-only clustered rows store an empty value; decode into a local copy
+      ** so cvrRowid's hash over r->pVal stays invariant. */
       u8 *pRec = 0; int nRec = 0;
       if( doltliteRecordFromClusteredKey(v->db, v->zTableName,
               r->pKey, r->nKey, &pRec, &nRec)==SQLITE_OK && pRec ){
-        sqlite3_free(r->pVal);
-        r->pVal = pRec;
-        r->nVal = nRec;
+        ConstraintViolationRow tmp = *r;
+        int rc;
+        tmp.pVal = pRec;
+        tmp.nVal = nRec;
+        rc = cvrResultUserCol(v, ctx, &tmp, col - 1);
+        sqlite3_free(pRec);
+        return rc;
       }
     }
     return cvrResultUserCol(v, ctx, r, col - 1);
