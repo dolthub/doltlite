@@ -1,0 +1,81 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_table_moveto_stale_root
+
+do_execsql_test 1.0 {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+  CREATE TABLE probes(ord INTEGER PRIMARY KEY, k INTEGER);
+  INSERT INTO probes VALUES (1, 5), (2, 100), (3, 1), (4, 50);
+}
+
+# Cursor on t opens while t's tree root is empty. After the first probe,
+# row 100 is flushed into t's tree root and row 1 is inserted into the
+# append-sorted pending map. Seeking 100 (> 1) on the still-open cursor
+# must not treat t's tree root as empty.
+do_test 1.1 {
+  execsql {
+    BEGIN;
+    INSERT INTO t VALUES (100, 'hundred');
+  }
+  set res {}
+  set flushed 0
+  db eval {
+    SELECT p.k, t.v
+      FROM probes p LEFT JOIN t ON t.id = p.k
+     ORDER BY p.ord
+  } {
+    lappend res $k $v
+    if {!$flushed} {
+      set flushed 1
+      execsql {
+        SELECT count(*) FROM t;
+        INSERT INTO t VALUES (1, 'one');
+      }
+    }
+  }
+  execsql COMMIT
+  set res
+} {5 {} 100 hundred 1 one 50 {}}
+
+do_execsql_test 1.2 {
+  SELECT id, v FROM t ORDER BY id;
+  PRAGMA integrity_check;
+} {1 one 100 hundred ok}
+
+do_test 2.1 {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    CREATE TABLE probes(ord INTEGER PRIMARY KEY, k INTEGER);
+    INSERT INTO probes VALUES
+      (1, 50), (2, 100), (3, 200), (4, 300),
+      (5, 1), (6, 2), (7, 3), (8, 400);
+    BEGIN;
+    INSERT INTO t VALUES (100, 'a'), (200, 'b'), (300, 'c');
+  }
+  set res {}
+  set flushed 0
+  db eval {
+    SELECT p.k, t.v
+      FROM probes p LEFT JOIN t ON t.id = p.k
+     ORDER BY p.ord
+  } {
+    lappend res $k $v
+    if {!$flushed} {
+      set flushed 1
+      execsql {
+        SELECT count(*) FROM t;
+        INSERT INTO t VALUES (1, 'x'), (2, 'y'), (3, 'z');
+      }
+    }
+  }
+  execsql COMMIT
+  set res
+} {50 {} 100 a 200 b 300 c 1 x 2 y 3 z 400 {}}
+
+do_execsql_test 2.2 {
+  SELECT id, v FROM t ORDER BY id;
+  PRAGMA integrity_check;
+} {1 x 2 y 3 z 100 a 200 b 300 c ok}
+
+finish_test

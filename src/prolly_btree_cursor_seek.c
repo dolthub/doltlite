@@ -80,7 +80,9 @@ int prollyBtCursorTableMoveto(
     && pCur->pBtree->db
     && !pCur->pBtree->db->autoCommit
     && pCur->pBtree->db->pSavepoint==0;
-  rootIsEmpty = prollyHashIsEmpty(&pCur->pCur.root);
+  rootIsEmpty = pTE
+    ? prollyHashIsEmpty(&pTE->root)
+    : prollyHashIsEmpty(&pCur->pCur.root);
   if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
     ProllyMutMapEntry *pEntry = 0;
     if( rootIsEmpty
