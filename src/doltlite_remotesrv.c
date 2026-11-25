@@ -1480,6 +1480,42 @@ static void remoteDbRelease(DoltliteServer *pSrv, RemoteDbHandle *h){
   pthread_mutex_unlock(&pSrv->mutex);
 }
 
+enum RemoteSrvRoute {
+  REMOTE_ROUTE_BAD_METHOD = 0,
+  REMOTE_ROUTE_NOT_FOUND,
+  REMOTE_ROUTE_GET_ROOT,
+  REMOTE_ROUTE_GET_CHUNK,
+  REMOTE_ROUTE_GET_REFS,
+  REMOTE_ROUTE_POST_HAS_CHUNKS,
+  REMOTE_ROUTE_POST_GET_CHUNKS,
+  REMOTE_ROUTE_POST_CHUNKS,
+  REMOTE_ROUTE_POST_COMMIT,
+  REMOTE_ROUTE_PUT_REFS,
+  REMOTE_ROUTE_PUT_REFS_IF
+};
+
+static int classifyRemoteRoute(const char *zMethod, const char *zEndpoint){
+  if( strcmp(zMethod, "GET")==0 ){
+    if( strcmp(zEndpoint, "root")==0 ) return REMOTE_ROUTE_GET_ROOT;
+    if( strncmp(zEndpoint, "chunk/", 6)==0 ) return REMOTE_ROUTE_GET_CHUNK;
+    if( strcmp(zEndpoint, "refs")==0 ) return REMOTE_ROUTE_GET_REFS;
+    return REMOTE_ROUTE_NOT_FOUND;
+  }
+  if( strcmp(zMethod, "POST")==0 ){
+    if( strcmp(zEndpoint, "has-chunks")==0 ) return REMOTE_ROUTE_POST_HAS_CHUNKS;
+    if( strcmp(zEndpoint, "get-chunks")==0 ) return REMOTE_ROUTE_POST_GET_CHUNKS;
+    if( strcmp(zEndpoint, "chunks")==0 ) return REMOTE_ROUTE_POST_CHUNKS;
+    if( strcmp(zEndpoint, "commit")==0 ) return REMOTE_ROUTE_POST_COMMIT;
+    return REMOTE_ROUTE_NOT_FOUND;
+  }
+  if( strcmp(zMethod, "PUT")==0 ){
+    if( strcmp(zEndpoint, "refs")==0 ) return REMOTE_ROUTE_PUT_REFS;
+    if( strcmp(zEndpoint, "refs-if")==0 ) return REMOTE_ROUTE_PUT_REFS_IF;
+    return REMOTE_ROUTE_NOT_FOUND;
+  }
+  return REMOTE_ROUTE_BAD_METHOD;
+}
+
 static void handleRequest(
   DoltliteServer *pSrv,
   DoltliteConn *fd,
@@ -1498,9 +1534,9 @@ static void handleRequest(
   RemoteDbHandle *pHandle = 0;
   char zDbPath[1024];
   int rc;
+  int route;
   int isReadOnlyEndpoint = 0;
   int isHasChunksEndpoint = 0;
-  int isGetChunksEndpoint = 0;
   int exists = 0;
   int contentLength = 0;
   int contentRc = 0;
@@ -1538,13 +1574,23 @@ static void handleRequest(
     return;
   }
 
+  route = classifyRemoteRoute(zMethod, zEndpoint);
+  if( route==REMOTE_ROUTE_BAD_METHOD ){
+    sendBadRequest(fd);
+    return;
+  }
+  if( route==REMOTE_ROUTE_NOT_FOUND ){
+    sendNotFound(fd);
+    return;
+  }
+
   sqlite3_snprintf(sizeof(zDbPath), zDbPath, "%s/%s", pSrv->zDir, zDbName);
-  isHasChunksEndpoint = strcmp(zMethod, "POST")==0
-                     && strcmp(zEndpoint, "has-chunks")==0;
-  isGetChunksEndpoint = strcmp(zMethod, "POST")==0
-                     && strcmp(zEndpoint, "get-chunks")==0;
-  isReadOnlyEndpoint = strcmp(zMethod, "GET")==0
-                     || isHasChunksEndpoint || isGetChunksEndpoint;
+  isHasChunksEndpoint = (route==REMOTE_ROUTE_POST_HAS_CHUNKS);
+  isReadOnlyEndpoint = (route==REMOTE_ROUTE_GET_ROOT
+                     || route==REMOTE_ROUTE_GET_CHUNK
+                     || route==REMOTE_ROUTE_GET_REFS
+                     || route==REMOTE_ROUTE_POST_HAS_CHUNKS
+                     || route==REMOTE_ROUTE_POST_GET_CHUNKS);
   pVfs = sqlite3_vfs_find(0);
   rc = pVfs->xAccess(pVfs, zDbPath, SQLITE_ACCESS_EXISTS, &exists);
   if( rc!=SQLITE_OK ){
@@ -1560,7 +1606,8 @@ static void handleRequest(
     return;
   }
 
-  if( pSrv->zPreReceive && strcmp(zMethod, "PUT")==0 ){
+  if( pSrv->zPreReceive
+   && (route==REMOTE_ROUTE_PUT_REFS || route==REMOTE_ROUTE_PUT_REFS_IF) ){
     /* The hook is told which key pushed. The accept thread only kept the
     ** verdict, so the token is read again for its key id. */
     if( pSrv->authKeysDir
@@ -1594,38 +1641,37 @@ static void handleRequest(
   memset(&pending, 0, sizeof(pending));
   remotesrvPending = &pending;
 
-  if( strcmp(zMethod, "GET")==0 ){
-    if( strcmp(zEndpoint, "root")==0 ){
+  switch( route ){
+    case REMOTE_ROUTE_GET_ROOT:
       handleGetRoot(pStore, fd);
-    }else if( strncmp(zEndpoint, "chunk/", 6)==0 ){
+      break;
+    case REMOTE_ROUTE_GET_CHUNK:
       handleGetChunk(pStore, fd, zEndpoint + 6);
-    }else if( strcmp(zEndpoint, "refs")==0 ){
+      break;
+    case REMOTE_ROUTE_GET_REFS:
       handleGetRefs(pStore, fd);
-    }else{
-      sendNotFound(fd);
-    }
-  }else if( strcmp(zMethod, "POST")==0 ){
-    if( strcmp(zEndpoint, "has-chunks")==0 ){
+      break;
+    case REMOTE_ROUTE_POST_HAS_CHUNKS:
       handleHasChunks(pStore, fd, pBody, nBody);
-    }else if( strcmp(zEndpoint, "get-chunks")==0 ){
+      break;
+    case REMOTE_ROUTE_POST_GET_CHUNKS:
       handleGetChunks(pStore, fd, pBody, nBody);
-    }else if( strcmp(zEndpoint, "chunks")==0 ){
+      break;
+    case REMOTE_ROUTE_POST_CHUNKS:
       handlePostChunks(pStore, fd, pBody, nBody);
-    }else if( strcmp(zEndpoint, "commit")==0 ){
+      break;
+    case REMOTE_ROUTE_POST_COMMIT:
       handleCommit(pStore, fd);
-    }else{
-      sendNotFound(fd);
-    }
-  }else if( strcmp(zMethod, "PUT")==0 ){
-    if( strcmp(zEndpoint, "refs")==0 ){
+      break;
+    case REMOTE_ROUTE_PUT_REFS:
       handlePutRefs(pStore, fd, pBody, nBody, pHook);
-    }else if( strcmp(zEndpoint, "refs-if")==0 ){
+      break;
+    case REMOTE_ROUTE_PUT_REFS_IF:
       handlePutRefsIf(pStore, fd, pBody, nBody, pHook);
-    }else{
+      break;
+    default:
       sendNotFound(fd);
-    }
-  }else{
-    sendBadRequest(fd);
+      break;
   }
 
   remotesrvPending = 0;
