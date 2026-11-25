@@ -1231,7 +1231,10 @@ int doltliteHistoricalModuleStale(sqlite3 *db, Module *pMod){
     doltliteFreeColInfo(&want);
     return bGone;
   }
-  differ = want.nCol!=v->cols.nCol;
+  differ = want.nCol!=v->cols.nCol
+        || (want.bHasRowid!=0)!=(v->cols.bHasRowid!=0)
+        || want.iPkCol!=v->cols.iPkCol
+        || want.nPk!=v->cols.nPk;
   for(i=0; !differ && i<want.nCol; i++){
     const char *zHave = v->cols.azName ? v->cols.azName[i] : 0;
     const char *zNeed = want.azName ? want.azName[i] : 0;
@@ -1240,8 +1243,11 @@ int doltliteHistoricalModuleStale(sqlite3 *db, Module *pMod){
     u8 haveAffinity = v->cols.aAffinity
         ? v->cols.aAffinity[i] : SQLITE_AFF_BLOB;
     u8 needAffinity = want.aAffinity ? want.aAffinity[i] : SQLITE_AFF_BLOB;
+    int haveRec = v->cols.aColToRec ? v->cols.aColToRec[i] : -1;
+    int needRec = want.aColToRec ? want.aColToRec[i] : -1;
     if( !zHave || !zNeed || sqlite3_stricmp(zHave, zNeed)!=0 ) differ = 1;
     if( haveAffinity!=needAffinity
+     || haveRec!=needRec
      || sqlite3_stricmp(zHaveDecl ? zHaveDecl : "",
                         zNeedDecl ? zNeedDecl : "")!=0 ) differ = 1;
   }

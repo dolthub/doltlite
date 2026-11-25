@@ -653,4 +653,65 @@ SELECT a FROM dolt_at_t('HEAD~2');" \
   "table not found: t at HEAD~2" "$DBMISS"
 rm -f "$DBMISS"
 
+DBPK=/tmp/test_at_schema_pk_change_$$.db; rm -f "$DBPK"
+$DOLTLITE "$DBPK" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INT, v TEXT);
+INSERT INTO t VALUES (1, 'a'), (1, 'b'), (NULL, 'c');
+SELECT dolt_commit('-Am', 'c1');
+DROP TABLE t;
+CREATE TABLE t(id INT PRIMARY KEY, v TEXT) WITHOUT ROWID;
+INSERT INTO t VALUES (1, 'x'), (2, 'y');
+SELECT dolt_commit('-Am', 'c2');
+CREATE TABLE u(k INT, v TEXT);
+INSERT INTO u VALUES (1, 'a');
+SQL
+run_test "at_pk_head_then_old_null_filter" \
+  "SELECT count(*) FROM dolt_at_t('HEAD');
+SELECT coalesce(id, 'NULL') || '|' || v FROM dolt_at_t('HEAD~1') WHERE id IS NULL;" \
+  "2
+NULL|c" "$DBPK"
+run_test "at_pk_head_then_old_right_join_dups" \
+  "SELECT count(*) FROM dolt_at_t('HEAD');
+SELECT coalesce(u.k, 'NULL') || '|' || coalesce(o.id, 'NULL') || '|' || o.v
+FROM u RIGHT JOIN dolt_at_t('HEAD~1') o ON u.k = o.id AND u.v = o.v
+ORDER BY o.id, o.v;" \
+  "2
+NULL|NULL|c
+1|1|a
+NULL|1|b" "$DBPK"
+run_test "at_pk_old_then_head_right_join" \
+  "SELECT count(*) FROM dolt_at_t('HEAD~1');
+SELECT coalesce(u.k, 'NULL') || '|' || h.id || '|' || h.v
+FROM u RIGHT JOIN dolt_at_t('HEAD') h ON u.k = h.id
+ORDER BY h.id;" \
+  "3
+1|1|x
+NULL|2|y" "$DBPK"
+rm -f "$DBPK"
+
+DBCPK=/tmp/test_at_schema_pk_col_change_$$.db; rm -f "$DBCPK"
+$DOLTLITE "$DBCPK" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE t(a INT, b INT, v TEXT, PRIMARY KEY(a)) WITHOUT ROWID;
+INSERT INTO t VALUES (1, 10, 'old1'), (2, 10, 'old2'), (3, NULL, 'old3');
+SELECT dolt_commit('-Am', 'c1');
+DROP TABLE t;
+CREATE TABLE t(a INT, b INT, v TEXT, PRIMARY KEY(b)) WITHOUT ROWID;
+INSERT INTO t VALUES (10, 1, 'new1'), (10, 2, 'new2');
+SELECT dolt_commit('-Am', 'c2');
+CREATE TABLE u(k INT, v TEXT);
+INSERT INTO u VALUES (10, 'old1');
+SQL
+run_test "at_without_rowid_pk_col_change_same_session" \
+  "SELECT count(*) FROM dolt_at_t('HEAD');
+SELECT a || '|' || coalesce(b, 'NULL') || '|' || v FROM dolt_at_t('HEAD~1') WHERE b IS NULL;
+SELECT coalesce(u.k, 'NULL') || '|' || o.a || '|' || coalesce(o.b, 'NULL') || '|' || o.v
+FROM u RIGHT JOIN dolt_at_t('HEAD~1') o ON u.k = o.b AND u.v = o.v
+ORDER BY o.a;" \
+  "2
+3|NULL|old3
+10|1|10|old1
+NULL|2|10|old2
+NULL|3|NULL|old3" "$DBCPK"
+rm -f "$DBCPK"
+
 dltest_finish
