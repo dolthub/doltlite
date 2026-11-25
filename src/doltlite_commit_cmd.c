@@ -265,6 +265,8 @@ static int doltliteCommitStageModifiedOnly(
   int nTouched = 0;
   int nFromWorking = 0;
   Pgno stagedOffset = 0;
+  SchemaEntry *aWorkSchema = 0, *aOldSchema = 0, *aHeadSchema = 0;
+  int nWorkSchema = 0, nOldSchema = 0, nHeadSchema = 0;
 
   memset(&workingIdx, 0, sizeof(workingIdx));
   memset(&headIdx, 0, sizeof(headIdx));
@@ -273,6 +275,9 @@ static int doltliteCommitStageModifiedOnly(
   #define FREE_ADD_MODIFIED_CATALOGS() do { \
     sqlite3_free((void*)azTouched); \
     sqlite3_free(aRemoveStaged); \
+    freeSchemaEntries(aWorkSchema, nWorkSchema); \
+    freeSchemaEntries(aOldSchema, nOldSchema); \
+    freeSchemaEntries(aHeadSchema, nHeadSchema); \
     addNameIndexFree(&workingIdx); \
     addNameIndexFree(&headIdx); \
     addNameIndexFree(&stagedIdx); \
@@ -464,8 +469,6 @@ static int doltliteCommitStageModifiedOnly(
   ** theirs, deleted tables drop them. Parents resolve through each catalog's
   ** own schema rows. */
   {
-    SchemaEntry *aWorkSchema = 0, *aOldSchema = 0;
-    int nWorkSchema = 0, nOldSchema = 0;
     const ProllyHash *pOldSrcHash =
         !prollyHashIsEmpty(&stagedHash) ? &stagedHash : &headCatHash;
     int i2, k2, nAppend = 0;
@@ -476,9 +479,12 @@ static int doltliteCommitStageModifiedOnly(
       rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), pOldSrcHash,
                                  &aOldSchema, &nOldSchema);
     }
+    if( rc==SQLITE_OK && !prollyHashIsEmpty(&headCatHash)
+     && prollyHashCompare(&headCatHash, pOldSrcHash)!=0 ){
+      rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), &headCatHash,
+                                 &aHeadSchema, &nHeadSchema);
+    }
     if( rc!=SQLITE_OK ){
-      freeSchemaEntries(aWorkSchema, nWorkSchema);
-      freeSchemaEntries(aOldSchema, nOldSchema);
       doltliteVcResultErrorCode(context, db, "failed to load schema for staging", rc);
       FREE_ADD_MODIFIED_CATALOGS();
       return rc;
@@ -531,8 +537,6 @@ static int doltliteCommitStageModifiedOnly(
       struct TableEntry *aGrown = sqlite3_realloc(
           aStaged, (nStaged+nAppend)*(int)sizeof(struct TableEntry));
       if( !aGrown ){
-        freeSchemaEntries(aWorkSchema, nWorkSchema);
-        freeSchemaEntries(aOldSchema, nOldSchema);
         sqlite3_result_error_nomem(context);
         FREE_ADD_MODIFIED_CATALOGS();
         return SQLITE_NOMEM;
@@ -560,8 +564,46 @@ static int doltliteCommitStageModifiedOnly(
       }
     }
 
-    freeSchemaEntries(aWorkSchema, nWorkSchema);
-    freeSchemaEntries(aOldSchema, nOldSchema);
+    {
+      int nVtabExtra = nOldSchema + nHeadSchema;
+      if( nVtabExtra>0 ){
+        const char **azGrown = sqlite3_realloc(
+            (void*)azTouched,
+            (nWorking + nHead + nVtabExtra + 1) * (int)sizeof(char*));
+        if( !azGrown ){
+          sqlite3_result_error_nomem(context);
+          FREE_ADD_MODIFIED_CATALOGS();
+          return SQLITE_NOMEM;
+        }
+        azTouched = azGrown;
+      }
+      for(i2=0; i2<nOldSchema+nHeadSchema; i2++){
+        const SchemaEntry *pRow = i2<nOldSchema
+            ? &aOldSchema[i2] : &aHeadSchema[i2-nOldSchema];
+        int inWorking = 0;
+        int shadowKept = 0;
+        if( !doltliteSchemaEntryIsVtab(pRow) ) continue;
+        for(k2=0; k2<nWorkSchema; k2++){
+          if( doltliteSchemaEntryIsVtab(&aWorkSchema[k2])
+           && sqlite3_stricmp(aWorkSchema[k2].zName, pRow->zName)==0 ){
+            inWorking = 1;
+            break;
+          }
+        }
+        if( !inWorking ){
+          for(k2=0; k2<nStaged; k2++){
+            if( aStaged[k2].iTable>1 && aStaged[k2].zName
+             && doltliteVtabShadowNameMatch(db, pRow, aStaged[k2].zName) ){
+              shadowKept = 1;
+              break;
+            }
+          }
+        }
+        if( inWorking || !shadowKept ){
+          azTouched[nTouched++] = pRow->zName;
+        }
+      }
+    }
   }
 
   /* Settle numbering, then compose the staged master: touched tables from
