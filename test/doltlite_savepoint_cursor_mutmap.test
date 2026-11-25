@@ -1,0 +1,174 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+do_execsql_test doltlite_savepoint_cursor_mutmap-1.0 {
+  CREATE TABLE driver(k INTEGER PRIMARY KEY);
+  INSERT INTO driver VALUES(1), (2), (3), (4);
+
+  CREATE TABLE t_int(id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO t_int VALUES(1, 'orig1'), (2, 'orig2'), (3, 'orig3');
+
+  CREATE TABLE t_wr(id TEXT PRIMARY KEY, v TEXT) WITHOUT ROWID;
+  INSERT INTO t_wr VALUES('a', 'origA'), ('b', 'origB'), ('c', 'origC');
+
+  CREATE TABLE guard(x INTEGER PRIMARY KEY CHECK(x > 0));
+  INSERT INTO guard VALUES(1);
+} {}
+
+do_test doltlite_savepoint_cursor_mutmap-1.1 {
+  execsql {
+    BEGIN;
+    INSERT INTO t_int VALUES(4, 'ins4');
+    UPDATE t_int SET v = 'upd2' WHERE id = 2;
+    DELETE FROM t_int WHERE id = 1;
+  }
+
+  set asc_res {}
+  db eval {
+    SELECT driver.k, t_int.id, t_int.v
+      FROM driver LEFT JOIN t_int ON driver.k IN (2, 4)
+     ORDER BY driver.k, t_int.id ASC
+  } {
+    if {$k == 2 || $k == 4} {
+      lappend asc_res "$k:$id:$v"
+    }
+    if {$k == 1} {
+      execsql {
+        SAVEPOINT sp1;
+        INSERT INTO t_int VALUES(5, 'sp5');
+        UPDATE t_int SET v = 'sp2' WHERE id = 2;
+        DELETE FROM t_int WHERE id = 3;
+        ROLLBACK TO sp1;
+        RELEASE sp1;
+      }
+    } elseif {$k == 3} {
+      catch {
+        execsql {
+          INSERT INTO t_int VALUES(6, 'stmt6'), (2, 'dup');
+        }
+      }
+    }
+  }
+  execsql { ROLLBACK; }
+  set asc_res
+} {2:2:upd2 2:3:orig3 2:4:ins4 4:2:upd2 4:3:orig3 4:4:ins4}
+
+do_test doltlite_savepoint_cursor_mutmap-1.2 {
+  execsql {
+    BEGIN;
+    INSERT INTO t_int VALUES(4, 'ins4');
+    UPDATE t_int SET v = 'upd2' WHERE id = 2;
+    DELETE FROM t_int WHERE id = 1;
+  }
+
+  set desc_res {}
+  db eval {
+    SELECT driver.k, t_int.id, t_int.v
+      FROM driver LEFT JOIN t_int ON driver.k IN (2, 4)
+     ORDER BY driver.k, t_int.id DESC
+  } {
+    if {$k == 2 || $k == 4} {
+      lappend desc_res "$k:$id:$v"
+    }
+    if {$k == 1} {
+      execsql {
+        SAVEPOINT sp1;
+        INSERT INTO t_int VALUES(5, 'sp5');
+        UPDATE t_int SET v = 'sp2' WHERE id = 2;
+        DELETE FROM t_int WHERE id = 3;
+        ROLLBACK TO sp1;
+        RELEASE sp1;
+      }
+    } elseif {$k == 3} {
+      catch {
+        execsql {
+          INSERT INTO guard VALUES(2), (-1);
+        }
+      }
+    }
+  }
+  execsql { ROLLBACK; }
+  set desc_res
+} {2:4:ins4 2:3:orig3 2:2:upd2 4:4:ins4 4:3:orig3 4:2:upd2}
+
+do_test doltlite_savepoint_cursor_mutmap-1.3 {
+  execsql {
+    BEGIN;
+    INSERT INTO t_wr VALUES('d', 'insD');
+    UPDATE t_wr SET v = 'updB' WHERE id = 'b';
+    DELETE FROM t_wr WHERE id = 'a';
+  }
+
+  set wr_asc {}
+  db eval {
+    SELECT driver.k, t_wr.id, t_wr.v
+      FROM driver LEFT JOIN t_wr ON driver.k IN (2, 4)
+     ORDER BY driver.k, t_wr.id ASC
+  } {
+    if {$k == 2 || $k == 4} {
+      lappend wr_asc "$k:$id:$v"
+    }
+    if {$k == 1} {
+      execsql {
+        SAVEPOINT sp1;
+        INSERT INTO t_wr VALUES('e', 'spE');
+        UPDATE t_wr SET v = 'spB' WHERE id = 'b';
+        DELETE FROM t_wr WHERE id = 'c';
+        ROLLBACK TO sp1;
+        RELEASE sp1;
+      }
+    } elseif {$k == 3} {
+      catch {
+        execsql {
+          INSERT INTO t_wr VALUES('f', 'stmtF'), ('b', 'dup');
+        }
+      }
+    }
+  }
+  execsql { ROLLBACK; }
+  set wr_asc
+} {2:b:updB 2:c:origC 2:d:insD 4:b:updB 4:c:origC 4:d:insD}
+
+do_test doltlite_savepoint_cursor_mutmap-1.4 {
+  execsql {
+    BEGIN;
+    INSERT INTO t_wr VALUES('d', 'insD');
+    UPDATE t_wr SET v = 'updB' WHERE id = 'b';
+    DELETE FROM t_wr WHERE id = 'a';
+  }
+
+  set wr_desc {}
+  db eval {
+    SELECT driver.k, t_wr.id, t_wr.v
+      FROM driver LEFT JOIN t_wr ON driver.k IN (2, 4)
+     ORDER BY driver.k, t_wr.id DESC
+  } {
+    if {$k == 2 || $k == 4} {
+      lappend wr_desc "$k:$id:$v"
+    }
+    if {$k == 1} {
+      execsql {
+        SAVEPOINT sp1;
+        INSERT INTO t_wr VALUES('e', 'spE');
+        UPDATE t_wr SET v = 'spB' WHERE id = 'b';
+        DELETE FROM t_wr WHERE id = 'c';
+        ROLLBACK TO sp1;
+        RELEASE sp1;
+      }
+    } elseif {$k == 3} {
+      catch {
+        execsql {
+          INSERT INTO guard VALUES(3), (-1);
+        }
+      }
+    }
+  }
+  execsql { ROLLBACK; }
+  set wr_desc
+} {2:d:insD 2:c:origC 2:b:updB 4:d:insD 4:c:origC 4:b:updB}
+
+do_execsql_test doltlite_savepoint_cursor_mutmap-1.5 {
+  PRAGMA integrity_check;
+} {ok}
+
+finish_test
