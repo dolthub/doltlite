@@ -2737,6 +2737,7 @@ static int installFetchedRefs(
     if( rc==SQLITE_OK ){
       csFreeSavedRefsState(&savedRefs);
     }else{
+      chunkStoreRollback(pLocal);
       csFreeRefsState(pLocal);
       csRestoreSavedRefsState(pLocal, &savedRefs);
       memcpy(&pLocal->refs.refsHash, &oldRefsHash, sizeof(oldRefsHash));
@@ -3306,6 +3307,7 @@ int doltliteClone(
 clone_restore_refs:
   sqlite3_free(refsData);
   sqlite3_free(aRoots);
+  if( locked ) chunkStoreRollback(pLocal);
   if( refsDetached ){
     csFreeRefsState(pLocal);
     csRestoreSavedRefsState(pLocal, &savedRefs);
