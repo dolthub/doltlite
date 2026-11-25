@@ -2859,7 +2859,7 @@ int doltliteFetchInto(
     chunkStoreClose(&remoteRefs);
     if( rc!=SQLITE_OK || settled ) return rc;
   }
-  return SQLITE_OK;
+  return SQLITE_BUSY_SNAPSHOT;
 }
 
 /* A single-branch clone keeps one local branch: zKeep when that name is a

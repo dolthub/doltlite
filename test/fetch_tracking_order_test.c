@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include "sqlite3.h"
 #include "doltlite_internal.h"
+#include "doltlite_remote.h"
 #include "lib/test_tmpdir.h"
 
 static int nPass = 0;
@@ -202,9 +203,139 @@ static void test_stale_fetch_keeps_newer_tracking(void){
   rmDb(zLocal);
 }
 
+typedef struct DivergeRace {
+  sqlite3 *dbRemote;
+  sqlite3 *dbPeer;
+  char zBase[128];
+  int calls;
+  int nextId;
+  int errRc;
+} DivergeRace;
+
+static void divergeInstallHook(void *pArg){
+  DivergeRace *p = (DivergeRace *)pArg;
+  char zSql[512];
+  int rc;
+  int dId = p->nextId++;
+  int rId = p->nextId++;
+  p->calls++;
+  sqlite3_snprintf(sizeof(zSql), zSql,
+      "SELECT dolt_reset('--hard', '%s');"
+      "INSERT INTO t VALUES(%d, 'd%d');"
+      "SELECT dolt_commit('-Am', 'D%d');",
+      p->zBase, dId, p->calls, p->calls);
+  rc = execSql(p->dbRemote, zSql);
+  if( rc==SQLITE_OK ){
+    rc = execSql(p->dbPeer, "SELECT dolt_fetch('origin','main');");
+  }
+  if( rc==SQLITE_OK ){
+    sqlite3_snprintf(sizeof(zSql), zSql,
+        "SELECT dolt_reset('--hard', '%s');"
+        "INSERT INTO t VALUES(%d, 'r%d');"
+        "SELECT dolt_commit('-Am', 'R%d');",
+        p->zBase, rId, p->calls, p->calls);
+    rc = execSql(p->dbRemote, zSql);
+  }
+  if( rc!=SQLITE_OK && p->errRc==SQLITE_OK ) p->errRc = rc;
+  doltliteTestSetBeforeRefInstallHook(divergeInstallHook, p);
+}
+
+static void test_fetch_retry_exhaustion_returns_busy_snapshot(void){
+  char zRemote[256], zLocal[256], zUrl[512], zMsg[128];
+  sqlite3 *dbRemote = 0, *dbLocal = 0, *dbPeer = 0;
+  ChunkStore *cs = 0;
+  DoltliteRemote *pRemote = 0;
+  DivergeRace race;
+  int missingBranch = 0;
+  int fetchRc = -1;
+  int rc;
+
+  snprintf(zRemote, sizeof(zRemote),
+           DOLTLITE_TEST_TMPDIR "/fetch_retry_remote_%d.db", (int)getpid());
+  snprintf(zLocal, sizeof(zLocal),
+           DOLTLITE_TEST_TMPDIR "/fetch_retry_local_%d.db", (int)getpid());
+  rmDb(zRemote);
+  rmDb(zLocal);
+
+  check("exhaust: open remote", openDb(zRemote, &dbRemote)==SQLITE_OK);
+  check("exhaust: seed base",
+        execSql(dbRemote,
+          "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+          "INSERT INTO t VALUES(1,'base');"
+          "SELECT dolt_commit('-Am','base');")==SQLITE_OK);
+
+  memset(&race, 0, sizeof(race));
+  check("exhaust: base hash",
+        queryText(dbRemote,
+          "SELECT commit_hash FROM dolt_log('main') LIMIT 1",
+          race.zBase, sizeof(race.zBase))==SQLITE_OK);
+
+  check("exhaust: open local", openDb(zLocal, &dbLocal)==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zUrl), zUrl,
+                   "SELECT dolt_clone('file://%s');", zRemote);
+  check("exhaust: clone", execSql(dbLocal, zUrl)==SQLITE_OK);
+  check("exhaust: remote R0",
+        execSql(dbRemote,
+          "INSERT INTO t VALUES(2,'r0');"
+          "SELECT dolt_commit('-Am','R0');")==SQLITE_OK);
+  check("exhaust: open peer", openDb(zLocal, &dbPeer)==SQLITE_OK);
+
+  race.dbRemote = dbRemote;
+  race.dbPeer = dbPeer;
+  race.nextId = 100;
+  race.errRc = SQLITE_OK;
+
+  cs = doltliteGetChunkStore(dbLocal);
+  pRemote = doltliteFsRemoteOpen(sqlite3_vfs_find(0), zRemote);
+  check("exhaust: local cs and remote open", cs!=0 && pRemote!=0);
+  if( cs && pRemote ){
+    doltliteTestSetBeforeRefInstallHook(divergeInstallHook, &race);
+    rc = doltliteFetchInto(cs, pRemote, "origin", "main", "main",
+                           &missingBranch);
+    doltliteTestSetBeforeRefInstallHook(0, 0);
+    pRemote->xClose(pRemote);
+
+    check("exhaust: hook succeeded", race.errRc==SQLITE_OK);
+    check("exhaust: ran all 8 attempts", race.calls==8);
+    check("exhaust: returns SQLITE_BUSY_SNAPSHOT", rc==SQLITE_BUSY_SNAPSHOT);
+    check("exhaust: missingBranch clear", missingBranch==0);
+
+    rc = queryText(dbLocal,
+        "SELECT message FROM dolt_log('origin/main') LIMIT 1",
+        zMsg, sizeof(zMsg));
+    checkEq("exhaust: tracking stays at peer tip D8",
+            rc==SQLITE_OK ? zMsg : "", "D8");
+  }
+
+  race.calls = 0;
+  race.errRc = SQLITE_OK;
+  doltliteTestSetBeforeRefInstallHook(divergeInstallHook, &race);
+  rc = queryInt(dbLocal, "SELECT dolt_fetch('origin','main');", &fetchRc);
+  doltliteTestSetBeforeRefInstallHook(0, 0);
+  check("exhaust sql: hook succeeded", race.errRc==SQLITE_OK);
+  check("exhaust sql: ran all 8 attempts", race.calls==8);
+  check("exhaust sql: dolt_fetch fails on exhaustion", rc!=SQLITE_OK);
+
+  fetchRc = -1;
+  rc = queryInt(dbLocal, "SELECT dolt_fetch('origin','main');", &fetchRc);
+  check("exhaust: later fetch succeeds", rc==SQLITE_OK && fetchRc==0);
+  rc = queryText(dbLocal,
+      "SELECT message FROM dolt_log('origin/main') LIMIT 1",
+      zMsg, sizeof(zMsg));
+  checkEq("exhaust: later fetch settles on R8",
+          rc==SQLITE_OK ? zMsg : "", "R8");
+
+  sqlite3_close(dbPeer);
+  sqlite3_close(dbLocal);
+  sqlite3_close(dbRemote);
+  rmDb(zRemote);
+  rmDb(zLocal);
+}
+
 int main(void){
   sqlite3_initialize();
   test_stale_fetch_keeps_newer_tracking();
+  test_fetch_retry_exhaustion_returns_busy_snapshot();
   printf("fetch_tracking_order_test: %d passed, %d failed\n", nPass, nFail);
   return nFail ? 1 : 0;
 }
