@@ -14696,6 +14696,84 @@ static void run_workspace_stage_writes_once(void){
   removeDbFiles(dbpath);
 }
 
+/* A statement's discards are applied to the working trees together. */
+static void run_workspace_discard_writes_once(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char zErr[256];
+  long long before, nDiscard;
+
+  printf("=== Workspace Discard Writes Once Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_workspace_discard_writes");
+  removeDbFiles(dbpath);
+  check("wdw_open", open_db(dbpath, &db)==SQLITE_OK);
+  check("wdw_seed", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, k INTEGER);"
+    "CREATE INDEX ik ON t(k);"
+    "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<6000)"
+    " INSERT INTO t SELECT x, 'base_'||x, x FROM c;"
+    "SELECT dolt_commit('-Am','base');"
+    "UPDATE t SET v='new_'||id, k=k+100000 WHERE id%3=0;"
+    "DELETE FROM t WHERE id=4;"
+    "INSERT INTO t VALUES(7001,'added',7001);")==SQLITE_OK);
+  check("wdw_dirty", strcmp(queryScalarText(db,
+      "SELECT count(*) FROM dolt_workspace_t"), "2002")==0);
+  before = engineChunkWrites(db);
+  check("wdw_discard_even", execSql(db,
+      "DELETE FROM dolt_workspace_t"
+      " WHERE coalesce(to_id,from_id)%2=0")==SQLITE_OK);
+  nDiscard = engineChunkWrites(db) - before;
+  printf("  chunk writes: discard 1001 rows %lld\n", nDiscard);
+  check("wdw_discard_writes_once", nDiscard<500);
+  check("wdw_rest_dirty", strcmp(queryScalarText(db,
+      "SELECT count(*)||','||sum(coalesce(to_id,from_id)%2)"
+      " FROM dolt_workspace_t"), "1001,1001")==0);
+  check("wdw_rows_restored", strcmp(queryScalarText(db,
+      "SELECT count(*)||','||sum(v LIKE 'new_%')||','||sum(id=4)"
+      "||','||sum(id=7001) FROM t"), "6001,1000,1,1")==0);
+  check("wdw_index_restored", strcmp(queryScalarText(db,
+      "SELECT count(*)||','||sum(k>100000) FROM t INDEXED BY ik"
+      " WHERE k>0"), "6001,1000")==0);
+  check("wdw_txn_rollback", execSql(db,
+      "BEGIN;"
+      "DELETE FROM dolt_workspace_t;"
+      "ROLLBACK;")==SQLITE_OK);
+  check("wdw_rollback_keeps_changes", strcmp(queryScalarText(db,
+      "SELECT count(*) FROM dolt_workspace_t"), "1001")==0);
+  check("wdw_discard_rest", execSql(db,
+      "DELETE FROM dolt_workspace_t")==SQLITE_OK);
+  check("wdw_clean", strcmp(queryScalarText(db,
+      "SELECT (SELECT count(*) FROM dolt_workspace_t)||','||"
+      "(SELECT count(*) FROM dolt_status)||','||"
+      "(SELECT count(*) FROM t WHERE v LIKE 'base_%')||','||"
+      "(SELECT count(*) FROM t INDEXED BY ik WHERE k BETWEEN 1 AND 6000)"),
+      "0,0,6000,6000")==0);
+
+  check("wdw_swap", execSql(db,
+      "CREATE TABLE o(rowid INT, _rowid_ INT, oid INT, u INT UNIQUE, v TEXT);"
+      "INSERT INTO o VALUES(1,1,1,10,'p'),(2,2,2,20,'q');"
+      "SELECT dolt_commit('-Am','o');"
+      "UPDATE o SET u=-1 WHERE v='p';"
+      "UPDATE o SET u=10 WHERE v='q';"
+      "UPDATE o SET u=20 WHERE v='p';")==SQLITE_OK);
+  check("wdw_half_swap_refused", execErr(db,
+      "DELETE FROM dolt_workspace_o WHERE to_v='p'",
+      zErr, sizeof(zErr))!=SQLITE_OK
+      && strstr(zErr, "UNIQUE constraint failed: o.u")!=0);
+  check("wdw_refusal_discards_nothing", strcmp(queryScalarText(db,
+      "SELECT group_concat(u) FROM (SELECT u FROM o ORDER BY v)"),
+      "20,10")==0);
+  check("wdw_swap_discard", execSql(db,
+      "DELETE FROM dolt_workspace_o")==SQLITE_OK);
+  check("wdw_swap_restored", strcmp(queryScalarText(db,
+      "SELECT group_concat(u) FROM (SELECT u FROM o ORDER BY v)"),
+      "10,20")==0);
+  check("wdw_integrity", strcmp(queryScalarText(db,
+      "PRAGMA integrity_check"), "ok")==0);
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_workspace_schema_check_once(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -22945,6 +23023,7 @@ static const RegressionCase aCases[] = {
   { "rebase_continue_keeps_peer_branch", "Rebase Continue Keeps Peer Branch Test", run_rebase_continue_keeps_peer_branch },
   { "rebase_deep_history_ordering", "Rebase Deep History Ordering Test", run_rebase_deep_history_ordering },
   { "workspace_stage_writes_once", "Workspace Stage Writes Once Test", run_workspace_stage_writes_once },
+  { "workspace_discard_writes_once", "Workspace Discard Writes Once Test", run_workspace_discard_writes_once },
   { "workspace_schema_check_once", "Workspace Schema Check Once Test", run_workspace_schema_check_once },
   { "workspace_queue_dedupes_rows", "Workspace Queue Dedupes Rows Test", run_workspace_queue_dedupes_rows },
   { "rebase_main_table_schema_guard", "Rebase Main Table Schema Guard Test", run_rebase_main_table_schema_guard },

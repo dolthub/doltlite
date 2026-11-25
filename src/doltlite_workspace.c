@@ -57,6 +57,7 @@ struct WorkspaceChange {
   WorkspaceRows *pRows;
   int iRow;
   int staged;
+  u8 discard;
 };
 
 typedef struct WorkspaceChanges WorkspaceChanges;
@@ -983,7 +984,9 @@ static int wsApplyChangesToStaged(
   rc = doltliteLoadCatalog(db, &stagedCat, &aTables, &nTables, 0);
   if( rc!=SQLITE_OK ) return rc;
   for(k=0; k<nChange; k++){
-    if( aChange[k].pVtab==p && aChange[k].staged ) anyStaged = 1;
+    if( aChange[k].pVtab==p && !aChange[k].discard && aChange[k].staged ){
+      anyStaged = 1;
+    }
   }
   pData = doltliteFindTableByName(aTables, nTables, p->zTableName);
   stagedExisted = pData!=0;
@@ -1048,7 +1051,7 @@ static int wsApplyChangesToStaged(
     int makeStaged;
     u8 *pProj = 0;
     int nProj = 0;
-    if( aChange[k].pVtab!=p ) continue;
+    if( aChange[k].pVtab!=p || aChange[k].discard ) continue;
     r = &aChange[k].pRows->a[aChange[k].iRow];
     makeStaged = aChange[k].staged;
     assert( makeStaged==0 || makeStaged==1 );
@@ -1119,6 +1122,47 @@ apply_done:
   return rc;
 }
 
+/* Restore the staged (or HEAD) value of every row the statement discards
+** from one table, writing the working trees once. */
+static int wsApplyDiscards(
+  WorkspaceVtab *p, WorkspaceChange *aChange, int nChange
+){
+  static const u8 zEmpty = 0;
+  DoltliteRawRow *aRow;
+  Index *pUniqueViolation = 0;
+  int nRow = 0;
+  int k, rc;
+  aRow = sqlite3_malloc64(sizeof(*aRow)*(sqlite3_uint64)nChange);
+  if( !aRow ) return SQLITE_NOMEM;
+  for(k=0; k<nChange; k++){
+    WorkspaceRow *r;
+    DoltliteRawRow *pRow;
+    if( aChange[k].pVtab!=p || !aChange[k].discard ) continue;
+    r = &aChange[k].pRows->a[aChange[k].iRow];
+    pRow = &aRow[nRow++];
+    pRow->pKey = r->pKey;
+    pRow->nKey = r->nKey;
+    pRow->intKey = r->intKey;
+    if( r->diffType==PROLLY_DIFF_ADD ){
+      pRow->pVal = 0;
+      pRow->nVal = 0;
+    }else if( r->oldEmpty ){
+      pRow->pVal = &zEmpty;
+      pRow->nVal = 0;
+    }else{
+      pRow->pVal = r->pOldVal;
+      pRow->nVal = r->nOldVal;
+    }
+  }
+  rc = doltliteApplyRawRowMutations(p->db, p->zTableName, aRow, nRow,
+                                    1, &pUniqueViolation);
+  if( rc==SQLITE_CONSTRAINT_UNIQUE && pUniqueViolation ){
+    rc = wsUniqueConstraintError(p, pUniqueViolation);
+  }
+  sqlite3_free(aRow);
+  return rc;
+}
+
 static WorkspaceChanges *wsStatementChanges(sqlite3 *db){
   Vdbe *pStmt = db->pWorkspaceStatement;
   WorkspaceChanges *pChanges;
@@ -1184,7 +1228,8 @@ static int wsChangesGrowSlots(WorkspaceChanges *pChanges){
 }
 
 static int wsQueueChange(
-  WorkspaceVtab *p, WorkspaceRows *pRows, WorkspaceRow *r, int staged
+  WorkspaceVtab *p, WorkspaceRows *pRows, WorkspaceRow *r,
+  int staged, int discard
 ){
   WorkspaceChanges *pChanges = wsStatementChanges(p->db);
   WorkspaceChange *pChange;
@@ -1228,6 +1273,7 @@ static int wsQueueChange(
   pChange->pRows = pRows;
   pChange->iRow = (int)(r-pRows->a);
   pChange->staged = staged;
+  pChange->discard = (u8)discard;
   pRows->nRef++;
   return SQLITE_OK;
 }
@@ -1240,9 +1286,16 @@ void doltliteWorkspaceFinishStatement(Vdbe *pStmt){
     doltliteGetSessionStaged(pStmt->db, &stagedHash);
     for(i=0; i<pChanges->n && rc==SQLITE_OK; i++){
       WorkspaceVtab *pVtab = pChanges->a[i].pVtab;
-      for(j=0; j<i && pChanges->a[j].pVtab!=pVtab; j++){}
+      int discard = pChanges->a[i].discard;
+      for(j=0; j<i; j++){
+        if( pChanges->a[j].pVtab==pVtab && pChanges->a[j].discard==discard ){
+          break;
+        }
+      }
       if( j<i ) continue;
-      rc = wsApplyChangesToStaged(pVtab, &pChanges->a[i], pChanges->n-i);
+      rc = discard
+          ? wsApplyDiscards(pVtab, &pChanges->a[i], pChanges->n-i)
+          : wsApplyChangesToStaged(pVtab, &pChanges->a[i], pChanges->n-i);
       if( rc!=SQLITE_OK ) sqlite3VtabImportErrmsg(pStmt, &pVtab->base);
     }
     if( rc!=SQLITE_OK ){
@@ -1462,11 +1515,8 @@ static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
   assert( p->db!=0 && p->zTableName!=0 );
   (void)pRowid;
   if( argc==1 ){
-    const u8 *pVal;
-    int nVal;
     int rc;
-    Index *pUniqueViolation = 0;
-    r = wsFindCachedRow(p, sqlite3_value_int64(argv[0]), 0);
+    r = wsFindCachedRow(p, sqlite3_value_int64(argv[0]), &pRows);
     if( !r ){
       pBase->zErrMsg = sqlite3_mprintf("workspace row is no longer available");
       return SQLITE_ABORT;
@@ -1495,25 +1545,7 @@ static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
         }
       }
     }
-    /* Unstaged delete: restore staged/HEAD for this PK. */
-    if( r->diffType==PROLLY_DIFF_ADD ){
-      pVal = 0;
-      nVal = 0;
-    }else if( r->oldEmpty ){
-      static const u8 zEmpty = 0;
-      pVal = (const u8*)&zEmpty;
-      nVal = 0;
-    }else{
-      pVal = r->pOldVal;
-      nVal = r->nOldVal;
-    }
-    rc = doltliteApplyRawRowMutation(p->db, p->zTableName,
-                                     r->pKey, r->nKey, r->intKey,
-                                     pVal, nVal, 1, &pUniqueViolation);
-    if( rc==SQLITE_CONSTRAINT_UNIQUE && pUniqueViolation ){
-      rc = wsUniqueConstraintError(p, pUniqueViolation);
-    }
-    return rc;
+    return wsQueueChange(p, pRows, r, 0, 1);
   }
   if( sqlite3_value_type(argv[0])==SQLITE_NULL ){
     pBase->zErrMsg = sqlite3_mprintf(
@@ -1532,7 +1564,7 @@ static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
   if( newStaged==r->staged ) return SQLITE_OK;
   rc = wsRefuseSchemaChange(p);
   if( rc!=SQLITE_OK ) return rc;
-  return wsQueueChange(p, pRows, r, newStaged);
+  return wsQueueChange(p, pRows, r, newStaged, 0);
 }
 
 static sqlite3_module workspaceModule = {

@@ -1907,10 +1907,6 @@ int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
 char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable);
 int doltliteCanonicalRowValue(Table *pTab, int bIntKey,
                               u8 **ppRec, int *pnRec);
-int doltliteApplyRawRowMutation(sqlite3 *db, const char *zTable,
-                                const u8 *pKey, int nKey, i64 intKey,
-                                const u8 *pVal, int nVal,
-                                int checkUnique, Index **ppUniqueViolation);
 typedef struct DoltliteRawRow DoltliteRawRow;
 int doltliteApplyRawRowMutations(sqlite3 *db, const char *zTable,
                                  const DoltliteRawRow *aRow, int nRow,

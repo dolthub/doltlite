@@ -2580,23 +2580,6 @@ int doltliteApplyRawRowMutations(
   return rc;
 }
 
-int doltliteApplyRawRowMutation(
-  sqlite3 *db,
-  const char *zTable,
-  const u8 *pKey, int nKey, i64 intKey,
-  const u8 *pVal, int nVal,
-  int checkUnique, Index **ppUniqueViolation
-){
-  DoltliteRawRow row;
-  row.pKey = pKey;
-  row.nKey = nKey;
-  row.intKey = intKey;
-  row.pVal = pVal;
-  row.nVal = nVal;
-  return doltliteApplyRawRowMutations(db, zTable, &row, 1,
-                                      checkUnique, ppUniqueViolation);
-}
-
 int doltliteEnsureWriteTxnAndSavepoints(sqlite3 *db){
   Btree *pBtree;
   int rc = SQLITE_OK;
