@@ -6421,6 +6421,7 @@ static void vec1QueryFree(Vec1Query *pQuery){
 
 static void vec1ResetCsr(Vec1Csr *pCsr){
   vec1QueryFree(pCsr->pQuery);
+  pCsr->pQuery = 0;
   sqlite3_finalize(pCsr->pStmt);
   pCsr->pStmt = 0;
   pCsr->bSeek = 0;

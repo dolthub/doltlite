@@ -42,5 +42,32 @@ do_execsql_test 1.3 {
   SELECT v.rowid FROM q, v1(q.qv, '{K:2}') AS v;
 } {1 5}
 
+do_execsql_test 1.4 {
+  INSERT INTO q VALUES(2, vec1_from_json('[0,1,0,0]'));
+  CREATE TRIGGER tr_idx_fail BEFORE INSERT ON v1_idx BEGIN
+    SELECT RAISE(ABORT, 'flush_fail');
+  END;
+}
+
+do_test 1.5 {
+  set inserted 0
+  set rc [catch {
+    db eval {BEGIN}
+    db eval {SELECT q.id, v.rowid FROM q CROSS JOIN v1(q.qv, '{K:2}') AS v} {
+      if {!$inserted} {
+        set inserted 1
+        db eval {INSERT INTO v1(rowid, a) VALUES(100, vec1_from_json('[0,0,0,1]'))}
+      }
+    }
+  } msg]
+  catch { db eval {ROLLBACK} }
+  list $rc $msg
+} {1 {constraint failed}}
+
+do_execsql_test 1.6 {
+  DROP TRIGGER tr_idx_fail;
+  SELECT q.id, v.rowid FROM q CROSS JOIN v1(q.qv, '{K:2}') AS v;
+} {1 1 1 5 2 2 2 5}
+
 finish_test
 
