@@ -40,6 +40,7 @@ static int vbRowCmp(const void *a, const void *b){
 static void vbRowClear(VbRow *pRow){
   sqlite3_free(pRow->pKey);
   sqlite3_free(pRow->aiField);
+  memset(pRow, 0, sizeof(*pRow));
 }
 
 VirtualBaseCells *doltliteVirtualBaseCellsNew(void){
@@ -128,20 +129,31 @@ static int mergeVbTableSort(VbTable *pTab){
   for(i=0; i<pTab->nRow; i++){
     VbRow *pDst;
     if( n==0 || vbRowCmp(&pTab->aRow[n-1], &pTab->aRow[i])!=0 ){
-      pTab->aRow[n++] = pTab->aRow[i];
+      if( n!=i ){
+        pTab->aRow[n] = pTab->aRow[i];
+        memset(&pTab->aRow[i], 0, sizeof(VbRow));
+      }
+      n++;
       continue;
     }
     pDst = &pTab->aRow[n-1];
-    pDst->bWholeRow |= pTab->aRow[i].bWholeRow;
     if( pTab->aRow[i].nField>0 ){
       int *aNew = sqlite3_realloc64(pDst->aiField,
           (pDst->nField + pTab->aRow[i].nField)*sizeof(int));
-      if( !aNew ) return SQLITE_NOMEM;
+      if( !aNew ){
+        int nRem = pTab->nRow - i;
+        if( n<i ){
+          memmove(&pTab->aRow[n], &pTab->aRow[i], nRem*sizeof(VbRow));
+        }
+        pTab->nRow = n + nRem;
+        return SQLITE_NOMEM;
+      }
       memcpy(&aNew[pDst->nField], pTab->aRow[i].aiField,
              pTab->aRow[i].nField*sizeof(int));
       pDst->aiField = aNew;
       pDst->nField += pTab->aRow[i].nField;
     }
+    pDst->bWholeRow |= pTab->aRow[i].bWholeRow;
     vbRowClear(&pTab->aRow[i]);
   }
   pTab->nRow = n;

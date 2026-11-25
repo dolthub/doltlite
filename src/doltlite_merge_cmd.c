@@ -1522,7 +1522,8 @@ static int mergeRefCreateMergeCommit(
 ){
   ProllyHash commitHash;
   char hexBuf[PROLLY_HASH_SIZE*2+1];
-  char msg[256];
+  const char *zCommitMsg;
+  char *zDefaultMsg = 0;
   int rc;
   int restoreRc;
 
@@ -1534,14 +1535,21 @@ static int mergeRefCreateMergeCommit(
   }
 
   if( zMessage && zMessage[0] ){
-    sqlite3_snprintf(sizeof(msg), msg, "%s", zMessage);
+    zCommitMsg = zMessage;
   }else{
-    snprintf(msg, sizeof(msg), "Merge branch '%s' into %s",
-             zBranch, doltliteGetSessionBranch(db));
+    zDefaultMsg = sqlite3_mprintf("Merge branch '%s' into %s",
+                                  zBranch, doltliteGetSessionBranch(db));
+    if( !zDefaultMsg ){
+      sqlite3_result_error_code(context,
+          doltliteRestoreTxnStateOnFailure(db, pSaved, SQLITE_NOMEM));
+      return SQLITE_ERROR;
+    }
+    zCommitMsg = zDefaultMsg;
   }
   rc = doltliteCreateAndStoreCommit(db, pOurHead, pMergedCat,
-      msg, zAuthorName, zAuthorEmail, nExtraParents ? pTheirHead : NULL,
+      zCommitMsg, zAuthorName, zAuthorEmail, nExtraParents ? pTheirHead : NULL,
       nExtraParents, &commitHash);
+  sqlite3_free(zDefaultMsg);
   if( rc!=SQLITE_OK ){
     /* Catalog is already live; leaving it lets dolt_commit drop theirHead
     ** from ancestry. Restore first, and surface a restore failure. */

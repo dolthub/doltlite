@@ -1340,6 +1340,10 @@ int trySchemaColumnMerge(
         rc = DOLTLITE_GROW_ARRAY(&azAdd, &nAddAlloc, nAdd+1, 4);
         if( rc!=SQLITE_OK ) goto schema_merge_cleanup;
         azAdd[nAdd] = sqlite3_mprintf("%s", aTheirs[i].zDef);
+        if( !azAdd[nAdd] ){
+          rc = SQLITE_NOMEM;
+          goto schema_merge_cleanup;
+        }
         nAdd++;
       }
     }else{

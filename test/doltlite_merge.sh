@@ -3332,5 +3332,27 @@ fi
 
 rm -f "$DB_FKG1" "$DB_FKG2" "$DB_FKG3" "$DB_FKG4" "$DB_FKG5" "$DB_FKG6"
 
+DB_LONGMSG=/tmp/test_merge_longmsg_$$.db; rm -f "$DB_LONGMSG"
+LONG_MERGE_MSG="$(printf 'merge-msg-%.0s' $(seq 1 35))END"
+$DOLTLITE "$DB_LONGMSG" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_commit('-Am', 'init');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES (2, 'main');
+SELECT dolt_commit('-Am', 'main');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (3, 'feat');
+SELECT dolt_commit('-Am', 'feat');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_long_message_exec" \
+  "SELECT dolt_merge('-m', '$LONG_MERGE_MSG', 'feat');" "^[0-9a-f]{40}$" "$DB_LONGMSG"
+run_test "merge_long_message_len" \
+  "SELECT length(message) FROM dolt_log LIMIT 1;" "${#LONG_MERGE_MSG}" "$DB_LONGMSG"
+run_test "merge_long_message_exact" \
+  "SELECT message FROM dolt_log LIMIT 1;" "$LONG_MERGE_MSG" "$DB_LONGMSG"
+rm -f "$DB_LONGMSG"
+
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95" "$DB96" "$DB97" "$DB98" "$DB99" "$DB100" "$DB101" "$DB102" "$DB103" "$DB104" "$DB105" "$DB106" "$DB107" "$DB108" "$DB109" "$DB110" "$DB111" "$DB112" "$DB113" "$DB114" "$DB115" "$DB116" "$DB117" "$DB118" "$DB119" "$DB120" "$DB121" "$DB122"
 dltest_finish

@@ -220,12 +220,18 @@ static int mergePass1MergeTableData(
     sqlite3_free(rowPolicy.aiUnknownBaseFields);
     sqlite3_free(rowPolicy.aInsertSides);
     sqlite3_close(pSchemaDb);
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ){
+      freeConflictRows(aConflictRows, nConflicts);
+      return rc;
+    }
   }
 
   rc = mergePass1RecordIndexPatches(c, aIdxInfo, nIdxInfo);
   mergePass1FreeIdxInfo(aIdxInfo, nIdxInfo);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    freeConflictRows(aConflictRows, nConflicts);
+    return rc;
+  }
 
   {
     struct TableEntry merged = *pOurs;
