@@ -134,35 +134,64 @@ static i64 indexCacheBytes(const ChunkStore *cs){
 static sqlite3_int64 cacheBytes(ProllyCache *pCache){
   ProllyCacheEntry *p;
   int nShared = 0;
+  int bWideOutside = 0;
   sqlite3_int64 nInternal = 0;
+  sqlite3_int64 nWideFull = 0;
   sqlite3_int64 n = sqlite3_msize(pCache->aBucket);
   for(p=pCache->lruHead.pLruNext; p!=&pCache->lruTail; p=p->pLruNext){
     if( p->pPacked ) nShared++;
+    if( p->bWideFull ){
+      bWideOutside = 1;
+      nWideFull += sqlite3_msize(p) + (p->pBorrow ? 0 : sqlite3_msize(p->pData))
+                 + sqlite3_msize(p->pPacked);
+    }
     n += sqlite3_msize(p) + sqlite3_msize(p->pData)
        + sqlite3_msize(p->pPacked);
   }
   for(p=pCache->rowHead.pLruNext; p!=&pCache->rowTail; p=p->pLruNext){
     if( p->pPacked ) nShared++;
+    if( p->bWideFull ){
+      bWideOutside = 1;
+      nWideFull += sqlite3_msize(p) + (p->pBorrow ? 0 : sqlite3_msize(p->pData))
+                 + sqlite3_msize(p->pPacked);
+    }
     n += sqlite3_msize(p) + sqlite3_msize(p->pData)
        + sqlite3_msize(p->pPacked);
   }
   for(p=pCache->wideHead.pLruNext; p!=&pCache->wideTail; p=p->pLruNext){
+    sqlite3_int64 nEntry = sqlite3_msize(p)
+                         + (p->pBorrow ? 0 : sqlite3_msize(p->pData))
+                         + sqlite3_msize(p->pPacked);
     if( p->pPacked ) nShared++;
+    if( p->bWideFull ) nWideFull += nEntry;
+    else bWideOutside = 1;
     n += sqlite3_msize(p) + sqlite3_msize(p->pData)
        + sqlite3_msize(p->pPacked);
   }
   for(p=pCache->prefixHead.pLruNext; p!=&pCache->prefixTail; p=p->pLruNext){
     if( p->pPacked ) nShared++;
+    if( p->bWideFull ){
+      bWideOutside = 1;
+      nWideFull += sqlite3_msize(p) + (p->pBorrow ? 0 : sqlite3_msize(p->pData))
+                 + sqlite3_msize(p->pPacked);
+    }
     n += sqlite3_msize(p) + sqlite3_msize(p->pData)
        + sqlite3_msize(p->pPacked);
   }
   for(p=pCache->internalHead.pLruNext; p!=&pCache->internalTail;
       p=p->pLruNext){
+    if( p->bWideFull ){
+      bWideOutside = 1;
+      nWideFull += sqlite3_msize(p) + (p->pBorrow ? 0 : sqlite3_msize(p->pData))
+                 + sqlite3_msize(p->pPacked);
+    }
     nInternal += sqlite3_msize(p) + sqlite3_msize(p->pData);
   }
   n += nInternal;
   check("shared-prefix entry count", nShared==pCache->nSharedPrefix);
   check("internal node byte count", nInternal==pCache->nInternal);
+  check("wide-full entries stay on wide list", !bWideOutside);
+  check("wide-full byte count", nWideFull==pCache->nWideFull);
   return n;
 }
 
@@ -1710,6 +1739,41 @@ static void testSharedPrefixes(void){
   }
 }
 
+static void testWideReleaseScanAccounting(void){
+  ProllyCache cache;
+  ProllyCacheEntry *p;
+  ProllyHash hash = nodeHash(1);
+  int i;
+
+  check("init wide release-scan cache", prollyCacheInit(&cache, 256*1024)==SQLITE_OK);
+  p = putNode(&cache, 1, 8192);
+  check("insert wide leaf", p!=0);
+  if( !p ){ prollyCacheFree(&cache); return; }
+  p->bAllowPrefix = 1;
+  p->bScanOnly = PROLLY_CACHE_SCAN_ONLY;
+  prollyCacheRelease(&cache, p);
+  check("wide leaf tracked on wide list", cache.nWideFull>0
+      && cache.nByte==cacheBytes(&cache));
+
+  p = prollyCacheGetForScan(&cache, &hash);
+  check("rescan wide leaf hits full entry", p!=0 && p->bWideFull);
+  if( p ) prollyCacheReleaseScan(&cache, p);
+  check("release-scan keeps wide-full accounting intact",
+      cache.nWideFull>0 && cache.nByte==cacheBytes(&cache));
+
+  for(i=2; i<50; i++){
+    p = putNode(&cache, i, 8192);
+    if( p ) prollyCacheRelease(&cache, p);
+  }
+  check("wide-full accounting survives compaction and eviction pressure",
+      cache.nByte<=cache.nMaxByte && cache.nByte==cacheBytes(&cache));
+
+  prollyCacheShrink(&cache);
+  check("wide-full count returns to zero after shrink",
+      cache.nUsed==0 && cache.nWideFull==0 && cache.nByte==cacheBytes(&cache));
+  prollyCacheFree(&cache);
+}
+
 int main(void){
   char zPath[160];
   sqlite3 *db = 0;
@@ -1824,6 +1888,7 @@ int main(void){
   testInternalNodes();
   testSharedPrefixes();
   testPointReadLeavesNotCompacted();
+  testWideReleaseScanAccounting();
   printf("%d passed, %d failed\n", nPass, nFail);
   return nFail!=0;
 }
