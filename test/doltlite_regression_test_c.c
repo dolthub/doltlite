@@ -22537,6 +22537,121 @@ static void run_dolt_schemas_step_err_and_oom(void){
   removeDbFiles(dbpath);
 }
 
+static sqlite3_mem_methods gNonlocalOrigMem;
+static int gNonlocalFailCountdown = -1;
+static int gNonlocalAllocCount = 0;
+
+static void *nonlocalOomMalloc(int n){
+  gNonlocalAllocCount++;
+  if( gNonlocalFailCountdown==0 ){
+    gNonlocalFailCountdown = -1;
+    return 0;
+  }
+  if( gNonlocalFailCountdown>0 ) gNonlocalFailCountdown--;
+  return gNonlocalOrigMem.xMalloc(n);
+}
+
+static void *nonlocalOomRealloc(void *p, int n){
+  gNonlocalAllocCount++;
+  if( gNonlocalFailCountdown==0 ){
+    gNonlocalFailCountdown = -1;
+    return 0;
+  }
+  if( gNonlocalFailCountdown>0 ) gNonlocalFailCountdown--;
+  return gNonlocalOrigMem.xRealloc(p, n);
+}
+
+static void run_nonlocal_attach_oom_no_leak(void){
+  char dbpath[512];
+  sqlite3 *db = 0;
+  sqlite3_mem_methods wrapMem;
+  sqlite3_int64 memBefore;
+  int nAllocs = 0;
+  int nUntracked = 0;
+  int nLeaked = 0;
+  int nFailed = 0;
+  int k;
+  int rc;
+
+  printf("=== Nonlocal Attach OOM No Leak Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "nonlocal_attach_oom");
+  removeDbFiles(dbpath);
+
+  rc = open_db(dbpath, &db);
+  check("nonlocal_oom_setup_open", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) return;
+  rc = execSql(db,
+    "CREATE TABLE t(x INTEGER PRIMARY KEY);"
+    "INSERT INTO t VALUES(42);"
+    "SELECT dolt_commit('-Am', 'base');"
+    "SELECT dolt_branch('other');"
+    "INSERT INTO dolt_nonlocal_tables VALUES('t', 'other', NULL, 'immediate');"
+    "SELECT dolt_commit('-Am', 'rule');");
+  check("nonlocal_oom_setup_sql", rc==SQLITE_OK);
+  sqlite3_close(db);
+  db = 0;
+
+  sqlite3_shutdown();
+  rc = sqlite3_config(SQLITE_CONFIG_GETMALLOC, &gNonlocalOrigMem);
+  check("nonlocal_oom_getmalloc", rc==SQLITE_OK);
+  wrapMem = gNonlocalOrigMem;
+  wrapMem.xMalloc = nonlocalOomMalloc;
+  wrapMem.xRealloc = nonlocalOomRealloc;
+  rc = sqlite3_config(SQLITE_CONFIG_MALLOC, &wrapMem);
+  check("nonlocal_oom_setmalloc", rc==SQLITE_OK);
+  rc = sqlite3_initialize();
+  check("nonlocal_oom_init", rc==SQLITE_OK);
+
+  rc = open_db(dbpath, &db);
+  check("nonlocal_oom_measure_open", rc==SQLITE_OK);
+  gNonlocalFailCountdown = -1;
+  gNonlocalAllocCount = 0;
+  rc = execSql(db, "SELECT count(*) FROM t;");
+  nAllocs = gNonlocalAllocCount;
+  check("nonlocal_oom_measure_query", rc==SQLITE_OK && nAllocs>0);
+  check("nonlocal_oom_measure_attached", db->nDb==3);
+  sqlite3_close(db);
+  db = 0;
+
+  for(k=0; k<nAllocs; k++){
+    memBefore = sqlite3_memory_used();
+    rc = open_db(dbpath, &db);
+    if( rc!=SQLITE_OK ){
+      nFailed++;
+      continue;
+    }
+    gNonlocalFailCountdown = k;
+    rc = execSqlSilent(db, "SELECT count(*) FROM t;");
+    gNonlocalFailCountdown = -1;
+    if( rc!=SQLITE_OK ) nFailed++;
+    if( db->nDb>2 ){
+      (void)execSqlSilent(db, "SELECT dolt_checkout('other');");
+      (void)execSqlSilent(db, "SELECT 1;");
+      if( db->nDb>2 ) nUntracked++;
+    }
+    sqlite3_close(db);
+    db = 0;
+    if( sqlite3_memory_used()!=memBefore ) nLeaked++;
+  }
+
+  check("nonlocal_oom_exercised_failures", nFailed>0);
+  check("nonlocal_oom_no_untracked_attach", nUntracked==0);
+  check("nonlocal_oom_no_memory_leak", nLeaked==0);
+
+  sqlite3_shutdown();
+  sqlite3_config(SQLITE_CONFIG_MALLOC, &gNonlocalOrigMem);
+  sqlite3_initialize();
+
+  rc = open_db(dbpath, &db);
+  check("nonlocal_oom_final_open", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    check("nonlocal_oom_final_query",
+          strcmp(queryScalarText(db, "SELECT x FROM t"), "42")==0);
+    sqlite3_close(db);
+  }
+  removeDbFiles(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -22836,7 +22951,8 @@ static const RegressionCase aCases[] = {
   { "incrblob_payload_putdata_requireseek", "Incrblob PayloadChecked/PutData RequireSeek Test", run_incrblob_payload_putdata_requireseek },
   { "fast_intleaf_skips_degenerate_schema_rows", "Fast IntLeaf Skips Degenerate Schema Rows Test", run_fast_intleaf_skips_degenerate_schema_rows },
   { "cursor_prev_mutmap_no_double_dec", "Cursor Previous MutMap No Double-Decrement Test", run_cursor_prev_mutmap_no_double_dec },
-  { "dolt_schemas_step_err_and_oom", "dolt_schemas Step Error Propagation And OOM Leak Test", run_dolt_schemas_step_err_and_oom }
+  { "dolt_schemas_step_err_and_oom", "dolt_schemas Step Error Propagation And OOM Leak Test", run_dolt_schemas_step_err_and_oom },
+  { "nonlocal_attach_oom_no_leak", "Nonlocal Attach OOM No Leak Test", run_nonlocal_attach_oom_no_leak }
 };
 
 static int run_case_by_name(const char *zName){

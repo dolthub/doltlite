@@ -216,6 +216,7 @@ static const char *nonlocalSchemaFor(sqlite3 *db, DoltliteNonlocal *p,
 static int nonlocalAttach(sqlite3 *db, DoltliteNonlocal *p, const char *zRef){
   const char *zFile = sqlite3_db_filename(db, "main");
   NonlocalAttach *aNew;
+  char *zRefCopy;
   char *zSchema;
   char *zTarget;
   char *zSql;
@@ -223,18 +224,32 @@ static int nonlocalAttach(sqlite3 *db, DoltliteNonlocal *p, const char *zRef){
   if( !zFile || !zFile[0] ) return SQLITE_OK;
   zTarget = nonlocalTarget(db, zRef);
   if( !zTarget ) return SQLITE_NOMEM;
+  zRefCopy = sqlite3_mprintf("%s", zRef);
   zSchema = sqlite3_mprintf(NONLOCAL_SCHEMA_PREFIX "%s", zRef);
-  zSql = sqlite3_mprintf("ATTACH '%q/%q' AS \"%w\"", zFile, zTarget, zSchema);
-  if( !zSchema || !zSql ){
+  zSql = zSchema
+      ? sqlite3_mprintf("ATTACH '%q/%q' AS \"%w\"", zFile, zTarget, zSchema)
+      : 0;
+  if( !zRefCopy || !zSchema || !zSql ){
     sqlite3_free(zTarget);
+    sqlite3_free(zRefCopy);
     sqlite3_free(zSchema);
     sqlite3_free(zSql);
     return SQLITE_NOMEM;
   }
+  aNew = sqlite3_realloc64(p->aAttach, sizeof(*aNew)*(p->nAttach+1));
+  if( !aNew ){
+    sqlite3_free(zTarget);
+    sqlite3_free(zRefCopy);
+    sqlite3_free(zSchema);
+    sqlite3_free(zSql);
+    return SQLITE_NOMEM;
+  }
+  p->aAttach = aNew;
   rc = sqlite3_exec(db, zSql, 0, 0, 0);
   sqlite3_free(zSql);
   if( rc!=SQLITE_OK ){
     sqlite3_free(zTarget);
+    sqlite3_free(zRefCopy);
     sqlite3_free(zSchema);
     return rc;
   }
@@ -242,17 +257,9 @@ static int nonlocalAttach(sqlite3 *db, DoltliteNonlocal *p, const char *zRef){
   ** database the application opened: it is no more writable than main. */
   rc = sqlite3FindDbName(db, zSchema);
   if( rc>=0 ) doltliteBtreeInheritReadonly(db->aDb[0].pBt, db->aDb[rc].pBt);
-  aNew = sqlite3_realloc64(p->aAttach, sizeof(*aNew)*(p->nAttach+1));
-  if( !aNew ){
-    sqlite3_free(zTarget);
-    sqlite3_free(zSchema);
-    return SQLITE_NOMEM;
-  }
-  p->aAttach = aNew;
-  aNew[p->nAttach].zRef = sqlite3_mprintf("%s", zRef);
-  aNew[p->nAttach].zSchema = zSchema;
-  aNew[p->nAttach].zTarget = zTarget;
-  if( !aNew[p->nAttach].zRef ) return SQLITE_NOMEM;
+  p->aAttach[p->nAttach].zRef = zRefCopy;
+  p->aAttach[p->nAttach].zSchema = zSchema;
+  p->aAttach[p->nAttach].zTarget = zTarget;
   p->nAttach++;
   return SQLITE_OK;
 }
@@ -482,7 +489,7 @@ static int nonlocalSync(sqlite3 *db){
          || nonlocalSchemaFor(db, p, zRef) ){
           continue;
         }
-        (void)nonlocalAttach(db, p, zRef);
+        if( nonlocalAttach(db, p, zRef)==SQLITE_NOMEM ) p->bStale = 1;
       }
     }else{
       nDetached = nonlocalDetachUnused(db, p);
