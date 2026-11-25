@@ -156,4 +156,60 @@ if {$had_mutmap_drain} {
   unset env(DOLTLITE_MUTMAP_DRAIN_BYTES)
 }
 
+# Immediate-flush insert/delete (mutMapShouldDrain and sqlite_master) must not
+# leave a stale or dangling cached payload on the cursor.
+set saved_mutmap_drain [expr {[info exists env(DOLTLITE_MUTMAP_DRAIN_BYTES)] ? $env(DOLTLITE_MUTMAP_DRAIN_BYTES) : ""}]
+set had_mutmap_drain [info exists env(DOLTLITE_MUTMAP_DRAIN_BYTES)]
+set env(DOLTLITE_MUTMAP_DRAIN_BYTES) 1
+foreach {name ddl} {
+  rowid   {CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, pad BLOB)}
+  norowid {CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, pad BLOB) WITHOUT ROWID}
+} {
+  reset_db
+  execsql $ddl
+  do_execsql_test immediate-flush-$name-setup {
+    WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<200)
+    INSERT INTO t SELECT i, 'old-'||i, zeroblob(128) FROM c;
+    SELECT count(*) FROM t;
+  } {200}
+  do_execsql_test immediate-flush-$name-update-returning {
+    UPDATE t SET v = 'new-'||id, pad = zeroblob(256) WHERE id <= 50
+      RETURNING id, v, length(pad);
+  } [concat {*}[lmap i [list {*}[lrepeat 50 {}]] {
+    incr idx_$name
+    list [set idx_$name] "new-[set idx_$name]" 256
+  }]]
+  do_execsql_test immediate-flush-$name-upsert-same-key {
+    INSERT INTO t VALUES (1, 'a', zeroblob(64)), (1, 'b', zeroblob(96)), (1, 'c', zeroblob(32))
+      ON CONFLICT(id) DO UPDATE SET v = t.v || ':' || excluded.v, pad = excluded.pad;
+    SELECT v, length(pad) FROM t WHERE id = 1;
+  } {new-1:a:b:c 32}
+  do_execsql_test immediate-flush-$name-delete-returning {
+    DELETE FROM t WHERE id % 2 = 0 RETURNING id, v;
+  } [concat {*}[lmap i [list {*}[lrepeat 100 {}]] {
+    incr didx_$name
+    set k [expr {[set didx_$name] * 2}]
+    set lbl [expr {$k <= 50 ? "new-$k" : "old-$k"}]
+    list $k $lbl
+  }]]
+  do_execsql_test immediate-flush-$name-verify {
+    SELECT count(*), sum(id % 2) FROM t;
+    PRAGMA integrity_check;
+  } {100 100 ok}
+}
+do_execsql_test immediate-flush-master {
+  CREATE TABLE m1(a INT);
+  CREATE TABLE m2(b INT);
+  CREATE INDEX m1_idx ON m1(a);
+  ALTER TABLE m1 RENAME TO m1_renamed;
+  DROP TABLE m2;
+  SELECT name FROM sqlite_master WHERE name LIKE 'm%' ORDER BY name;
+  PRAGMA integrity_check;
+} {m1_idx m1_renamed ok}
+if {$had_mutmap_drain} {
+  set env(DOLTLITE_MUTMAP_DRAIN_BYTES) $saved_mutmap_drain
+} else {
+  unset env(DOLTLITE_MUTMAP_DRAIN_BYTES)
+}
+
 finish_test
