@@ -3114,6 +3114,11 @@ static void doltliteRebaseInteractiveContinue(
     sqlite3_result_error(context, "no rebase in progress", -1);
     return;
   }
+  if( rebaseSessionIsPaused(db) ){
+    sqlite3_free(zPrevBranch);
+    doltliteRebasePausedContinue(context, db);
+    return;
+  }
   keepEmpty = (doltliteGetSessionRebaseFlags(db) & WS_REBASE_FLAG_EMPTY_KEEP)!=0;
   zOrigBranch = sqlite3_mprintf("%s", zOrigBranchConst);
   zReturnBranch = sqlite3_mprintf("%s", zReturnBranchConst);

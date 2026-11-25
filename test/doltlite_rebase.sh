@@ -2142,4 +2142,79 @@ SELECT 'LOG|' || group_concat(message, '|') FROM dolt_log WHERE message NOT LIKE
 done
 
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB5_SHORT" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DBE" "$DBE2" "$DBE3" "$DBU" "$DBP" "$DBEK" "$DBED" "$DBEI" "$DBCV" "$DBEDIT" "$DBEDIT2" "$DBEDIT3" "$DBEDIT4" "$DBEDIT5" "$DBEDIT6" "$DBADD1" "$DBADD2" "$DBADD3" "$DBADD4" "$DBADD5" "$DBADDE" "$DBEDITST" "$DBEDITUS" "$DBEDITMAN" "$DBEDITAM" "$DBEDITRO" "$DBST" "$DBST3" "$DBSTD" "$DBSTC" "$DBCP" "$DBEDIT_FOLD"
+
+DBPAUSED_THEIRS=/tmp/test_rebase_paused_reopen_theirs_$$.db
+seed_rebase_data_conflict "$DBPAUSED_THEIRS"
+echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('main');
+SELECT dolt_conflicts_resolve('--theirs','t');
+SELECT dolt_add('t');
+COMMIT;" | "$DOLTLITE" "$DBPAUSED_THEIRS" >/dev/null 2>&1
+PT_OUT=$(echo "SELECT 'BR0|' || active_branch();
+SELECT dolt_rebase('--continue');
+SELECT 'DONE|' || active_branch() || '|' || (SELECT v FROM t WHERE id=1);
+SELECT 'LOG|' || group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';" | "$DOLTLITE" "$DBPAUSED_THEIRS" 2>&1)
+if echo "$PT_OUT" | grep -q '^BR0|main$' \
+   && echo "$PT_OUT" | grep -q 'Successfully rebased and updated refs/heads/feat' \
+   && echo "$PT_OUT" | grep -q '^DONE|feat|2$' \
+   && echo "$PT_OUT" | grep -q '^LOG|feat changes,main changes,init$'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_paused_continue_reopen_theirs\n  full: $PT_OUT"
+fi
+rm -f "$DBPAUSED_THEIRS"
+
+DBPAUSED_OURS=/tmp/test_rebase_paused_reopen_ours_$$.db
+seed_rebase_data_conflict "$DBPAUSED_OURS"
+echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('main');
+SELECT dolt_conflicts_resolve('--ours','t');
+SELECT dolt_add('t');
+COMMIT;" | "$DOLTLITE" "$DBPAUSED_OURS" >/dev/null 2>&1
+PO_OUT=$(echo "SELECT 'BR0|' || active_branch();
+SELECT dolt_rebase('--continue');
+SELECT 'DONE|' || active_branch() || '|' || (SELECT v FROM t WHERE id=1);
+SELECT 'LOG|' || group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';" | "$DOLTLITE" "$DBPAUSED_OURS" 2>&1)
+if echo "$PO_OUT" | grep -q '^BR0|main$' \
+   && echo "$PO_OUT" | grep -q 'Successfully rebased and updated refs/heads/feat' \
+   && echo "$PO_OUT" | grep -q '^DONE|feat|3$' \
+   && echo "$PO_OUT" | grep -q '^LOG|main changes,init$'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_paused_continue_reopen_ours\n  full: $PO_OUT"
+fi
+rm -f "$DBPAUSED_OURS"
+
+DBEDIT_REOPEN_MAIN=/tmp/test_rebase_edit_reopen_main_$$.db
+seed_edit_stage_repo "$DBEDIT_REOPEN_MAIN"
+echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('-i','main');
+UPDATE dolt_rebase SET action='edit' WHERE commit_message='f1';
+SELECT dolt_rebase('--continue');
+INSERT INTO t VALUES(4,4);
+SELECT dolt_add('t');
+COMMIT;" | "$DOLTLITE" "$DBEDIT_REOPEN_MAIN" >/dev/null 2>&1
+EM_OUT=$(echo "SELECT 'BR0|' || active_branch();
+SELECT dolt_rebase('--continue');
+SELECT 'DONE|' || active_branch();
+SELECT 'LOG|' || group_concat(message, ',') FROM dolt_log WHERE message NOT LIKE 'Initialize%';
+SELECT 'ROW|' || id || '=' || v FROM t ORDER BY id;" | "$DOLTLITE" "$DBEDIT_REOPEN_MAIN" 2>&1)
+EM_ROWS=$(echo "$EM_OUT" | grep '^ROW|' | tr '\n' ',')
+if echo "$EM_OUT" | grep -q '^BR0|main$' \
+   && echo "$EM_OUT" | grep -q 'Successfully rebased and updated refs/heads/feat' \
+   && echo "$EM_OUT" | grep -q '^DONE|feat$' \
+   && echo "$EM_OUT" | grep -q '^LOG|f2,f1,f1,m1,base$' \
+   && [ "$EM_ROWS" = "ROW|1=1,ROW|2=2,ROW|3=3,ROW|4=4,ROW|10=10," ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_edit_continue_reopen_default_branch\n  rows: $EM_ROWS\n  full: $EM_OUT"
+fi
+rm -f "$DBEDIT_REOPEN_MAIN"
+
 dltest_finish
