@@ -4654,6 +4654,55 @@ static void run_fetch_window_gc_named_remote(void){
 }
 
 /* Clone has the same unrooted-chunk window as fetch; installing refs over a GC'd graph must fail. */
+
+/* The pre-install walk only has to find a synced leaf still present; the
+** sync already read and verified it. */
+static void run_clone_validates_leaves_by_presence(void){
+  sqlite3 *remoteDb = 0;
+  sqlite3 *cloneDb = 0;
+  char remotePath[256];
+  char clonePath[256];
+  char sql[512];
+  long long nRead, nWrite;
+
+  printf("=== Clone Validates Leaves By Presence Test ===\n\n");
+  make_dbpath(remotePath, sizeof(remotePath), "test_clone_leaves_remote");
+  make_dbpath(clonePath, sizeof(clonePath), "test_clone_leaves_clone");
+  removeDbFiles(remotePath);
+  removeDbFiles(clonePath);
+
+  check("clone_leaves_open_remote", open_db(remotePath, &remoteDb)==SQLITE_OK);
+  check("clone_leaves_seed_remote", execSql(remoteDb,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, k INTEGER);"
+    "CREATE INDEX ik ON t(k);"
+    "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<60000)"
+    " INSERT INTO t SELECT x, 'row_'||x||hex(randomblob(40)), x*7 FROM c;"
+    "SELECT dolt_commit('-A','-m','base');"
+    "UPDATE t SET v='second_'||id WHERE id%50=0;"
+    "SELECT dolt_commit('-A','-m','second');")==SQLITE_OK);
+  sqlite3_close(remoteDb);
+
+  check("clone_leaves_open_target", open_db(clonePath, &cloneDb)==SQLITE_OK);
+  snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remotePath);
+  check("clone_leaves_clone", execSql(cloneDb, sql)==SQLITE_OK);
+  nRead = atoll(queryScalarText(cloneDb,
+      "SELECT value FROM dolt_engine_stats WHERE name='chunk_read'"));
+  nWrite = atoll(queryScalarText(cloneDb,
+      "SELECT value FROM dolt_engine_stats WHERE name='chunk_write'"));
+  printf("  clone wrote %lld chunks, read back %lld\n", nWrite, nRead);
+  check("clone_leaves_many_chunks", nWrite>500);
+  check("clone_leaves_not_reread", nRead*4<nWrite);
+  check("clone_leaves_data", strcmp(queryScalarText(cloneDb,
+      "SELECT count(*)||','||sum(v LIKE 'second_%')||','||"
+      "(SELECT count(*) FROM t INDEXED BY ik WHERE k>0)||','||"
+      "(SELECT count(*) FROM dolt_log) FROM t"), "60000,1200,60000,3")==0);
+  check("clone_leaves_integrity", strcmp(queryScalarText(cloneDb,
+      "PRAGMA integrity_check"), "ok")==0);
+  sqlite3_close(cloneDb);
+  removeDbFiles(remotePath);
+  removeDbFiles(clonePath);
+}
+
 static void run_clone_ref_install_survives_window_gc(void){
   sqlite3 *remoteDb = 0;
   sqlite3 *cloneDb = 0;
@@ -23751,6 +23800,7 @@ static const RegressionCase aCases[] = {
   { "rebase_deep_history_ordering", "Rebase Deep History Ordering Test", run_rebase_deep_history_ordering },
   { "workspace_stage_writes_once", "Workspace Stage Writes Once Test", run_workspace_stage_writes_once },
   { "workspace_discard_writes_once", "Workspace Discard Writes Once Test", run_workspace_discard_writes_once },
+  { "clone_validates_leaves_by_presence", "Clone Validates Leaves By Presence Test", run_clone_validates_leaves_by_presence },
   { "workspace_schema_check_once", "Workspace Schema Check Once Test", run_workspace_schema_check_once },
   { "workspace_queue_dedupes_rows", "Workspace Queue Dedupes Rows Test", run_workspace_queue_dedupes_rows },
   { "rebase_main_table_schema_guard", "Rebase Main Table Schema Guard Test", run_rebase_main_table_schema_guard },
