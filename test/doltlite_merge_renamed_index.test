@@ -127,4 +127,55 @@ foreach {rname rename col extra} {
   }
 }
 
+foreach {cname ancCol} {
+  keyword order
+  space   {my col}
+  quote   {odd"col}
+} {
+  set qcol [string map {{"} {""}} $ancCol]
+  foreach direction {forward reverse} {
+    reset_db
+    execsql "
+      CREATE TABLE t(id INTEGER PRIMARY KEY, \"$qcol\" INT, x INT);
+      INSERT INTO t VALUES(1, 10, 100);
+      SELECT dolt_commit('-Am', 'base');
+      SELECT dolt_branch('side');
+      ALTER TABLE t RENAME COLUMN \"$qcol\" TO renamed_col;
+      CREATE INDEX idx_ren ON t(renamed_col);
+      CREATE VIEW v_ren AS SELECT id, renamed_col FROM t;
+      INSERT INTO t VALUES(2, 20, 200);
+      SELECT dolt_commit('-Am', 'rename and add dependents');
+      SELECT dolt_checkout('side');
+      ALTER TABLE t RENAME COLUMN x TO y;
+      INSERT INTO t VALUES(3, 30, 300);
+      SELECT dolt_commit('-Am', 'rename other column');
+    "
+    if {$direction eq "forward"} {
+      execsql {SELECT dolt_checkout('main')}
+      set target side
+      set reopen [file normalize test.db]
+    } else {
+      set target main
+      set reopen "[file normalize test.db]/side"
+    }
+    set prefix merge-inverse-quote-$cname-$direction
+    do_test $prefix.merge {
+      string length [execsql "SELECT dolt_merge('$target')"]
+    } 40
+    foreach stage {merged reopened} {
+      if {$stage eq "reopened"} {
+        db close
+        sqlite3 db $reopen
+      }
+      do_execsql_test $prefix.$stage {
+        SELECT id, renamed_col, y FROM t INDEXED BY idx_ren ORDER BY renamed_col;
+        SELECT id, renamed_col FROM v_ren ORDER BY id;
+        SELECT count(*) FROM dolt_status;
+        SELECT count(*) FROM dolt_conflicts;
+        PRAGMA integrity_check;
+      } {1 10 100 2 20 200 3 30 300 1 10 2 20 3 30 0 0 ok}
+    }
+  }
+}
+
 finish_test
