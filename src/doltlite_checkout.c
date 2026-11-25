@@ -174,9 +174,7 @@ struct CheckoutMutationCtx {
   const char *zTargetBranch;
   const char *zCurrentBranch;
   ProllyHash savedSessionHead;
-  ProllyHash savedSessionStaged;
-  ProllyHash savedMergeCommit;
-  ProllyHash savedConflictsCatalog;
+  DoltliteSessionVcSnapshot savedVc;
   ProllyHash savedPreRebaseCat;
   ProllyHash savedRebaseOnto;
   ProllyHash oldCatHash;
@@ -184,7 +182,6 @@ struct CheckoutMutationCtx {
   ProllyHash oldCommitHash;
   ProllyHash targetCommit;
   ProllyHash targetCatHash;
-  u8 savedIsMerging;
   u8 savedIsRebasing;
   char *zSavedRebaseOrigBranch;
   char *zSavedRebaseReturnBranch;
@@ -300,10 +297,7 @@ static void checkoutSaveSession(sqlite3 *db, CheckoutMutationCtx *p){
   const char *zReturn = 0;
   p->savedWasDetached = doltliteIsDetached(db);
   doltliteGetSessionHead(db, &p->savedSessionHead);
-  doltliteGetSessionStaged(db, &p->savedSessionStaged);
-  doltliteGetSessionMergeState(db, &p->savedIsMerging,
-                               &p->savedMergeCommit,
-                               &p->savedConflictsCatalog);
+  doltliteSaveSessionVcSnapshot(db, &p->savedVc);
   p->savedIsRebasing = doltliteGetSessionRebaseFlags(db);
   doltliteGetSessionRebaseState(db, 0,
                                 &p->savedPreRebaseCat,
@@ -337,12 +331,7 @@ static int checkoutRestoreSession(sqlite3 *db, CheckoutMutationCtx *p){
                                        p->zSavedRebaseReturnBranch);
   }
   if( rc==SQLITE_OK ){
-    rc = doltliteSetSessionStaged(db, &p->savedSessionStaged);
-  }
-  if( rc==SQLITE_OK ){
-    rc = doltliteSetSessionMergeState(db, p->savedIsMerging,
-                                      &p->savedMergeCommit,
-                                      &p->savedConflictsCatalog);
+    rc = doltliteRestoreSessionVcSnapshot(db, &p->savedVc);
   }
   if( rc==SQLITE_OK && p->haveOldState ){
     rc = doltliteSwitchCatalog(db, &p->oldCatHash);
@@ -1505,6 +1494,15 @@ static void doltCheckoutParsedFunc(
     if( doltliteSessionHasUnresolvedConflicts(db) ){
       doltliteVcResultError(ctx, db,
         "unresolved conflicts \xe2\x80\x94 resolve them or roll back first");
+      return;
+    }
+    if( doltliteSessionHasPendingReplayCommit(db) ){
+      u8 replayKind = 0;
+      doltliteGetSessionReplayState(db, &replayKind, 0, 0, 0, 0);
+      doltliteVcResultError(ctx, db,
+        replayKind==DOLTLITE_REPLAY_REVERT
+          ? "revert in progress \xe2\x80\x94 commit, continue, or abort first"
+          : "cherry-pick in progress \xe2\x80\x94 commit, continue, or abort first");
       return;
     }
   }

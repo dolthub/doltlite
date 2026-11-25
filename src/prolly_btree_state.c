@@ -586,6 +586,16 @@ int btreeWorkingSetMoved(Btree *p){
   return prollyHashCompare(&workingSet, &p->loadedWorkingSet)!=0;
 }
 
+static void btreeClearReplayState(Btree *p){
+  p->vc.pendingReplayCommit = 0;
+  p->vc.replayKind = 0;
+  memset(&p->vc.replaySnapshot, 0, sizeof(ProllyHash));
+  memset(&p->vc.replayStaged, 0, sizeof(ProllyHash));
+  memset(&p->vc.replayViolations, 0, sizeof(ProllyHash));
+  memset(&p->vc.replayWorkingSetBasis, 0, sizeof(ProllyHash));
+  memset(&p->vc.replaySeries, 0, sizeof(p->vc.replaySeries));
+}
+
 int btreeReloadBranchWorkingStateInto(
   Btree *p,
   int bLoadCatalog,
@@ -1711,6 +1721,61 @@ int doltliteSetSessionConstraintViolationsCatalog(sqlite3 *db, const ProllyHash 
   return SQLITE_OK;
 }
 
+void doltliteSaveSessionVcSnapshot(
+  sqlite3 *db,
+  DoltliteSessionVcSnapshot *pOut
+){
+  memset(pOut, 0, sizeof(*pOut));
+  doltliteGetSessionStaged(db, &pOut->stagedCatalog);
+  doltliteGetSessionMergeState(db, &pOut->isMerging,
+                               &pOut->mergeCommitHash,
+                               &pOut->conflictsCatalogHash);
+  doltliteGetSessionConstraintViolationsCatalog(
+      db, &pOut->constraintViolationsHash);
+  pOut->pendingReplayCommit = doltliteSessionHasPendingReplayCommit(db)!=0;
+  doltliteGetSessionReplayState(db, &pOut->replayKind,
+                                &pOut->replaySnapshot,
+                                &pOut->replayStaged,
+                                &pOut->replayViolations,
+                                &pOut->replayWorkingSetBasis);
+  doltliteGetSessionReplaySeries(db, &pOut->replaySeries);
+}
+
+int doltliteRestoreSessionVcSnapshot(
+  sqlite3 *db,
+  const DoltliteSessionVcSnapshot *pIn
+){
+  int rc = doltliteSetSessionStaged(db, &pIn->stagedCatalog);
+  if( rc==SQLITE_OK ){
+    rc = doltliteSetSessionMergeState(db, pIn->isMerging,
+                                      &pIn->mergeCommitHash,
+                                      &pIn->conflictsCatalogHash);
+  }
+  if( rc==SQLITE_OK ){
+    rc = doltliteSetSessionConstraintViolationsCatalog(
+        db, &pIn->constraintViolationsHash);
+  }
+  if( rc==SQLITE_OK ){
+    if( pIn->pendingReplayCommit ){
+      if( pIn->replayKind ){
+        rc = doltliteSetSessionReplayState(db, pIn->replayKind,
+                                           &pIn->replaySnapshot,
+                                           &pIn->replayStaged,
+                                           &pIn->replayViolations,
+                                           &pIn->replayWorkingSetBasis);
+      }else{
+        rc = doltliteSetSessionPendingReplayCommit(db, 1);
+      }
+      if( rc==SQLITE_OK ){
+        rc = doltliteSetSessionReplaySeries(db, &pIn->replaySeries);
+      }
+    }else{
+      rc = doltliteSetSessionPendingReplayCommit(db, 0);
+    }
+  }
+  return rc;
+}
+
 int doltliteSessionHasConstraintViolations(sqlite3 *db){
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return 0;
   return !prollyHashIsEmpty(&db->aDb[0].pBt->vc.constraintViolationsHash);
@@ -2098,7 +2163,7 @@ int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch){
   if( rc == SQLITE_EMPTY ){
     memset(&pBtree->vc.stagedCatalog, 0, sizeof(ProllyHash));
     pBtree->vc.isMerging = 0;
-    pBtree->vc.pendingReplayCommit = 0;
+    btreeClearReplayState(pBtree);
     memset(&pBtree->vc.mergeCommitHash, 0, sizeof(ProllyHash));
     memset(&pBtree->vc.conflictsCatalogHash, 0, sizeof(ProllyHash));
     pBtree->isRebasing = 0;
@@ -2121,7 +2186,7 @@ int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch){
     pBtree->preRebaseWorkingCat = preRebaseWorkingCat;
     pBtree->rebaseOntoCommit = rebaseOntoCommit;
     pBtree->vc.constraintViolationsHash = constraintViolationsHash;
-    pBtree->vc.pendingReplayCommit = 0;
+    btreeClearReplayState(pBtree);
     sqlite3_free(pBtree->zRebaseOrigBranch);
     pBtree->zRebaseOrigBranch = zNewRebaseOrigBranch;
     sqlite3_free(pBtree->zRebaseReturnBranch);
