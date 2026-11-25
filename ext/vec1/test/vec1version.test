@@ -113,6 +113,24 @@ do_catchsql_test 3.5 {
   SELECT rowid FROM v3(random_vector(128), 4);
 } {1 {vec1: unrecognized model version}}
 
+#--------------------------------------------------------------------------
+
+do_execsql_test 4.0 {
+  CREATE VIRTUAL TABLE v4 USING vec1;
+  INSERT INTO v4(rowid, vector) VALUES(1, random_vector(128));
+  INSERT INTO v4(rowid, vector) VALUES(2, random_vector(128));
+  INSERT INTO v4(cmd, vector) VALUES('rebuild', '{index:"flat"}');
+  INSERT INTO v4_config(id, val) VALUES(-1, 'hello');
+}
+
+db close
+sqlite3 db test.db
+vec1_load db
+
+do_catchsql_test 4.1 {
+  SELECT rowid FROM v4(random_vector(128), 4);
+} {1 {unrecognized config entry: -1}}
+
 
 finish_test
 
