@@ -176,8 +176,18 @@ static int csFileRelock(CsFileLock pLock, int bCreate){
   return rc;
 }
 
+/* Windows verbatim paths (\\?\) keep their backslashes. */
+static const char *csLastSeparator(const char *zPath){
+  const char *z = strrchr(zPath, '/');
+#ifdef _WIN32
+  const char *zB = strrchr(zPath, '\\');
+  if( zB && (!z || zB>z) ) z = zB;
+#endif
+  return z;
+}
+
 static char *csLockPath(const char *path){
-  const char *zBase = strrchr(path, '/');
+  const char *zBase = csLastSeparator(path);
   int nDir = 0;
 
   if( zBase ){
@@ -193,7 +203,7 @@ static char *csLockPath(const char *path){
 ** delete operation at the same allocation. */
 int csLockSidecarDelete(sqlite3_vfs *pVfs, const char *zPath){
   int nPath = (int)strlen(zPath);
-  const char *zBase = strrchr(zPath, '/');
+  const char *zBase = csLastSeparator(zPath);
   int nDir = zBase ? (int)(zBase - zPath) + 1 : 0;
 #ifdef _MSC_VER
   char *zLock = (char*)_alloca(nPath + sizeof(".-lock"));
@@ -241,7 +251,7 @@ static int csDirectoryAccess(
   *pExists = 0;
   *pWritable = 0;
   if( !pVfs || !zPath ) return SQLITE_OK;
-  zSlash = strrchr(zPath, '/');
+  zSlash = csLastSeparator(zPath);
   if( !zSlash ){
     zDirPath = ".";
   }else if( zSlash==zPath ){

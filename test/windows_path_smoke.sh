@@ -35,4 +35,5 @@ run_case "path with spaces" "$TMP/dir with spaces/db file.db"
 
 if command -v cygpath >/dev/null 2>&1; then
   run_case "windows-style temp path" "$(cygpath -m "$TMP/windows-style.db")"
+  run_case "windows verbatim path" '\\?\'"$(cygpath -w "$TMP/verbatim.db")"
 fi
