@@ -322,3 +322,4 @@ doltlite_pk_range_bounds
 doltlite_table_moveto_stale_root
 doltlite_savepoint_cursor_mutmap
 doltlite_gc_reopen_fail
+doltlite_hashof_oom
