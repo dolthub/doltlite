@@ -2398,4 +2398,126 @@ else
 fi
 rm -f "$DBRB_ACT3"
 
+DBRB_IGN1=/tmp/test_rebase_conflict_ignore_$$.db
+rm -f "$DBRB_IGN1"
+"$DOLTLITE" "$DBRB_IGN1" >/dev/null <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+INSERT INTO dolt_ignore VALUES ('ign_%', 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_checkout('-b', 'feat');
+UPDATE t SET v = 'feat' WHERE id = 1;
+SELECT dolt_commit('-am', 'feat1');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 'main' WHERE id = 1;
+SELECT dolt_commit('-am', 'main1');
+SQL
+RB_IGN1_OUT=$(echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('main');
+SELECT dolt_conflicts_resolve('--theirs', 't');
+CREATE TABLE ign_tmp(id INTEGER PRIMARY KEY);
+INSERT INTO ign_tmp VALUES (99);
+SELECT dolt_add('t');
+SELECT dolt_rebase('--continue');
+SELECT 'BR|' || active_branch();
+SELECT 'DIFF|' || coalesce(group_concat(coalesce(from_table_name, to_table_name) || ':' || diff_type, ','), '') FROM dolt_diff_summary('HEAD~1', 'HEAD');
+SELECT 'STATUS|' || count(*) FROM dolt_status;
+SELECT 'T|' || v FROM t WHERE id = 1;
+SELECT 'IGN_WORK|' || id FROM ign_tmp;
+DROP TABLE ign_tmp;
+SELECT 'STATUS_AFTER_DROP|' || count(*) FROM dolt_status;" | "$DOLTLITE" "$DBRB_IGN1" 2>&1)
+if echo "$RB_IGN1_OUT" | grep -q 'Successfully rebased and updated refs/heads/feat' \
+   && echo "$RB_IGN1_OUT" | grep -q '^BR|feat$' \
+   && echo "$RB_IGN1_OUT" | grep -q '^DIFF|t:modified$' \
+   && echo "$RB_IGN1_OUT" | grep -q '^STATUS|0$' \
+   && echo "$RB_IGN1_OUT" | grep -q '^T|feat$' \
+   && echo "$RB_IGN1_OUT" | grep -q '^IGN_WORK|99$' \
+   && echo "$RB_IGN1_OUT" | grep -q '^STATUS_AFTER_DROP|0$'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_conflict_continue_skips_ignored_table\n  full: $RB_IGN1_OUT"
+fi
+rm -f "$DBRB_IGN1"
+
+DBRB_IGN2=/tmp/test_rebase_edit_ignore_$$.db
+rm -f "$DBRB_IGN2"
+"$DOLTLITE" "$DBRB_IGN2" >/dev/null <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+INSERT INTO dolt_ignore VALUES ('ign_%', 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_checkout('-b', 'feat');
+INSERT INTO t VALUES (2, 'f1');
+SELECT dolt_commit('-am', 'f1');
+INSERT INTO t VALUES (3, 'f2');
+SELECT dolt_commit('-am', 'f2');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (10, 'm1');
+SELECT dolt_commit('-am', 'm1');
+SQL
+RB_IGN2_OUT=$(echo "SELECT dolt_checkout('feat');
+SELECT dolt_rebase('-i', 'main');
+UPDATE dolt_rebase SET action='edit' WHERE commit_message='f1';
+SELECT dolt_rebase('--continue');
+INSERT INTO t VALUES (4, 'edited');
+CREATE TABLE ign_tmp(id INTEGER PRIMARY KEY);
+INSERT INTO ign_tmp VALUES (99);
+SELECT dolt_add('t');
+SELECT dolt_rebase('--continue');
+SELECT 'BR|' || active_branch();
+SELECT 'DIFF_EDIT|' || coalesce(group_concat(coalesce(from_table_name, to_table_name) || ':' || diff_type, ','), '') FROM dolt_diff_summary('HEAD~2', 'HEAD~1');
+SELECT 'DIFF_HEAD|' || coalesce(group_concat(coalesce(from_table_name, to_table_name) || ':' || diff_type, ','), '') FROM dolt_diff_summary('HEAD~1', 'HEAD');
+SELECT 'STATUS|' || count(*) FROM dolt_status;
+SELECT 'ROWS|' || group_concat(id || '=' || v, ',') FROM (SELECT id, v FROM t ORDER BY id);
+SELECT 'IGN_HEAD|' || count(*) FROM sqlite_master WHERE type='table' AND name='ign_tmp';" | "$DOLTLITE" "$DBRB_IGN2" 2>&1)
+if echo "$RB_IGN2_OUT" | grep -q 'Successfully rebased and updated refs/heads/feat' \
+   && echo "$RB_IGN2_OUT" | grep -q '^BR|feat$' \
+   && echo "$RB_IGN2_OUT" | grep -q '^DIFF_EDIT|t:modified$' \
+   && echo "$RB_IGN2_OUT" | grep -q '^DIFF_HEAD|t:modified$' \
+   && echo "$RB_IGN2_OUT" | grep -q '^STATUS|0$' \
+   && echo "$RB_IGN2_OUT" | grep -q '^ROWS|1=base,2=f1,3=f2,4=edited,10=m1$' \
+   && echo "$RB_IGN2_OUT" | grep -q '^IGN_HEAD|0$'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_edit_continue_skips_ignored_table\n  full: $RB_IGN2_OUT"
+fi
+rm -f "$DBRB_IGN2"
+
+DBRB_IGN3=/tmp/test_rebase_conflict_staged_plan_$$.db
+rm -f "$DBRB_IGN3"
+"$DOLTLITE" "$DBRB_IGN3" >/dev/null <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_checkout('-b', 'feat');
+UPDATE t SET v = 'feat' WHERE id = 1;
+SELECT dolt_commit('-am', 'feat1');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 'main' WHERE id = 1;
+SELECT dolt_commit('-am', 'main1');
+SQL
+RB_IGN3_OUT=$(echo "SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('main');
+SELECT dolt_conflicts_resolve('--theirs', 't');
+SELECT dolt_add('t', 'dolt_rebase');
+SELECT dolt_rebase('--continue');
+SELECT 'DIFF|' || coalesce(group_concat(coalesce(from_table_name, to_table_name) || ':' || diff_type, ','), '') FROM dolt_diff_summary('HEAD~1', 'HEAD');
+SELECT 'PLAN_TBL|' || count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase';" | "$DOLTLITE" "$DBRB_IGN3" 2>&1)
+if echo "$RB_IGN3_OUT" | grep -q 'Successfully rebased and updated refs/heads/feat' \
+   && echo "$RB_IGN3_OUT" | grep -q '^DIFF|t:modified$' \
+   && echo "$RB_IGN3_OUT" | grep -q '^PLAN_TBL|0$'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_conflict_continue_never_commits_plan_table\n  full: $RB_IGN3_OUT"
+fi
+rm -f "$DBRB_IGN3"
+
 dltest_finish

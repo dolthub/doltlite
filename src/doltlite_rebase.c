@@ -1470,10 +1470,11 @@ static int rebaseAdvanceWorkingBranch(
   sqlite3 *db,
   const ProllyHash *pExpectedHead,
   const ProllyHash *pNewHead,
-  const ProllyHash *pCatalogHash
+  const ProllyHash *pCatalogHash,
+  const ProllyHash *pWorkingCatHash
 ){
   return doltliteCompareAndAdvanceBranch(
-      db, pExpectedHead, 0, pNewHead, pCatalogHash, 0);
+      db, pExpectedHead, 0, pNewHead, pCatalogHash, pWorkingCatHash);
 }
 
 /* Squash and fixup rewrite the commit before them, as Dolt's cherry-pick
@@ -1483,6 +1484,7 @@ static int rebaseAmendStep(
   sqlite3 *db,
   const ProllyHash *pStepHead,
   const ProllyHash *pCatalog,
+  const ProllyHash *pWorkingCat,
   const DoltliteCommit *pPrev,
   const char *zSquashMsg
 ){
@@ -1502,7 +1504,8 @@ static int rebaseAmendStep(
                                     nParents-1, &newCommit);
   sqlite3_free(zMsg);
   if( rc==SQLITE_OK ){
-    rc = rebaseAdvanceWorkingBranch(db, pStepHead, &newCommit, pCatalog);
+    rc = rebaseAdvanceWorkingBranch(db, pStepHead, &newCommit,
+                                    pCatalog, pWorkingCat);
   }
   return rc;
 }
@@ -1568,7 +1571,7 @@ static int rebaseReplayStep(
     doltliteGetSessionHead(db, &stepHead);
     rc = doltliteFlushCatalogToHash(db, &stepCat);
     if( rc==SQLITE_OK ){
-      rc = rebaseAmendStep(db, &stepHead, &stepCat, &headC,
+      rc = rebaseAmendStep(db, &stepHead, &stepCat, 0, &headC,
           strcmp(pRow->zAction, "squash")==0
             ? (replayC.zMessage ? replayC.zMessage : "") : 0);
     }
@@ -2452,6 +2455,73 @@ static int rebaseHashesFromPlan(
   return SQLITE_OK;
 }
 
+static int rebaseStripPlanFromCatalog(
+  sqlite3 *db,
+  const ProllyHash *pWorkingCat,
+  ProllyHash *pCat
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  struct TableEntry *aStaged = 0;
+  struct TableEntry *aWorking = 0;
+  struct TableEntry *pStagedMaster = 0;
+  struct TableEntry *pWorkMaster = 0;
+  ProllyHash newMasterRoot;
+  u8 *buf = 0;
+  int nBuf = 0;
+  int nStaged = 0;
+  int nWorking = 0;
+  int idx = -1;
+  int i;
+  int rc;
+  const char *zPlan = "dolt_rebase";
+
+  if( !cs || !pCat || prollyHashIsEmpty(pCat) ) return SQLITE_OK;
+  rc = doltliteLoadCatalog(db, pCat, &aStaged, &nStaged, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  for(i=0; i<nStaged; i++){
+    if( aStaged[i].iTable>1 && aStaged[i].zName
+     && sqlite3_stricmp(aStaged[i].zName, zPlan)==0 ){
+      idx = i;
+      break;
+    }
+  }
+  if( idx<0 ){
+    doltliteFreeCatalog(aStaged, nStaged);
+    return SQLITE_OK;
+  }
+  sqlite3_free(aStaged[idx].zName);
+  if( idx+1<nStaged ){
+    memmove(&aStaged[idx], &aStaged[idx+1],
+            (nStaged-idx-1)*(int)sizeof(struct TableEntry));
+  }
+  nStaged--;
+  rc = doltliteLoadCatalog(db, pWorkingCat, &aWorking, &nWorking, 0);
+  if( rc==SQLITE_OK ){
+    pWorkMaster = doltliteFindTableByNumber(aWorking, nWorking, 1);
+    pStagedMaster = doltliteFindTableByNumber(aStaged, nStaged, 1);
+    if( !pWorkMaster || !pStagedMaster ){
+      rc = SQLITE_CORRUPT;
+    }
+  }
+  if( rc==SQLITE_OK ){
+    rc = doltliteBuildNamedStageMasterRoot(db,
+        &pWorkMaster->root, pWorkMaster->flags,
+        &pStagedMaster->root, pStagedMaster->flags,
+        &zPlan, 1, aStaged, nStaged, 0, &newMasterRoot, 0);
+  }
+  if( rc==SQLITE_OK ){
+    pStagedMaster->root = newMasterRoot;
+    rc = doltliteSerializeCatalogEntries(db, aStaged, nStaged, &buf, &nBuf);
+  }
+  if( rc==SQLITE_OK ){
+    rc = chunkStorePut(cs, buf, nBuf, pCat);
+  }
+  sqlite3_free(buf);
+  doltliteFreeCatalog(aWorking, nWorking);
+  doltliteFreeCatalog(aStaged, nStaged);
+  return rc;
+}
+
 /* Commit what the user resolved for the paused step. Squash and fixup
 ** amend the commit before it, as the step itself would have. */
 static int rebaseCommitResolvedStep(
@@ -2460,6 +2530,7 @@ static int rebaseCommitResolvedStep(
   int *pCommitted
 ){
   ProllyHash cat;
+  ProllyHash workingCat;
   ProllyHash headCat;
   ProllyHash curHead;
   ProllyHash newCommit;
@@ -2467,12 +2538,19 @@ static int rebaseCommitResolvedStep(
 
   *pCommitted = 0;
   memset(&cat, 0, sizeof(cat));
+  memset(&workingCat, 0, sizeof(workingCat));
   memset(&headCat, 0, sizeof(headCat));
   memset(&curHead, 0, sizeof(curHead));
   memset(&newCommit, 0, sizeof(newCommit));
-  rc = doltliteFlushCatalogToHash(db, &cat);
+  rc = doltliteFlushCatalogToHash(db, &workingCat);
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteGetHeadCatalogHash(db, &headCat);
+  if( rc!=SQLITE_OK ) return rc;
+  doltliteGetSessionStaged(db, &cat);
+  if( prollyHashIsEmpty(&cat) ){
+    cat = headCat;
+  }
+  rc = rebaseStripPlanFromCatalog(db, &workingCat, &cat);
   if( rc!=SQLITE_OK ) return rc;
   if( prollyHashIsEmpty(&cat) || prollyHashCompare(&cat, &headCat)==0 ){
     return SQLITE_OK;
@@ -2487,10 +2565,8 @@ static int rebaseCommitResolvedStep(
     if( rc==SQLITE_OK && strcmp(pRow->zAction, "squash")==0 ){
       rc = doltliteLoadCommit(db, &pRow->commitHash, &replay);
     }
-    if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, &cat);
-    if( rc==SQLITE_OK ) rc = doltliteSetSessionStaged(db, &cat);
     if( rc==SQLITE_OK ){
-      rc = rebaseAmendStep(db, &curHead, &cat, &prev,
+      rc = rebaseAmendStep(db, &curHead, &cat, &workingCat, &prev,
           strcmp(pRow->zAction, "squash")==0
             ? (replay.zMessage ? replay.zMessage : "") : 0);
     }
@@ -2503,11 +2579,7 @@ static int rebaseCommitResolvedStep(
       db, &curHead, &cat, pRow->zCommitMessage ? pRow->zCommitMessage : "",
       0, 0, 0, 0, &newCommit);
   if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteSwitchCatalog(db, &cat);
-  if( rc==SQLITE_OK ) rc = doltliteSetSessionStaged(db, &cat);
-  if( rc==SQLITE_OK ){
-    rc = rebaseAdvanceWorkingBranch(db, &curHead, &newCommit, &cat);
-  }
+  rc = rebaseAdvanceWorkingBranch(db, &curHead, &newCommit, &cat, &workingCat);
   if( rc==SQLITE_OK ) *pCommitted = 1;
   return rc;
 }
