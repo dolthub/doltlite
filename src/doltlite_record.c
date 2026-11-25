@@ -609,12 +609,6 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
   return columnNamesLoad(db, "main", zTable, ci, 0);
 }
 
-int doltliteGetColumnNamesIn(
-  sqlite3 *db, const char *zSchema, const char *zTable, DoltliteColInfo *ci
-){
-  return columnNamesLoad(db, zSchema, zTable, ci, 0);
-}
-
 int doltliteGetReaderColumnNames(
   sqlite3 *db, const char *zTable, DoltliteColInfo *ci
 ){

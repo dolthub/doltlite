@@ -68,6 +68,11 @@ static int fetchRowAtCursor(
 
 
 
+int mergeConstraintStoredField(Table *pTab, int iColumn){
+  if( HasRowid(pTab) ) return sqlite3TableColumnToStorage(pTab, iColumn);
+  return sqlite3TableColumnToIndex(sqlite3PrimaryKeyIndex(pTab), iColumn);
+}
+
 int catalogTableChanged(
   struct TableEntry *aAnc, int nAnc,
   struct TableEntry *aCur, int nCur,
