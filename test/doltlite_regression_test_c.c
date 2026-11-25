@@ -21870,7 +21870,11 @@ static void run_incrblob_payload_putdata_requireseek(void){
     snprintf(savedDrainBuf, sizeof(savedDrainBuf), "%s", zSavedDrain);
     hadSavedDrain = 1;
   }
+#ifdef _WIN32
+  _putenv_s("DOLTLITE_MUTMAP_DRAIN_BYTES", "1");
+#else
   setenv("DOLTLITE_MUTMAP_DRAIN_BYTES", "1", 1);
+#endif
 
   rc = sqlite3BtreePutData(pBlobCur, 2, 2, (void*)"AA");
   check("ib_reqseek_drain_put1", rc==SQLITE_OK);
@@ -21881,11 +21885,15 @@ static void run_incrblob_payload_putdata_requireseek(void){
   check("ib_reqseek_drain_read_ok", rc==SQLITE_OK);
   check("ib_reqseek_drain_read_val", memcmp(buf, "AAWXYZ67ZZ", 10)==0);
 
+#ifdef _WIN32
+  _putenv_s("DOLTLITE_MUTMAP_DRAIN_BYTES", hadSavedDrain ? savedDrainBuf : "");
+#else
   if( hadSavedDrain ){
     setenv("DOLTLITE_MUTMAP_DRAIN_BYTES", savedDrainBuf, 1);
   }else{
     unsetenv("DOLTLITE_MUTMAP_DRAIN_BYTES");
   }
+#endif
 
   rc = sqlite3BtreeTableMoveto(pOther, 1, 0, &res);
   check("ib_reqseek_seek_del1", rc==SQLITE_OK && res==0);
