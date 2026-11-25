@@ -768,5 +768,108 @@ run_test "hard_reset_empty_ref_is_head" \
 
 rm -f "$DB19" "$DB20" "$DB21" "$DB22"
 
+DB23=/tmp/test_reset23_$$.db; rm -f "$DB23"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('target');
+UPDATE t SET v='main_v' WHERE id=1;
+SELECT dolt_commit('-Am','main_edit');
+SELECT dolt_checkout('target');
+UPDATE t SET v='target_v' WHERE id=1;
+SELECT dolt_commit('-Am','target_edit');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DB23" > /dev/null 2>&1
+run_test "hard_reset_clears_cherry_pick_replay" \
+  "BEGIN;
+SELECT dolt_cherry_pick('target');
+SELECT dolt_reset('--hard');
+COMMIT;
+BEGIN;
+SELECT dolt_cherry_pick('target');
+ROLLBACK;
+SELECT dolt_cherry_pick('--continue');" \
+  "Error near line 2: Cherry-pick has 1 conflict(s). Resolve and then commit with dolt_commit.
+0
+Error near line 6: Cherry-pick has 1 conflict(s). Resolve and then commit with dolt_commit.
+Error near line 8: no cherry-pick in progress" "$DB23"
+
+DB24=/tmp/test_reset24_$$.db; rm -f "$DB24"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('target');
+UPDATE t SET v='main_v' WHERE id=1;
+SELECT dolt_commit('-Am','main_edit');
+SELECT dolt_checkout('target');
+UPDATE t SET v='target_v' WHERE id=1;
+SELECT dolt_commit('-Am','target_edit');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DB24" > /dev/null 2>&1
+run_test "soft_ref_reset_clears_cherry_pick_replay" \
+  "BEGIN;
+SELECT dolt_cherry_pick('target');
+SELECT dolt_conflicts_resolve('--ours','t');
+SELECT dolt_reset('--soft','HEAD~1');
+COMMIT;
+BEGIN;
+SELECT dolt_cherry_pick('target');
+ROLLBACK;
+SELECT dolt_cherry_pick('--continue');" \
+  "Error near line 2: Cherry-pick has 1 conflict(s). Resolve and then commit with dolt_commit.
+0
+0
+Error near line 7: cannot cherry-pick with uncommitted changes
+Error near line 9: no cherry-pick in progress" "$DB24"
+
+DB25=/tmp/test_reset25_$$.db; rm -f "$DB25"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('target');
+UPDATE t SET v='main_v' WHERE id=1;
+SELECT dolt_commit('-Am','main_edit');
+SELECT dolt_checkout('target');
+UPDATE t SET v='target_v' WHERE id=1;
+SELECT dolt_commit('-Am','target_edit');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DB25" > /dev/null 2>&1
+run_test "mixed_ref_reset_clears_cherry_pick_replay" \
+  "BEGIN;
+SELECT dolt_cherry_pick('target');
+SELECT dolt_conflicts_resolve('--ours','t');
+SELECT dolt_reset('HEAD~1');
+COMMIT;
+BEGIN;
+SELECT dolt_cherry_pick('target');
+ROLLBACK;
+SELECT dolt_cherry_pick('--continue');" \
+  "Error near line 2: Cherry-pick has 1 conflict(s). Resolve and then commit with dolt_commit.
+0
+0
+Error near line 7: cannot cherry-pick with uncommitted changes
+Error near line 9: no cherry-pick in progress" "$DB25"
+
+DB26=/tmp/test_reset26_$$.db; rm -f "$DB26"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'v1');
+SELECT dolt_commit('-Am','c1');
+UPDATE t SET v='v2' WHERE id=1;
+SELECT dolt_commit('-Am','c2');
+UPDATE t SET v='v3' WHERE id=1;
+SELECT dolt_commit('-Am','c3');" | $DOLTLITE "$DB26" > /dev/null 2>&1
+run_test "hard_reset_clears_revert_replay" \
+  "BEGIN;
+SELECT dolt_revert('HEAD~1');
+SELECT dolt_reset('--hard');
+COMMIT;
+BEGIN;
+SELECT dolt_revert('HEAD~1');
+ROLLBACK;
+SELECT dolt_revert('--continue');" \
+  "Error near line 2: Revert has 1 conflict(s). Resolve and then commit with dolt_commit.
+0
+Error near line 6: Revert has 1 conflict(s). Resolve and then commit with dolt_commit.
+Error near line 8: no revert in progress" "$DB26"
+
+rm -f "$DB23" "$DB24" "$DB25" "$DB26"
+
 
 dltest_finish

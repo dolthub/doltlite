@@ -1234,6 +1234,9 @@ static void doltliteResetFunc(
     doltliteSetSessionHead(db, &targetCommit);
 
     rc = doltliteClearSessionMergeState(db);
+    if( rc==SQLITE_OK ){
+      rc = doltliteSetSessionPendingReplayCommit(db, 0);
+    }
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
       goto reset_cleanup;
@@ -1286,6 +1289,9 @@ static void doltliteResetFunc(
     }
 
     rc = doltliteClearSessionMergeState(db);
+    if( rc==SQLITE_OK ){
+      rc = doltliteSetSessionPendingReplayCommit(db, 0);
+    }
 
     if( rc==SQLITE_OK ){
       if( doltliteSessionHasConstraintViolations(db) ){
