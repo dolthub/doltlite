@@ -31,6 +31,11 @@ int loadMergePkInfo(sqlite3 *db, const char *zTable, MergePkInfo *pPk);
 int finishConstraintStmt(sqlite3_stmt *pStmt, int rc);
 void setConstraintError(sqlite3 *db, char **pzErrMsg, int rc);
 
+static inline int mergeConstraintStoredField(Table *pTab, int iColumn){
+  if( HasRowid(pTab) ) return sqlite3TableColumnToStorage(pTab, iColumn);
+  return sqlite3TableColumnToIndex(sqlite3PrimaryKeyIndex(pTab), iColumn);
+}
+
 int catalogTableChanged(
   struct TableEntry *aAnc, int nAnc,
   struct TableEntry *aCur, int nCur,

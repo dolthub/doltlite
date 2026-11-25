@@ -45,11 +45,6 @@ static int tableDeclIndex(const Table *pTab, const char *zName){
   return -1;
 }
 
-static int fkStoredField(Table *pTab, int iColumn){
-  if( HasRowid(pTab) ) return sqlite3TableColumnToStorage(pTab, iColumn);
-  return sqlite3TableColumnToIndex(sqlite3PrimaryKeyIndex(pTab), iColumn);
-}
-
 static int fkDecodeClusteredKey(
   sqlite3 *db,
   Table *pTab,
@@ -111,7 +106,7 @@ static int fkEvalVirtualColumn(
       rc = sqlite3_bind_int64(pStmt, iParam++, intKey);
       continue;
     }
-    iField = fkStoredField(pTab, i);
+    iField = mergeConstraintStoredField(pTab, i);
     if( iField<0 || iField>=pInfo->nField ){
       rc = doltliteBindColumnDefault(db, pStmt, iParam++, pTab, i);
       continue;
@@ -340,7 +335,7 @@ static int fkParentLookupInit(
                                  bHasRowid, intKey, &aValue[i], &apOwned[i]);
 #endif
       }else{
-        int iField = fkStoredField(pTab, decl);
+        int iField = mergeConstraintStoredField(pTab, decl);
         if( iField<0 || iField>=info.nField ){
           rc = doltliteColumnDefaultSerialValue(db, pTab, decl,
                                                 &aValue[i], &apOwned[i]);

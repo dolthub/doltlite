@@ -285,15 +285,6 @@ struct UniqueIndexEntry {
   UnpackedRecord *pUnpacked;
 };
 
-/* Record slots come from the index's own table, never from column info read
-** back over the connection: mid-merge that read still returns the pre-merge
-** catalog, so a column the merged schema adds looks absent and an index over
-** it cannot be mapped. */
-static int uniqueStoredField(Table *pTab, int iColumn){
-  if( HasRowid(pTab) ) return sqlite3TableColumnToStorage(pTab, iColumn);
-  return sqlite3TableColumnToIndex(sqlite3PrimaryKeyIndex(pTab), iColumn);
-}
-
 #ifndef SQLITE_OMIT_GENERATED_COLUMNS
 static int uniqueBindStoredColumn(
   sqlite3 *db,
@@ -308,7 +299,7 @@ static int uniqueBindStoredColumn(
   DoltliteSerialValue v;
   int iField;
   int rc;
-  iField = uniqueStoredField(pTab, iColumn);
+  iField = mergeConstraintStoredField(pTab, iColumn);
   if( iField<0 || iField>=pInfo->nField ){
     return doltliteBindColumnDefault(db, pStmt, iParam, pTab, iColumn);
   }
@@ -434,7 +425,7 @@ static int uniqueRecordFromTableRow(
     }else
 #endif
     {
-      iRecord = uniqueStoredField(pTab, iColumn);
+      iRecord = mergeConstraintStoredField(pTab, iColumn);
       if( iRecord>=pInfo->nField ){
         rc = doltliteColumnDefaultSerialValue(
             db, pTab, iColumn, &aValue[i], &apOwned[i]);
