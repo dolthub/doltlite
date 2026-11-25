@@ -151,7 +151,8 @@ int doltliteBranchRefIsDirty(
 
   *pDirty = 0;
 
-  if( strcmp(br->zName, doltliteGetSessionBranch(db))==0 ){
+  if( !doltliteIsDetached(db)
+   && strcmp(br->zName, doltliteGetSessionBranch(db))==0 ){
     return doltliteHasUncommittedChanges(db, pDirty);
   }
   if( prollyHashIsEmpty(&br->workingSetHash) ){
