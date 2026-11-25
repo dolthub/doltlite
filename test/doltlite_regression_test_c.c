@@ -22803,6 +22803,136 @@ static void run_clean_close_marker_respects_shared_lock(void){
   removeDbFiles(dbpath);
 }
 
+static void armSyncFailBeforeRefInstall(void *pArg){
+  (void)pArg;
+  gFailHits = 0;
+  gFailSyncOnce = 1;
+}
+
+static void run_remote_refs_error_rollback(void){
+  char zRemote[256], zClone[256], zFetch[256], zUrl[320];
+  sqlite3 *dbRem = 0;
+  sqlite3 *dbClone = 0;
+  ChunkStore *pCloneCs = 0;
+  ChunkStore cs;
+  DoltliteRemote *pRemote = 0;
+  ProllyHash refsBefore;
+  ProllyHash trackHash;
+  int missingBranch = 0;
+  int occupied = 0;
+  int rc;
+
+  printf("=== Remote Refs Error Rollback Test ===\n\n");
+  make_dbpath(zRemote, sizeof(zRemote), "remote_refs_rb_src");
+  make_dbpath(zClone, sizeof(zClone), "remote_refs_rb_clone");
+  make_dbpath(zFetch, sizeof(zFetch), "remote_refs_rb_fetch");
+  removeDbFiles(zRemote);
+  removeDbFiles(zClone);
+  removeDbFiles(zFetch);
+
+  check("remote_refs_rb: open remote", open_db(zRemote, &dbRem)==SQLITE_OK);
+  check("remote_refs_rb: seed remote",
+      execSql(dbRem,
+          "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+          "INSERT INTO t VALUES(1, 'a');"
+          "SELECT dolt_commit('-Am', 'c1');")==SQLITE_OK);
+  sqlite3_close(dbRem);
+  dbRem = 0;
+
+  snprintf(zUrl, sizeof(zUrl), "file://%s", zRemote);
+
+  check("remote_refs_rb: open clone db", open_db(zClone, &dbClone)==SQLITE_OK);
+  pCloneCs = dbClone ? doltliteGetChunkStore(dbClone) : 0;
+  check("remote_refs_rb: clone store", pCloneCs!=0);
+  pRemote = doltliteFsRemoteOpen(sqlite3_vfs_find(0), zRemote);
+  check("remote_refs_rb: open remote for clone", pRemote!=0);
+  if( pCloneCs && pRemote ){
+    rc = doltliteClone(pCloneCs, pRemote, zUrl, "no_such_branch", "origin", 0,
+                       &missingBranch, &occupied);
+    if( !(rc!=SQLITE_OK && missingBranch==1 && occupied==0) ){
+      fprintf(stderr, "  clone missing branch: rc=%d missing=%d occupied=%d\n",
+              rc, missingBranch, occupied);
+    }
+    check("remote_refs_rb: clone fails on missing branch",
+          rc!=SQLITE_OK && missingBranch==1 && occupied==0);
+    check("remote_refs_rb: clone error clears nPending",
+          pCloneCs->staging.nPending==0);
+    check("remote_refs_rb: clone error clears nWriteBuf",
+          pCloneCs->staging.nWriteBuf==0);
+    check("remote_refs_rb: clone error clears nRecentUncommitted",
+          pCloneCs->staging.nRecentUncommitted==0);
+
+    missingBranch = 0;
+    occupied = 0;
+    rc = doltliteClone(pCloneCs, pRemote, zUrl, "main", "origin", 0,
+                       &missingBranch, &occupied);
+    if( !(rc==SQLITE_OK && missingBranch==0 && occupied==0) ){
+      fprintf(stderr, "  clone main: rc=%d missing=%d occupied=%d\n",
+              rc, missingBranch, occupied);
+    }
+    check("remote_refs_rb: subsequent clone succeeds",
+          rc==SQLITE_OK && missingBranch==0 && occupied==0);
+    check("remote_refs_rb: subsequent clone clean staging",
+          pCloneCs->staging.nPending==0 && pCloneCs->staging.nWriteBuf==0);
+    pRemote->xClose(pRemote);
+    pRemote = 0;
+  }
+  sqlite3_close(dbClone);
+  dbClone = 0;
+
+  memset(&cs, 0, sizeof(cs));
+  gFailSyncOnce = 0;
+  gFailHits = 0;
+  check("remote_refs_rb: register fail vfs", registerFailVfs()==SQLITE_OK);
+  check("remote_refs_rb: open fetch store",
+      chunkStoreOpen(&cs, &gFailVfs, zFetch,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB)
+      ==SQLITE_OK);
+  {
+    ProllyHash emptyHash;
+    memset(&emptyHash, 0, sizeof(emptyHash));
+    check("remote_refs_rb: init fetch store refs",
+        chunkStoreSetDefaultBranch(&cs, "main")==SQLITE_OK
+        && chunkStoreAddBranch(&cs, "main", &emptyHash)==SQLITE_OK
+        && chunkStoreSerializeRefs(&cs)==SQLITE_OK
+        && chunkStoreCommit(&cs)==SQLITE_OK);
+  }
+  refsBefore = cs.refs.refsHash;
+
+  pRemote = doltliteFsRemoteOpen(sqlite3_vfs_find(0), zRemote);
+  check("remote_refs_rb: open remote for fetch", pRemote!=0);
+  if( pRemote ){
+    doltliteTestSetBeforeRefInstallHook(armSyncFailBeforeRefInstall, 0);
+    rc = doltliteFetchInto(&cs, pRemote, "origin", "main", "main",
+                           &missingBranch);
+    doltliteTestSetBeforeRefInstallHook(0, 0);
+    gFailSyncOnce = 0;
+    check("remote_refs_rb: fetch commit failure injected",
+          gFailHits>0 && rc!=SQLITE_OK);
+    check("remote_refs_rb: fetch error clears nPending",
+          cs.staging.nPending==0);
+    check("remote_refs_rb: fetch error clears nWriteBuf",
+          cs.staging.nWriteBuf==0);
+    check("remote_refs_rb: fetch error clears nRecentUncommitted",
+          cs.staging.nRecentUncommitted==0);
+    check("remote_refs_rb: fetch error restores refsHash",
+          prollyHashCompare(&cs.refs.refsHash, &refsBefore)==0);
+
+    rc = doltliteFetchInto(&cs, pRemote, "origin", "main", "main",
+                           &missingBranch);
+    check("remote_refs_rb: subsequent fetch succeeds", rc==SQLITE_OK);
+    check("remote_refs_rb: subsequent fetch installs tracking ref",
+          chunkStoreFindTracking(&cs, "origin", "main", &trackHash)==SQLITE_OK);
+    pRemote->xClose(pRemote);
+    pRemote = 0;
+  }
+  chunkStoreClose(&cs);
+
+  removeDbFiles(zRemote);
+  removeDbFiles(zClone);
+  removeDbFiles(zFetch);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -23105,7 +23235,8 @@ static const RegressionCase aCases[] = {
   { "cursor_prev_mutmap_no_double_dec", "Cursor Previous MutMap No Double-Decrement Test", run_cursor_prev_mutmap_no_double_dec },
   { "dolt_schemas_step_err_and_oom", "dolt_schemas Step Error Propagation And OOM Leak Test", run_dolt_schemas_step_err_and_oom },
   { "nonlocal_attach_oom_no_leak", "Nonlocal Attach OOM No Leak Test", run_nonlocal_attach_oom_no_leak },
-  { "clean_close_marker_respects_shared_lock", "Clean Close Marker Respects Shared Lock Test", run_clean_close_marker_respects_shared_lock }
+  { "clean_close_marker_respects_shared_lock", "Clean Close Marker Respects Shared Lock Test", run_clean_close_marker_respects_shared_lock },
+  { "remote_refs_error_rollback", "Remote Refs Error Rollback Test", run_remote_refs_error_rollback }
 };
 
 static int run_case_by_name(const char *zName){
