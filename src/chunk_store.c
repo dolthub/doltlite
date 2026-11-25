@@ -1282,7 +1282,7 @@ static int csReadChunk(
     sqlite3_free(pBuf);
     return SQLITE_CORRUPT;
   }
-  memmove(pBuf, pBuf + 4, sz);
+  if( sz > 0 ) memmove(pBuf, pBuf + 4, sz);
   *ppData = pBuf;
   *pnData = sz;
   return chunkStoreVerifyChunk(pHash, ppData, pnData, cs->pStats);
@@ -1314,11 +1314,13 @@ int chunkStoreGet(
     i64 off = e->offset;
     int sz = e->size;
     i64 nZ = cs->staging.aPendingZeroTail[idx];
-    u8 *pCopy = (u8 *)sqlite3_malloc(sz);
+    u8 *pCopy = (u8 *)sqlite3_malloc(sz > 0 ? sz : 1);
     if( pCopy == 0 ) return SQLITE_NOMEM;
 
-    memcpy(pCopy, cs->staging.pWriteBuf + (off - cs->staging.iMemBase) + 4,
-           (size_t)(sz - nZ));
+    if( sz > nZ ){
+      memcpy(pCopy, cs->staging.pWriteBuf + (off - cs->staging.iMemBase) + 4,
+             (size_t)(sz - nZ));
+    }
     if( nZ>0 ) memset(pCopy + (sz - nZ), 0, (size_t)nZ);
     *ppData = pCopy;
     *pnData = sz;
@@ -1360,9 +1362,9 @@ int chunkStoreGet(
       if( !cs->isMemory ) return SQLITE_CANTOPEN;
       pChunk = csMemChunk(cs, e->offset, e->size, &pSeg);
       if( pChunk ){
-        u8 *pCopy = (u8 *)sqlite3_malloc(e->size);
+        u8 *pCopy = (u8 *)sqlite3_malloc(e->size > 0 ? e->size : 1);
         if( pCopy == 0 ) return SQLITE_NOMEM;
-        memcpy(pCopy, pChunk, e->size);
+        if( e->size > 0 ) memcpy(pCopy, pChunk, e->size);
         *ppData = pCopy;
         *pnData = e->size;
         return SQLITE_OK;
@@ -1485,7 +1487,7 @@ int chunkStoreReadBatch(
         rc = SQLITE_NOMEM;
         break;
       }
-      memcpy(apData[out], p+4, e->size);
+      if( e->size > 0 ) memcpy(apData[out], p+4, e->size);
       anData[out] = e->size;
       rc = chunkStoreVerifyChunk(&aHash[out], &apData[out], &anData[out],
                                  cs->pStats);
@@ -2047,8 +2049,10 @@ int chunkStorePutHashed(
                    &h, (u32)nData);
     cs->staging.nWriteBuf += CS_WAL_CHUNK_HDR_SIZE;
   }
-  memcpy(cs->staging.pWriteBuf + cs->staging.nWriteBuf, pData, nData);
-  cs->staging.nWriteBuf += nData;
+  if( nData > 0 ){
+    memcpy(cs->staging.pWriteBuf + cs->staging.nWriteBuf, pData, nData);
+    cs->staging.nWriteBuf += nData;
+  }
   if( cs->isMemory ){
     memset(cs->staging.pWriteBuf + cs->staging.nWriteBuf, 0,
            CHUNK_STORE_BORROW_PAD);

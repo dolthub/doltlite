@@ -2,6 +2,8 @@
 
 #include "sqlite3.h"
 #include "chunk_store.h"
+#include "doltlite_internal.h"
+#include "lib/test_tmpdir.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -321,6 +323,132 @@ static void testPendingHtResetAfterSweep(void){
   chunkStoreClose(&cs);
 }
 
+static void testZeroByteChunkGet(void){
+  const char *zPath = DOLTLITE_TEST_TMPDIR "/test_zero_byte_chunk_get.db";
+  char zLock[512];
+  ChunkStore memCs;
+  ChunkStore *cs;
+  sqlite3 *db = 0;
+  ProllyHash hEmpty, hPut, hNonEmpty;
+  ProllyHash aBatch[2];
+  u8 *apData[2] = {0, 0};
+  int anData[2] = {-1, -1};
+  u8 *pRead = 0;
+  const u8 *pBorrow = 0;
+  void *pSeg = 0;
+  int nRead = -1;
+  int nPhys = -1;
+  int nBorrow = -1;
+  int nBatchRead = 0;
+  int rc;
+
+  prollyHashCompute((const u8*)"", 0, &hEmpty);
+
+  /* :memory: store (pending, committed, borrow, sparse, PutHashed) */
+  memset(&memCs, 0, sizeof(memCs));
+  rc = chunkStoreOpen(&memCs, 0, ":memory:", SQLITE_OPEN_CREATE);
+  check("zero_mem_open", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    rc = chunkStorePut(&memCs, (const u8*)"", 0, &hPut);
+    check("zero_mem_put", rc==SQLITE_OK && prollyHashCompare(&hPut, &hEmpty)==0);
+    pRead = 0; nRead = -1;
+    rc = chunkStoreGet(&memCs, &hPut, &pRead, &nRead);
+    check("zero_mem_pending_get", rc==SQLITE_OK && pRead!=0 && nRead==0);
+    sqlite3_free(pRead);
+
+    chunkStoreRollback(&memCs);
+    rc = chunkStorePutHashed(&memCs, 0, 0, &hEmpty);
+    check("zero_mem_put_hashed", rc==SQLITE_OK);
+    pRead = 0; nRead = -1;
+    rc = chunkStoreGet(&memCs, &hEmpty, &pRead, &nRead);
+    check("zero_mem_put_hashed_get", rc==SQLITE_OK && pRead!=0 && nRead==0);
+    sqlite3_free(pRead);
+
+    rc = chunkStoreCommit(&memCs);
+    check("zero_mem_commit", rc==SQLITE_OK);
+
+    pRead = 0; nRead = -1;
+    rc = chunkStoreGet(&memCs, &hEmpty, &pRead, &nRead);
+    check("zero_mem_committed_get", rc==SQLITE_OK && pRead!=0 && nRead==0);
+    sqlite3_free(pRead);
+
+    pRead = 0; nRead = -1; nPhys = -1;
+    rc = chunkStoreGetSparse(&memCs, &hEmpty, &pRead, &nRead, &nPhys);
+    check("zero_mem_committed_sparse",
+          rc==SQLITE_OK && pRead!=0 && nRead==0 && nPhys==0);
+    sqlite3_free(pRead);
+
+    pBorrow = 0; nBorrow = -1; pSeg = 0;
+    rc = chunkStoreBorrow(&memCs, &hEmpty, &pBorrow, &nBorrow, &pSeg);
+    check("zero_mem_borrow",
+          rc==SQLITE_OK && pBorrow!=0 && nBorrow==0 && pSeg!=0);
+    if( pSeg ) chunkStoreBorrowRelease(pSeg);
+
+    chunkStoreClose(&memCs);
+  }
+
+  /* Disk store (pending, committed/recent, reopened, readBatch) */
+  remove(zPath);
+  snprintf(zLock, sizeof(zLock), "%s-lock", zPath);
+  remove(zLock);
+
+  rc = sqlite3_open(zPath, &db);
+  check("zero_disk_open", rc==SQLITE_OK && db!=0);
+  if( rc!=SQLITE_OK || !db ){
+    sqlite3_close(db);
+    return;
+  }
+  cs = doltliteGetChunkStore(db);
+  check("zero_disk_cs", cs!=0);
+  if( cs ){
+    rc = chunkStorePut(cs, (const u8*)"", 0, &hPut);
+    check("zero_disk_put", rc==SQLITE_OK && prollyHashCompare(&hPut, &hEmpty)==0);
+    pRead = 0; nRead = -1;
+    rc = chunkStoreGet(cs, &hPut, &pRead, &nRead);
+    check("zero_disk_pending_get", rc==SQLITE_OK && pRead!=0 && nRead==0);
+    sqlite3_free(pRead);
+
+    rc = chunkStorePut(cs, (const u8*)"abc", 3, &hNonEmpty);
+    check("zero_disk_put_nonempty", rc==SQLITE_OK);
+
+    rc = chunkStoreCommit(cs);
+    check("zero_disk_commit", rc==SQLITE_OK);
+
+    pRead = 0; nRead = -1;
+    rc = chunkStoreGet(cs, &hPut, &pRead, &nRead);
+    check("zero_disk_recent_get", rc==SQLITE_OK && pRead!=0 && nRead==0);
+    sqlite3_free(pRead);
+  }
+  sqlite3_close(db);
+  db = 0;
+
+  rc = sqlite3_open(zPath, &db);
+  check("zero_disk_reopen", rc==SQLITE_OK && db!=0);
+  if( rc==SQLITE_OK && db ){
+    cs = doltliteGetChunkStore(db);
+    check("zero_disk_reopen_cs", cs!=0);
+    if( cs ){
+      pRead = 0; nRead = -1;
+      rc = chunkStoreGet(cs, &hEmpty, &pRead, &nRead);
+      check("zero_disk_reopen_get", rc==SQLITE_OK && pRead!=0 && nRead==0);
+      sqlite3_free(pRead);
+
+      aBatch[0] = hNonEmpty;
+      aBatch[1] = hEmpty;
+      rc = chunkStoreReadBatch(cs, aBatch, 2, apData, anData, &nBatchRead);
+      check("zero_disk_batch_get",
+            rc==SQLITE_OK && nBatchRead==2
+            && apData[0]!=0 && anData[0]==3 && memcmp(apData[0], "abc", 3)==0
+            && apData[1]!=0 && anData[1]==0);
+      sqlite3_free(apData[0]);
+      sqlite3_free(apData[1]);
+    }
+  }
+  sqlite3_close(db);
+  remove(zPath);
+  remove(zLock);
+}
+
 int main(void){
   int rc;
 
@@ -346,6 +474,7 @@ int main(void){
   testMemoryCopies();
   testCheckedPut();
   testPendingHtResetAfterSweep();
+  testZeroByteChunkGet();
 
   printf("%d passed, %d failed\n", nPass, nFail);
   sqlite3_shutdown();
