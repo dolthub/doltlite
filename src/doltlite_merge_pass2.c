@@ -82,11 +82,23 @@ static int mergeIndexEachColumn(
   int (*xEach)(void*, const char*),
   void *pCtx
 ){
-  const char *zOpen = zIndexSql ? strchr(zIndexSql, '(') : 0;
+  const char *zOpen = 0;
   const char *zEnd, *z, *zIdent, *zLook;
   char *zCol;
   int depth, nIdent, rc = SQLITE_OK;
 
+  if( zIndexSql ){
+    const char *p = zIndexSql;
+    while( *p && !zOpen ){
+      if( *p=='\'' || *p=='"' || *p=='`' || *p=='[' ){
+        p = mergeIndexSkipQuoted(p, *p);
+      }else if( *p=='(' ){
+        zOpen = p;
+      }else{
+        p++;
+      }
+    }
+  }
   if( !zOpen ) return SQLITE_OK;
   depth = 1;
   zEnd = zOpen + 1;

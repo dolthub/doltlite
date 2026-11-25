@@ -178,4 +178,103 @@ foreach {cname ancCol} {
   }
 }
 
+foreach {sname tblName idxName} {
+  idx-matches-col   t       foo
+  tbl-matches-col   foo     idx_foo
+  paren-in-idx      t       {foo(1)}
+} {
+  set qtbl [string map {{"} {""}} $tblName]
+  set qidx [string map {{"} {""}} $idxName]
+  foreach direction {forward reverse} {
+    reset_db
+    execsql "
+      CREATE TABLE \"$qtbl\"(id INTEGER PRIMARY KEY, foo INT, x INT);
+      INSERT INTO \"$qtbl\" VALUES(1, 10, 100);
+      SELECT dolt_commit('-Am', 'base');
+      SELECT dolt_branch('side');
+      CREATE INDEX \"$qidx\" ON \"$qtbl\"(foo);
+      INSERT INTO \"$qtbl\" VALUES(2, 20, 200);
+      SELECT dolt_commit('-Am', 'create index');
+      SELECT dolt_checkout('side');
+      ALTER TABLE \"$qtbl\" RENAME COLUMN foo TO bar;
+      INSERT INTO \"$qtbl\" VALUES(3, 30, 300);
+      SELECT dolt_commit('-Am', 'rename foo to bar');
+    "
+    if {$direction eq "forward"} {
+      execsql {SELECT dolt_checkout('main')}
+      set target side
+      set reopen [file normalize test.db]
+    } else {
+      set target main
+      set reopen "[file normalize test.db]/side"
+    }
+    set prefix merge-retarget-name-$sname-$direction
+    do_test $prefix.merge {
+      string length [execsql "SELECT dolt_merge('$target')"]
+    } 40
+    foreach stage {merged reopened} {
+      if {$stage eq "reopened"} {
+        db close
+        sqlite3 db $reopen
+      }
+      do_execsql_test $prefix.$stage "
+        SELECT name, tbl_name FROM sqlite_schema WHERE type='index' ORDER BY name;
+        SELECT id, bar FROM \"$qtbl\" INDEXED BY \"$qidx\" WHERE bar>=10 ORDER BY bar;
+        SELECT count(*) FROM dolt_status;
+        SELECT count(*) FROM dolt_conflicts;
+        PRAGMA integrity_check;
+      " [list $idxName $tblName 1 10 2 20 3 30 0 0 ok]
+    }
+  }
+}
+
+foreach {cname newCol} {
+  keyword select
+  space   {my col}
+  quote   {odd"col}
+} {
+  set qnew [string map {{"} {""}} $newCol]
+  foreach direction {forward reverse} {
+    reset_db
+    execsql "
+      CREATE TABLE t(id INTEGER PRIMARY KEY, foo INT, x TEXT);
+      INSERT INTO t VALUES(1, 10, 'ok1');
+      SELECT dolt_commit('-Am', 'base');
+      SELECT dolt_branch('side');
+      CREATE INDEX idx_foo ON t(foo) WHERE foo IS NOT NULL AND x != 'foo';
+      INSERT INTO t VALUES(2, 20, 'ok2');
+      SELECT dolt_commit('-Am', 'create index');
+      SELECT dolt_checkout('side');
+      ALTER TABLE t RENAME COLUMN foo TO \"$qnew\";
+      INSERT INTO t VALUES(3, 30, 'ok3');
+      SELECT dolt_commit('-Am', 'rename column');
+    "
+    if {$direction eq "forward"} {
+      execsql {SELECT dolt_checkout('main')}
+      set target side
+      set reopen [file normalize test.db]
+    } else {
+      set target main
+      set reopen "[file normalize test.db]/side"
+    }
+    set prefix merge-retarget-quote-$cname-$direction
+    do_test $prefix.merge {
+      string length [execsql "SELECT dolt_merge('$target')"]
+    } 40
+    foreach stage {merged reopened} {
+      if {$stage eq "reopened"} {
+        db close
+        sqlite3 db $reopen
+      }
+      do_execsql_test $prefix.$stage "
+        SELECT name, tbl_name FROM sqlite_schema WHERE type='index' ORDER BY name;
+        SELECT id, \"$qnew\" FROM t INDEXED BY idx_foo WHERE \"$qnew\" IS NOT NULL AND x != 'foo' ORDER BY \"$qnew\";
+        SELECT count(*) FROM dolt_status;
+        SELECT count(*) FROM dolt_conflicts;
+        PRAGMA integrity_check;
+      " {idx_foo t 1 10 2 20 3 30 0 0 ok}
+    }
+  }
+}
+
 finish_test

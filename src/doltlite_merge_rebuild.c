@@ -242,13 +242,22 @@ static SchemaEntry *mergedSchemaChoice(
 }
 
 static int indexIdentEq(const char *z, int n, const char *zName){
-  int nName;
   if( n>=2 && (z[0]=='"' || z[0]=='`' || z[0]=='[') ){
-    z++;
-    n -= 2;
+    char q = z[0];
+    char qEnd = (q=='[') ? ']' : q;
+    int i = 1, j = 0;
+    while( i<n-1 ){
+      char c = z[i++];
+      if( q!='[' && c==q && i<n-1 && z[i]==q ) i++;
+      if( zName[j]==0
+       || sqlite3UpperToLower[(u8)c]!=sqlite3UpperToLower[(u8)zName[j]] ){
+        return 0;
+      }
+      j++;
+    }
+    return z[n-1]==qEnd && zName[j]==0;
   }
-  nName = (int)strlen(zName);
-  return n==nName && sqlite3_strnicmp(z, zName, n)==0;
+  return (int)strlen(zName)==n && sqlite3_strnicmp(z, zName, n)==0;
 }
 
 static int retargetIndexSqlToRenamedSlots(
@@ -298,20 +307,61 @@ static int retargetIndexSqlToRenamedSlots(
   pOut = sqlite3_str_new(0);
   if( !pOut ){ rc = SQLITE_NOMEM; goto retarget_done; }
   z = zIndexSql;
-  while( *z ){
-    int type, nTok, slot = -1;
-    nTok = sqlite3GetToken((const u8*)z, &type);
-    if( type==TK_ID || type==TK_STRING || (nTok>0 && (z[0]=='"' || z[0]=='`' || z[0]=='[')) ){
-      for(i=0; i<nNew; i++){
-        if( aMap[i]>=0 && indexIdentEq(z, nTok, aAnc[aMap[i]].zName) ){
-          slot = i;
-          break;
+  {
+    int inBody = 0;
+    int afterCollate = 0;
+    while( *z ){
+      int type, nTok, slot = -1;
+      nTok = sqlite3GetToken((const u8*)z, &type);
+      if( !inBody ){
+        sqlite3_str_append(pOut, z, nTok);
+        if( type==TK_LP ) inBody = 1;
+        z += nTok;
+        continue;
+      }
+      if( type==TK_SPACE ){
+        sqlite3_str_append(pOut, z, nTok);
+        z += nTok;
+        continue;
+      }
+      if( afterCollate ){
+        afterCollate = 0;
+        sqlite3_str_append(pOut, z, nTok);
+        z += nTok;
+        continue;
+      }
+      if( type==TK_COLLATE ){
+        afterCollate = 1;
+        sqlite3_str_append(pOut, z, nTok);
+        z += nTok;
+        continue;
+      }
+      if( type==TK_ID ){
+        const char *zNext = z + nTok;
+        int nextType = 0;
+        while( *zNext ){
+          int nNext = sqlite3GetToken((const u8*)zNext, &nextType);
+          if( nextType!=TK_SPACE ) break;
+          zNext += nNext;
+        }
+        if( nextType!=TK_LP ){
+          for(i=0; i<nNew; i++){
+            if( aMap[i]>=0
+             && sqlite3_stricmp(aAnc[aMap[i]].zName, aNew[i].zName)!=0
+             && indexIdentEq(z, nTok, aAnc[aMap[i]].zName) ){
+              slot = i;
+              break;
+            }
+          }
         }
       }
+      if( slot>=0 ){
+        sqlite3_str_appendf(pOut, "\"%w\"", aNew[slot].zName);
+      }else{
+        sqlite3_str_append(pOut, z, nTok);
+      }
+      z += nTok;
     }
-    if( slot>=0 ) sqlite3_str_appendall(pOut, aNew[slot].zName);
-    else sqlite3_str_append(pOut, z, nTok);
-    z += nTok;
   }
   *pzOut = sqlite3_str_finish(pOut);
   if( !*pzOut ) rc = SQLITE_NOMEM;
