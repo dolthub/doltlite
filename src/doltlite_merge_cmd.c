@@ -1739,7 +1739,11 @@ static int mergeRefFoldVirtualBase(
         &right.catalogHash, aActions, nActions, &merged, pzErr);
   }
   if( rc==SQLITE_OK && nReindex>0 ){
-    rc = doltliteReindexNamedIndexes(db, azReindex, nReindex, 0);
+    rc = mergeReindexFollowTableRenames(aActions, nActions,
+        azReindex, nReindex);
+    if( rc==SQLITE_OK ){
+      rc = doltliteReindexNamedIndexes(db, azReindex, nReindex, 0);
+    }
   }
   if( rc==SQLITE_OK && nRebuild>0 ){
     rc = doltliteRebuildVirtualTables(db, azRebuild, nRebuild);
