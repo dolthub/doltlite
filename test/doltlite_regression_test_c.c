@@ -22734,6 +22734,8 @@ static void armSyncFailBeforeRefInstall(void *pArg){
 static void run_remote_refs_error_rollback(void){
   char zRemote[256], zClone[256], zFetch[256], zUrl[320];
   sqlite3 *dbRem = 0;
+  sqlite3 *dbClone = 0;
+  ChunkStore *pCloneCs = 0;
   ChunkStore cs;
   DoltliteRemote *pRemote = 0;
   ProllyHash refsBefore;
@@ -22761,37 +22763,44 @@ static void run_remote_refs_error_rollback(void){
 
   snprintf(zUrl, sizeof(zUrl), "file://%s", zRemote);
 
-  memset(&cs, 0, sizeof(cs));
-  check("remote_refs_rb: open clone store",
-      chunkStoreOpen(&cs, sqlite3_vfs_find(0), zClone,
-          SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB)
-      ==SQLITE_OK);
+  check("remote_refs_rb: open clone db", open_db(zClone, &dbClone)==SQLITE_OK);
+  pCloneCs = dbClone ? doltliteGetChunkStore(dbClone) : 0;
+  check("remote_refs_rb: clone store", pCloneCs!=0);
   pRemote = doltliteFsRemoteOpen(sqlite3_vfs_find(0), zRemote);
   check("remote_refs_rb: open remote for clone", pRemote!=0);
-  if( pRemote ){
-    rc = doltliteClone(&cs, pRemote, zUrl, "no_such_branch", "origin", 0,
+  if( pCloneCs && pRemote ){
+    rc = doltliteClone(pCloneCs, pRemote, zUrl, "no_such_branch", "origin", 0,
                        &missingBranch, &occupied);
+    if( !(rc!=SQLITE_OK && missingBranch==1 && occupied==0) ){
+      fprintf(stderr, "  clone missing branch: rc=%d missing=%d occupied=%d\n",
+              rc, missingBranch, occupied);
+    }
     check("remote_refs_rb: clone fails on missing branch",
           rc!=SQLITE_OK && missingBranch==1 && occupied==0);
     check("remote_refs_rb: clone error clears nPending",
-          cs.staging.nPending==0);
+          pCloneCs->staging.nPending==0);
     check("remote_refs_rb: clone error clears nWriteBuf",
-          cs.staging.nWriteBuf==0);
+          pCloneCs->staging.nWriteBuf==0);
     check("remote_refs_rb: clone error clears nRecentUncommitted",
-          cs.staging.nRecentUncommitted==0);
+          pCloneCs->staging.nRecentUncommitted==0);
 
     missingBranch = 0;
     occupied = 0;
-    rc = doltliteClone(&cs, pRemote, zUrl, "main", "origin", 0,
+    rc = doltliteClone(pCloneCs, pRemote, zUrl, "main", "origin", 0,
                        &missingBranch, &occupied);
+    if( !(rc==SQLITE_OK && missingBranch==0 && occupied==0) ){
+      fprintf(stderr, "  clone main: rc=%d missing=%d occupied=%d\n",
+              rc, missingBranch, occupied);
+    }
     check("remote_refs_rb: subsequent clone succeeds",
           rc==SQLITE_OK && missingBranch==0 && occupied==0);
     check("remote_refs_rb: subsequent clone clean staging",
-          cs.staging.nPending==0 && cs.staging.nWriteBuf==0);
+          pCloneCs->staging.nPending==0 && pCloneCs->staging.nWriteBuf==0);
     pRemote->xClose(pRemote);
     pRemote = 0;
   }
-  chunkStoreClose(&cs);
+  sqlite3_close(dbClone);
+  dbClone = 0;
 
   memset(&cs, 0, sizeof(cs));
   gFailSyncOnce = 0;
