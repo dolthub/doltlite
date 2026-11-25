@@ -462,4 +462,68 @@ run_test "staged_to_name" "SELECT to_table_name FROM dolt_schema_diff('HEAD','ST
 
 rm -f "$DB"
 
+DB=/tmp/test_sd_order_rename_$$.db; rm -f "$DB"
+echo "CREATE TABLE a(id INT PRIMARY KEY);
+CREATE TABLE b(id INT PRIMARY KEY);
+INSERT INTO a VALUES (1);
+SELECT dolt_commit('-Am','c1');
+ALTER TABLE a RENAME TO z;
+SELECT dolt_commit('-Am','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "order_rename_unfiltered" \
+  "SELECT from_table_name || '|' || to_table_name FROM dolt_schema_diff('HEAD~1','HEAD');" "a|z" "$DB"
+run_test "order_rename_filter_to" \
+  "SELECT from_table_name || '|' || to_table_name FROM dolt_schema_diff('HEAD~1','HEAD','z');" "a|z" "$DB"
+run_test "order_rename_filter_from" \
+  "SELECT from_table_name || '|' || to_table_name FROM dolt_schema_diff('HEAD~1','HEAD','a');" "a|z" "$DB"
+run_test "order_rename_range_filter_to" \
+  "SELECT from_table_name || '|' || to_table_name FROM dolt_schema_diff('HEAD~1..HEAD','z');" "a|z" "$DB"
+run_test "order_rename_range_filter_from" \
+  "SELECT from_table_name || '|' || to_table_name FROM dolt_schema_diff('HEAD~1..HEAD','a');" "a|z" "$DB"
+run_test "order_rename_where_to" \
+  "SELECT from_table_name || '|' || to_table_name FROM dolt_schema_diff('HEAD~1','HEAD') WHERE to_table_name='z';" "a|z" "$DB"
+run_test "order_rename_where_from" \
+  "SELECT from_table_name || '|' || to_table_name FROM dolt_schema_diff('HEAD~1','HEAD') WHERE from_table_name='a';" "a|z" "$DB"
+run_test_match "order_rename_filter_to_from_stmt" \
+  "SELECT from_create_statement FROM dolt_schema_diff('HEAD~1','HEAD','z');" "CREATE TABLE a" "$DB"
+run_test_match "order_rename_filter_from_to_stmt" \
+  "SELECT to_create_statement FROM dolt_schema_diff('HEAD~1','HEAD','a');" "CREATE TABLE .*z" "$DB"
+
+rm -f "$DB"
+
+DB=/tmp/test_sd_order_rename_data_$$.db; rm -f "$DB"
+echo "CREATE TABLE a(id INT PRIMARY KEY, v TEXT);
+CREATE TABLE b(id INT PRIMARY KEY);
+INSERT INTO a VALUES (1,'x');
+SELECT dolt_commit('-Am','c1');
+ALTER TABLE a RENAME TO z;
+INSERT INTO z VALUES (2,'y');
+SELECT dolt_commit('-Am','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "order_rename_data_unfiltered" \
+  "SELECT from_table_name || '|' || to_table_name FROM dolt_schema_diff('HEAD~1','HEAD');" "a|z" "$DB"
+run_test "order_rename_data_filter_to" \
+  "SELECT from_table_name || '|' || to_table_name FROM dolt_schema_diff('HEAD~1','HEAD','z');" "a|z" "$DB"
+run_test "order_rename_data_filter_from" \
+  "SELECT from_table_name || '|' || to_table_name FROM dolt_schema_diff('HEAD~1','HEAD','a');" "a|z" "$DB"
+
+rm -f "$DB"
+
+DB=/tmp/test_sd_order_rename_rev_$$.db; rm -f "$DB"
+echo "CREATE TABLE b(id INT PRIMARY KEY);
+CREATE TABLE z(id INT PRIMARY KEY);
+INSERT INTO z VALUES (1);
+SELECT dolt_commit('-Am','c1');
+ALTER TABLE z RENAME TO a;
+SELECT dolt_commit('-Am','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "order_rename_rev_unfiltered" \
+  "SELECT from_table_name || '|' || to_table_name FROM dolt_schema_diff('HEAD~1','HEAD');" "z|a" "$DB"
+run_test "order_rename_rev_filter_to" \
+  "SELECT from_table_name || '|' || to_table_name FROM dolt_schema_diff('HEAD~1','HEAD','a');" "z|a" "$DB"
+run_test "order_rename_rev_filter_from" \
+  "SELECT from_table_name || '|' || to_table_name FROM dolt_schema_diff('HEAD~1','HEAD','z');" "z|a" "$DB"
+
+rm -f "$DB"
+
 dltest_finish
