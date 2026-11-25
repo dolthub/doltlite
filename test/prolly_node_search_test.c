@@ -93,6 +93,69 @@ static void testKeys(int nPrefix, int nItems){
   prollyNodeBuilderFree(&builder);
 }
 
+static void testFinishSparseOverflow(void){
+  ProllyNodeBuilder builder;
+  ProllyNode node;
+  u8 key[8];
+  u8 val[1] = {0x42};
+  u8 *pData = 0;
+  int nData = 0;
+  i64 nZero = 0;
+  int rc;
+  const i64 maxAllowedZeroTail = (i64)0x7fffffff - 8 - 16 - 8 - 1;
+
+  memset(key, 0x11, sizeof(key));
+
+  prollyNodeBuilderInit(&builder, 0, PROLLY_NODE_INTKEY);
+  rc = prollyNodeBuilderAddZeroTail(&builder, key, 8, val, 1,
+                                    (i64)0x7fffffff - 1);
+  check("add_zero_tail_large", rc==SQLITE_OK);
+  rc = prollyNodeBuilderFinishSparse(&builder, &pData, &nData, &nZero);
+  check("finish_sparse_overflow_toobig",
+        rc==SQLITE_TOOBIG && pData==0 && nData==0 && nZero==0);
+  sqlite3_free(pData);
+  prollyNodeBuilderFree(&builder);
+
+  pData = 0;
+  nData = 0;
+  nZero = 0;
+  prollyNodeBuilderInit(&builder, 0, PROLLY_NODE_INTKEY);
+  rc = prollyNodeBuilderAddZeroTail(&builder, key, 8, val, 1,
+                                    maxAllowedZeroTail + 1);
+  check("add_zero_tail_max_plus_one", rc==SQLITE_OK);
+  rc = prollyNodeBuilderFinishSparse(&builder, &pData, &nData, &nZero);
+  check("finish_sparse_max_plus_one_toobig",
+        rc==SQLITE_TOOBIG && pData==0 && nData==0 && nZero==0);
+  sqlite3_free(pData);
+  prollyNodeBuilderFree(&builder);
+
+  pData = 0;
+  nData = 0;
+  nZero = 0;
+  prollyNodeBuilderInit(&builder, 0, PROLLY_NODE_INTKEY);
+  rc = prollyNodeBuilderAddZeroTail(&builder, key, 8, val, 1,
+                                    maxAllowedZeroTail);
+  check("add_zero_tail_exact_max", rc==SQLITE_OK);
+  rc = prollyNodeBuilderFinishSparse(&builder, &pData, &nData, &nZero);
+  check("finish_sparse_exact_max_ok",
+        rc==SQLITE_OK && pData!=0 && nData==0x7fffffff
+        && nZero==maxAllowedZeroTail);
+  if( rc==SQLITE_OK ){
+    rc = prollyNodeParseSparse(&node, pData, nData, nData - (int)nZero);
+    check("parse_sparse_exact_max_ok", rc==SQLITE_OK && node.nItems==1);
+  }
+  sqlite3_free(pData);
+  prollyNodeBuilderFree(&builder);
+
+  prollyNodeBuilderInit(&builder, 0, PROLLY_NODE_INTKEY);
+  rc = prollyNodeBuilderAddZeroTail(&builder, key, 8, val, 1,
+                                    (i64)0x7fffffffffffffffLL);
+  check("add_zero_tail_i64_max_nomem", rc==SQLITE_NOMEM);
+  rc = prollyNodeBuilderAddZeroTail(&builder, key, 8, val, -1, 16);
+  check("add_zero_tail_neg_prefix_nomem", rc==SQLITE_NOMEM);
+  prollyNodeBuilderFree(&builder);
+}
+
 int main(void){
   int i;
   sqlite3_initialize();
@@ -102,6 +165,7 @@ int main(void){
   for(i=63; i<=73; i++) testKeys(i, 64);
   testKeys(255, 64);
   testKeys(1024, 64);
+  testFinishSparseOverflow();
   printf("%d passed, %d failed\n", nPass, nFail);
   return nFail ? 1 : 0;
 }
