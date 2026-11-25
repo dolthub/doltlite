@@ -110,13 +110,38 @@ static int treeInsertInt(
   return rc;
 }
 
+static int testMutateDelete(
+  ChunkStore *pStore, ProllyCache *pCache,
+  const ProllyHash *pRoot, u8 flags,
+  const u8 *pKey, int nKey, i64 intKey,
+  ProllyHash *pNewRoot
+){
+  ProllyMutMap mm;
+  ProllyMutator mut;
+  int rc = prollyMutMapInit(&mm, (flags & PROLLY_NODE_INTKEY) ? 1 : 0);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = prollyMutMapDelete(&mm, pKey, nKey, intKey);
+  if( rc==SQLITE_OK ){
+    memset(&mut, 0, sizeof(mut));
+    mut.pStore = pStore;
+    mut.pCache = pCache;
+    mut.oldRoot = *pRoot;
+    mut.pEdits = &mm;
+    mut.flags = flags;
+    rc = prollyMutateFlush(&mut);
+    if( rc==SQLITE_OK ) *pNewRoot = mut.newRoot;
+  }
+  prollyMutMapFree(&mm);
+  return rc;
+}
+
 static int treeDeleteInt(
   ChunkStore *cs, ProllyCache *cache,
   const ProllyHash *pRoot, i64 key,
   ProllyHash *pNewRoot
 ){
-  return prollyMutateDelete(cs, cache, pRoot, PROLLY_NODE_INTKEY,
-                            0, 0, key, pNewRoot);
+  return testMutateDelete(cs, cache, pRoot, PROLLY_NODE_INTKEY,
+                          0, 0, key, pNewRoot);
 }
 
 static int treeInsertBlob(

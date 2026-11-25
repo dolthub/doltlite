@@ -1761,42 +1761,4 @@ int prollyMutateInsert(
   return rc;
 }
 
-int prollyMutateDelete(
-  ChunkStore *pStore,
-  ProllyCache *pCache,
-  const ProllyHash *pRoot,
-  u8 flags,
-  const u8 *pKey, int nKey, i64 intKey,
-  ProllyHash *pNewRoot
-){
-  ProllyMutMap mm;
-  ProllyMutator mut;
-  int rc;
-  u8 isIntKey = (flags & PROLLY_NODE_INTKEY) ? 1 : 0;
-
-  rc = prollyMutMapInit(&mm, isIntKey);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = prollyMutMapDelete(&mm, pKey, nKey, intKey);
-  if( rc!=SQLITE_OK ){
-    prollyMutMapFree(&mm);
-    return rc;
-  }
-
-  memset(&mut, 0, sizeof(mut));
-  mut.pStore = pStore;
-  mut.pCache = pCache;
-  memcpy(&mut.oldRoot, pRoot, sizeof(ProllyHash));
-  mut.pEdits = &mm;
-  mut.flags = flags;
-
-  rc = prollyMutateFlush(&mut);
-  if( rc==SQLITE_OK ){
-    memcpy(pNewRoot, &mut.newRoot, sizeof(ProllyHash));
-  }
-
-  prollyMutMapFree(&mm);
-  return rc;
-}
-
 #endif

@@ -30,9 +30,5 @@ int prollyMutateInsert(ChunkStore *pStore, ProllyCache *pCache,
                        const u8 *pVal, int nVal,
                        ProllyHash *pNewRoot);
 
-int prollyMutateDelete(ChunkStore *pStore, ProllyCache *pCache,
-                       const ProllyHash *pRoot, u8 flags,
-                       const u8 *pKey, int nKey, i64 intKey,
-                       ProllyHash *pNewRoot);
 
 #endif

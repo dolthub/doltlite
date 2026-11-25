@@ -1964,19 +1964,6 @@ int doltliteIndexFlushDelta(
   ProllyMutMap *pMap,
   int checkUnique
 );
-int doltliteIndexApplyRowDeltaChecked(
-  sqlite3 *db,
-  ChunkStore *cs,
-  ProllyCache *cache,
-  ProllyHash *pIdxRoot,
-  u8 idxFlags,
-  Index *pIdx,
-  int iPKey, i64 intKey,
-  const u8 *pTreeKey, int nTreeKey,
-  const u8 *pOldVal, int nOldVal,
-  const u8 *pNewVal, int nNewVal,
-  int checkUnique
-);
 int doltliteEnsureWriteTxnAndSavepoints(sqlite3 *db);
 int doltliteMaterializeDefaultColumn(sqlite3*, const char*, const char*,
                                        const char*);
