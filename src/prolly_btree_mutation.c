@@ -2394,13 +2394,14 @@ static int readRowValue(
   BtShared *pBt,
   struct TableEntry *pTE,
   const u8 *pKey, int nKey, i64 intKey,
-  u8 **ppOld, int *pnOld
+  u8 **ppOld, int *pnOld, int *pbFound
 ){
   ProllyCursor cur;
   int rc;
   int res = 0;
   *ppOld = 0;
   *pnOld = 0;
+  if( pbFound ) *pbFound = 0;
   prollyCursorInit(&cur, pBt->pStore, &pBt->cache, &pTE->root, pTE->flags);
   if( pTE->flags & PROLLY_NODE_INTKEY ){
     rc = prollyCursorSeekInt(&cur, intKey, &res);
@@ -2410,6 +2411,7 @@ static int readRowValue(
   if( rc==SQLITE_OK && res==0 && prollyCursorIsValid(&cur) ){
     const u8 *pVal = 0;
     int nVal = 0;
+    if( pbFound ) *pbFound = 1;
     prollyCursorValue(&cur, &pVal, &nVal);
     if( nVal>0 ){
       *ppOld = sqlite3_malloc(nVal);
@@ -2541,6 +2543,7 @@ int doltliteApplyRawRowMutations(
     ProllyMutMapEntry *pSeen = 0;
     u8 *pOldVal = 0;
     int nOldVal = 0;
+    int oldFound = 0;
     u8 *pIdxNew = 0;
     int nIdxNew = 0;
 
@@ -2549,9 +2552,9 @@ int doltliteApplyRawRowMutations(
       rc = rawRowsFlush(db, pBt, pTE, &mm, aIdx, nIdx,
                         checkUnique, ppUniqueViolation);
     }
-    if( rc==SQLITE_OK && pTab && pTab->pIndex ){
+    if( rc==SQLITE_OK && nIdx>0 ){
       rc = readRowValue(pBt, pTE, p->pKey, p->nKey, p->intKey,
-                        &pOldVal, &nOldVal);
+                        &pOldVal, &nOldVal, &oldFound);
     }
     if( rc==SQLITE_OK ){
       if( p->pVal ){
@@ -2562,7 +2565,11 @@ int doltliteApplyRawRowMutations(
       }
     }
     /* Secondary indexes: KeyInfo path so NOCASE/RTRIM match VDBE encoding.
-    ** An empty clustered value still carries the key columns for an insert. */
+    ** An empty clustered value still carries the key columns. */
+    if( rc==SQLITE_OK && nIdx>0 && oldFound && nOldVal<=0 ){
+      rc = doltliteRecordFromClusteredKey(db, zTable, p->pKey, p->nKey,
+                                          &pOldVal, &nOldVal);
+    }
     if( rc==SQLITE_OK && nIdx>0 && p->pVal && p->nVal<=0 ){
       rc = doltliteRecordFromClusteredKey(db, zTable, p->pKey, p->nKey,
                                           &pIdxNew, &nIdxNew);
