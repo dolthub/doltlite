@@ -2724,6 +2724,29 @@ check "bare pull still prefers origin when another remote exists" "0
 2
 3" "$result"
 
+echo "=== dolt_remotes cursor snapshot during mid-scan mutation ==="
+MS="$TMPDIR/midscan_remotes"
+mkdir -p "$MS"
+"$DB" "$MS/one.db" "SELECT dolt_remote('add','r1','file://$MS/r1');" >/dev/null
+result=$("$DB" "$MS/one.db" "SELECT dolt_remote('rm', name), url FROM dolt_remotes;")
+check "mid-scan rm of sole remote returns snapshotted url" "0|file://$MS/r1" "$result"
+result=$("$DB" "$MS/one.db" "SELECT count(*) FROM dolt_remotes;")
+check "mid-scan rm of sole remote leaves remotes empty" "0" "$result"
+
+"$DB" "$MS/single.db" "SELECT dolt_remote('add','r1','file://$MS/r1'); SELECT dolt_remote('add','r2','file://$MS/r2');" >/dev/null
+result=$("$DB" "$MS/single.db" "SELECT dolt_remote('rm', name), url FROM dolt_remotes WHERE name = 'r1';")
+check "mid-scan rm with WHERE name pushdown returns snapshotted url" "0|file://$MS/r1" "$result"
+result=$("$DB" "$MS/single.db" "SELECT name FROM dolt_remotes;")
+check "mid-scan rm with WHERE name pushdown keeps other remote" "r2" "$result"
+
+"$DB" "$MS/multi.db" "SELECT dolt_remote('add','r1','file://$MS/r1'); SELECT dolt_remote('add','r2','file://$MS/r2'); SELECT dolt_remote('add','r3','file://$MS/r3');" >/dev/null
+result=$("$DB" "$MS/multi.db" "SELECT dolt_remote('rm', name), url FROM dolt_remotes;")
+check "mid-scan rm of multiple remotes visits all snapshotted rows" "0|file://$MS/r1
+0|file://$MS/r2
+0|file://$MS/r3" "$result"
+result=$("$DB" "$MS/multi.db" "SELECT count(*) FROM dolt_remotes;")
+check "mid-scan rm of multiple remotes leaves remotes empty" "0" "$result"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"

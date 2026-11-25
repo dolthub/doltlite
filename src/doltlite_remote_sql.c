@@ -2437,7 +2437,53 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 typedef struct RemVtab RemVtab;
 struct RemVtab { sqlite3_vtab base; sqlite3 *db; };
 typedef struct RemCur RemCur;
-struct RemCur { sqlite3_vtab_cursor base; int iRow; int bSingle; int iSingle; };
+struct RemCur {
+  sqlite3_vtab_cursor base;
+  int iRow;
+  /* Cursor-owned copy at xFilter: dolt_remote() in the same statement may reallocate cs->refs. */
+  int nRows;
+  RemoteRef *aSnap;
+};
+
+static void remCurClearSnapshot(RemCur *pCur){
+  int i;
+  for(i=0; i<pCur->nRows; i++){
+    sqlite3_free(pCur->aSnap[i].zName);
+    sqlite3_free(pCur->aSnap[i].zUrl);
+  }
+  sqlite3_free(pCur->aSnap);
+  pCur->aSnap = 0;
+  pCur->nRows = 0;
+  pCur->iRow = 0;
+}
+
+static int remCurSnapshot(RemCur *pCur, const RemoteRef *aRm, int nRm){
+  int i;
+  remCurClearSnapshot(pCur);
+  if( nRm<=0 ) return SQLITE_OK;
+  pCur->aSnap = (RemoteRef*)sqlite3_malloc64((sqlite3_uint64)nRm*sizeof(RemoteRef));
+  if( !pCur->aSnap ) return SQLITE_NOMEM;
+  memset(pCur->aSnap, 0, (size_t)nRm*sizeof(RemoteRef));
+  for(i=0; i<nRm; i++){
+    RemoteRef *pDst = &pCur->aSnap[i];
+    const RemoteRef *pSrc = &aRm[i];
+    pCur->nRows = i+1;
+    pDst->zName = sqlite3_mprintf("%s", pSrc->zName ? pSrc->zName : "");
+    pDst->zUrl = sqlite3_mprintf("%s", pSrc->zUrl ? pSrc->zUrl : "");
+    if( !pDst->zName || !pDst->zUrl ){
+      remCurClearSnapshot(pCur);
+      return SQLITE_NOMEM;
+    }
+  }
+  return SQLITE_OK;
+}
+
+static int remClose(sqlite3_vtab_cursor *c){
+  RemCur *pCur = (RemCur*)c;
+  remCurClearSnapshot(pCur);
+  sqlite3_free(pCur);
+  return SQLITE_OK;
+}
 
 static int remConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
@@ -2463,39 +2509,32 @@ static int remOpen(sqlite3_vtab *v, sqlite3_vtab_cursor **pp){
 static int remFilter(sqlite3_vtab_cursor *c, int n, const char *s, int a, sqlite3_value **v){
   RemVtab *pVtab = (RemVtab*)c->pVtab;
   RemCur *pCur = (RemCur*)c;
+  ChunkStore *cs = doltliteGetChunkStore(pVtab->db);
+  int nRm = 0;
+  const RemoteRef *aRm = 0;
   (void)s;
-  (void)a;
-  pCur->iRow = 0;
-  pCur->bSingle = 0;
-  pCur->iSingle = -1;
-  if( n==1 ){
-    ChunkStore *cs = doltliteGetChunkStore(pVtab->db);
+  remCurClearSnapshot(pCur);
+  if( !cs ) return SQLITE_OK;
+  refsTableGetRemotes(&cs->refs, &nRm, &aRm);
+  if( n==1 && a==1 ){
     const char *zName = (const char*)sqlite3_value_text(v[0]);
-    pCur->bSingle = 1;
-    pCur->iSingle = cs ? csFindNamedRef(cs->refs.aRemotes, cs->refs.nRemotes,
-                                        (int)sizeof(RemoteRef), zName) : -1;
-    pCur->iRow = pCur->iSingle;
+    int i = csFindNamedRef(aRm, nRm, (int)sizeof(RemoteRef), zName);
+    if( i<0 ) return SQLITE_OK;
+    aRm += i;
+    nRm = 1;
   }
-  return SQLITE_OK;
+  return remCurSnapshot(pCur, aRm, nRm);
 }
 static int remNext(sqlite3_vtab_cursor *c){ ((RemCur*)c)->iRow++; return SQLITE_OK; }
 static int remEof(sqlite3_vtab_cursor *c){
-  RemVtab *v = (RemVtab*)c->pVtab;
   RemCur *pCur = (RemCur*)c;
-  ChunkStore *cs = doltliteGetChunkStore(v->db);
-  if( !cs ) return 1;
-  if( pCur->bSingle ) return pCur->iSingle<0 || pCur->iRow!=pCur->iSingle;
-  return pCur->iRow >= refsTableRemoteCount(&cs->refs);
+  return pCur->iRow >= pCur->nRows;
 }
 static int remColumn(sqlite3_vtab_cursor *c, sqlite3_context *ctx, int col){
-  RemVtab *v = (RemVtab*)c->pVtab;
-  ChunkStore *cs = doltliteGetChunkStore(v->db);
+  RemCur *pCur = (RemCur*)c;
   const RemoteRef *rem;
-  int nRm;
-  const RemoteRef *aRm;
-  if(!cs) return SQLITE_OK;
-  refsTableGetRemotes(&cs->refs, &nRm, &aRm);
-  rem = &aRm[((RemCur*)c)->iRow];
+  if( pCur->iRow >= pCur->nRows ) return SQLITE_OK;
+  rem = &pCur->aSnap[pCur->iRow];
   switch(col){
     case 0:
       sqlite3_result_text(ctx, rem->zName, -1, SQLITE_TRANSIENT);
@@ -2534,7 +2573,7 @@ static int remBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
 
 static sqlite3_module remotesModule = {
   0,0,remConnect,remBestIndex,doltliteVtabDisconnect,0,
-  remOpen,doltliteVtabClose,remFilter,remNext,remEof,remColumn,remRowid,
+  remOpen,remClose,remFilter,remNext,remEof,remColumn,remRowid,
   0,0,0,0,0,0,0,0,0,0,0,0
 };
 
