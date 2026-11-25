@@ -150,6 +150,22 @@ misnamed = exchange(
     b"Content-Length: " + str(len(misnamed_body)).encode("ascii") + b"\r\n\r\n"
     + misnamed_body
 )
+long_method = exchange(
+    b"POST" + b"X" * 12 + b" /headers.db/has-chunks HTTP/1.1\r\n"
+    b"Host: localhost\r\n"
+    b"Content-Length: 0\r\n\r\n"
+)
+long_path = exchange(
+    b"POST /headers.db/" + b"x" * 500 + b" HTTP/1.1\r\n"
+    b"Host: localhost\r\n"
+    b"Content-Length: 0\r\n\r\n"
+)
+long_auth = exchange(
+    b"POST /headers.db/has-chunks HTTP/1.1\r\n"
+    b"Host: localhost\r\n"
+    b"Authorization: Bearer " + b"a" * 1024 + b"\r\n"
+    b"Content-Length: 0\r\n\r\n"
+)
 
 print(f"mixed={mixed[0]}|{mixed[1]}|{mixed[2]}")
 print(f"prefixed={prefixed[0]}|{prefixed[1]}|{prefixed[2]}")
@@ -158,6 +174,9 @@ print(f"malformed={malformed[0]}")
 print(f"oversized={oversized[0]}")
 print(f"chunked={chunked[0]}")
 print(f"misnamed={misnamed[0]}")
+print(f"long_method={long_method[0]}")
+print(f"long_path={long_path[0]}")
+print(f"long_auth={long_auth[0]}")
 PY
 )
 check "header names are case-insensitive and exact" \
@@ -167,7 +186,73 @@ duplicate=400
 malformed=400
 oversized=413
 chunked=400
-misnamed=400" "$result"
+misnamed=400
+long_method=400
+long_path=400
+long_auth=400" "$result"
+
+echo "--- 0a. overlong db path is rejected instead of truncated ---"
+LONG_DIR="$TMP/srv"
+for i in $(seq 1 14); do
+  LONG_DIR="$LONG_DIR/$(printf 'd%02d_' "$i")aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+done
+mkdir -p "$LONG_DIR"
+"$REMOTESRV" -p 0 --bind 127.0.0.1 "$LONG_DIR" >"$TMP/longsrv.log" 2>&1 &
+LONG_SRV_PID=$!
+LONG_SRV_PORT=""
+for _ in $(seq 1 50); do
+  LONG_SRV_PORT="$(sed -n 's#.*://127.0.0.1:\([0-9][0-9]*\).*#\1#p' "$TMP/longsrv.log" | head -1)"
+  [ -n "$LONG_SRV_PORT" ] && break
+  sleep 0.1
+done
+if [ -z "$LONG_SRV_PORT" ]; then
+  echo "FAIL: long-dir server did not start"; cat "$TMP/longsrv.log"; fail=$((fail+1))
+else
+  result=$(python3 - "$LONG_SRV_PORT" "$LONG_DIR" <<'PY'
+import os
+import socket
+import sys
+
+port = int(sys.argv[1])
+long_dir = sys.argv[2]
+
+def status_of(path):
+    req = (
+        f"POST /{path}/has-chunks HTTP/1.1\r\n"
+        f"Host: localhost\r\n"
+        f"Content-Length: 0\r\n\r\n"
+    ).encode("ascii")
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
+        sock.sendall(req)
+        sock.shutdown(socket.SHUT_WR)
+        resp = b""
+        while True:
+            try:
+                chunk = sock.recv(4096)
+            except ConnectionResetError:
+                break
+            if not chunk:
+                break
+            resp += chunk
+    return resp.split(b"\r\n", 1)[0].split(b" ", 2)[1].decode("ascii")
+
+prefix_len = 1023 - len(long_dir) - 1
+assert 10 < prefix_len < 240, f"unexpected prefix_len={prefix_len}"
+short_db = "a" * (prefix_len - 3) + ".db"
+overlong_db = short_db + "extra"
+exact_limit_db = short_db + "x"
+print(f"short={status_of(short_db)}")
+print(f"exact_1024={status_of(exact_limit_db)}")
+print(f"overlong={status_of(overlong_db)}")
+PY
+  )
+  check "overlong db path rejected with 400" \
+"short=200
+exact_1024=400
+overlong=400" "$result"
+fi
+stop_process "$LONG_SRV_PID" 2>/dev/null || true
+wait "$LONG_SRV_PID" 2>/dev/null || true
 
 echo "--- 0b. unknown methods and endpoints do not create database files ---"
 result=$(python3 - "$SRV_PORT" "$TMP/srv" <<'PY'

@@ -454,7 +454,7 @@ static int parseRequestHeaders(
     int len;
     if( !pSpace ) return -1;
     len = (int)(pSpace - p);
-    if( len >= nMethodMax ) len = nMethodMax - 1;
+    if( len >= nMethodMax ) return -1;
     memcpy(zMethod, p, len);
     zMethod[len] = '\0';
     p = pSpace + 1;
@@ -464,7 +464,7 @@ static int parseRequestHeaders(
     int len;
     if( !pSpace ) return -1;
     len = (int)(pSpace - p);
-    if( len >= nPathMax ) len = nPathMax - 1;
+    if( len >= nPathMax ) return -1;
     memcpy(zPath, p, len);
     zPath[len] = '\0';
     p = pSpace + 1;
@@ -512,7 +512,7 @@ static int parseRequestHeaders(
       while( pValueEnd>pValue
           && (pValueEnd[-1]==' ' || pValueEnd[-1]=='\t') ) pValueEnd--;
       len = (int)(pValueEnd - pValue);
-      if( len >= nAuthMax ) len = nAuthMax - 1;
+      if( len >= nAuthMax ) return -1;
       memcpy(zAuth, pValue, len);
       zAuth[len] = '\0';
     }
@@ -1584,6 +1584,10 @@ static void handleRequest(
     return;
   }
 
+  if( strlen(pSrv->zDir) + 1 + strlen(zDbName) >= sizeof(zDbPath) ){
+    sendBadRequest(fd);
+    return;
+  }
   sqlite3_snprintf(sizeof(zDbPath), zDbPath, "%s/%s", pSrv->zDir, zDbName);
   isHasChunksEndpoint = (route==REMOTE_ROUTE_POST_HAS_CHUNKS);
   isReadOnlyEndpoint = (route==REMOTE_ROUTE_GET_ROOT

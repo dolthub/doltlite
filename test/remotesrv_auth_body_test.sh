@@ -204,6 +204,12 @@ results["empty_ok"] = status_of((
     "Content-Length: 0\r\n"
     f"Authorization: Bearer {token}\r\n"
     "\r\n").encode())
+results["overlong_auth"] = status_of((
+    "POST /repo.db/has-chunks HTTP/1.1\r\n"
+    "Host: localhost\r\n"
+    "Content-Length: 0\r\n"
+    f"Authorization: Bearer {token}" + "x" * 1024 + "\r\n"
+    "\r\n").encode())
 stop = True
 watch.join()
 
@@ -214,6 +220,7 @@ expect = {
     "oversize_auth": "413",
     "body_read": "400",
     "empty_ok": "200",
+    "overlong_auth": "400",
 }
 for name, wanted in expect.items():
     got = results.get(name, "MISSING")
