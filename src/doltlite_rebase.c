@@ -653,6 +653,16 @@ static int doltliteRebaseLinearReplay(
   memset(&origCat, 0, sizeof(origCat));
   memset(&lockedHead, 0, sizeof(lockedHead));
 
+  {
+    u8 curIsRebasing = 0;
+    doltliteGetSessionRebaseState(db, &curIsRebasing, 0, 0, 0, 0);
+    if( curIsRebasing ){
+      sqlite3_result_error(context,
+        "rebase already in progress; use --continue or --abort", -1);
+      return SQLITE_ERROR;
+    }
+  }
+
   rc = doltliteHasUncommittedChanges(db, &dirty);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
@@ -3602,6 +3612,16 @@ static void doltliteRebaseFunc(
     keepTopLevelSavepoint = 1;
     doltliteRebaseInteractiveContinue(context, db);
     goto rebase_cleanup;
+  }
+  {
+    u8 curIsRebasing = 0;
+    doltliteGetSessionRebaseState(db, &curIsRebasing, 0, 0, 0, 0);
+    if( curIsRebasing ){
+      sqlite3_result_error(context,
+        "rebase already in progress; use --continue or --abort", -1);
+      keepTopLevelSavepoint = 1;
+      goto rebase_cleanup;
+    }
   }
   {
     u8 isMerging = 0;
