@@ -905,37 +905,6 @@ static void mergeSetEntryText(SchemaEntry *pSe, const char *zSql){
   }
 }
 
-static char *mergeRewriteIdent(
-  const char *zSql,
-  const char *zOld,
-  const char *zNew
-){
-  sqlite3_str *pOut = sqlite3_str_new(0);
-  const char *z = zSql;
-  int nOld = (int)strlen(zOld);
-
-  while( *z ){
-    int type;
-    int n = sqlite3GetToken((const u8*)z, &type);
-    if( mergeIsIdentifierToken(z, type)
-     && mergeIdentifiersEqual(z, n, zOld, nOld, 0) ){
-      int newType;
-      int nNew = sqlite3GetToken((const u8*)zNew, &newType);
-      if( *z!='"' && *z!='`' && *z!='[' && newType==TK_ID
-       && (sqlite3Isalpha(*zNew) || *zNew=='_')
-       && nNew==(int)strlen(zNew) ){
-        sqlite3_str_appendall(pOut, zNew);
-      }else{
-        sqlite3_str_appendf(pOut, "\"%w\"", zNew);
-      }
-    }else{
-      sqlite3_str_append(pOut, z, n);
-    }
-    z += n;
-  }
-  return sqlite3_str_finish(pOut);
-}
-
 /* Pairs are (ancestor, side). One pass maps a post-rename index back. */
 static char *mergeRewriteInverse(const char *zSql, char **az, int n){
   sqlite3_str *pOut = sqlite3_str_new(0);
@@ -953,11 +922,33 @@ static char *mergeRewriteInverse(const char *zSql, char **az, int n){
         }
       }
     }
-    if( zRep ) sqlite3_str_appendall(pOut, zRep);
-    else sqlite3_str_append(pOut, z, nTok);
+    if( zRep ){
+      int newType;
+      int nNew = sqlite3GetToken((const u8*)zRep, &newType);
+      if( *z!='"' && *z!='`' && *z!='[' && newType==TK_ID
+       && (sqlite3Isalpha(*zRep) || *zRep=='_')
+       && nNew==(int)strlen(zRep) ){
+        sqlite3_str_appendall(pOut, zRep);
+      }else{
+        sqlite3_str_appendf(pOut, "\"%w\"", zRep);
+      }
+    }else{
+      sqlite3_str_append(pOut, z, nTok);
+    }
     z += nTok;
   }
   return sqlite3_str_finish(pOut);
+}
+
+static char *mergeRewriteIdent(
+  const char *zSql,
+  const char *zOld,
+  const char *zNew
+){
+  char *az[2];
+  az[0] = (char*)zNew;
+  az[1] = (char*)zOld;
+  return mergeRewriteInverse(zSql, az, 2);
 }
 
 /* Emit renames whose target is free. A cycle is broken with a temp name.
