@@ -288,7 +288,8 @@ ifcapable fts5 {
       SELECT dolt_checkout('feature');
       CREATE VIRTUAL TABLE runtime_search USING fts5(body);
       INSERT INTO runtime_search VALUES('incoming token');
-      SELECT dolt_commit('-A','-m','feature');
+      SELECT dolt_add('-f','runtime_search');
+      SELECT dolt_commit('-m','feature');
       SELECT dolt_checkout('main');
     }
     set head [db one {SELECT dolt_hashof('HEAD')}]
