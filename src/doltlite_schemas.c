@@ -161,7 +161,11 @@ static int schemasFilter(sqlite3_vtab_cursor *pCursor,
       sqlite3_finalize(pStmt);
       return SQLITE_OK;
     }
-    sqlite3_bind_value(pStmt, iArg, argv[iArg-1]);
+    rc = sqlite3_bind_value(pStmt, iArg, argv[iArg-1]);
+    if( rc!=SQLITE_OK ){
+      sqlite3_finalize(pStmt);
+      return rc;
+    }
   }
   if( idxNum & SCHEMAS_IDX_NAME_EQ ){
     iArg++;
@@ -169,10 +173,14 @@ static int schemasFilter(sqlite3_vtab_cursor *pCursor,
       sqlite3_finalize(pStmt);
       return SQLITE_OK;
     }
-    sqlite3_bind_value(pStmt, iArg, argv[iArg-1]);
+    rc = sqlite3_bind_value(pStmt, iArg, argv[iArg-1]);
+    if( rc!=SQLITE_OK ){
+      sqlite3_finalize(pStmt);
+      return rc;
+    }
   }
 
-  while( sqlite3_step(pStmt)==SQLITE_ROW ){
+  while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
     const char *zType = (const char*)sqlite3_column_text(pStmt, 0);
     const char *zName = (const char*)sqlite3_column_text(pStmt, 1);
     const char *zSql  = (const char*)sqlite3_column_text(pStmt, 2);
@@ -187,13 +195,19 @@ static int schemasFilter(sqlite3_vtab_cursor *pCursor,
     if( !pCur->aRows[pCur->nRows].zType
      || !pCur->aRows[pCur->nRows].zName
      || !pCur->aRows[pCur->nRows].zFragment ){
+      sqlite3_free(pCur->aRows[pCur->nRows].zType);
+      sqlite3_free(pCur->aRows[pCur->nRows].zName);
+      sqlite3_free(pCur->aRows[pCur->nRows].zFragment);
       rc = SQLITE_NOMEM;
       break;
     }
     pCur->nRows++;
   }
-  sqlite3_finalize(pStmt);
-  if( rc!=SQLITE_OK && rc!=SQLITE_DONE ){
+  {
+    int rcFinal = sqlite3_finalize(pStmt);
+    if( rc==SQLITE_DONE ) rc = rcFinal;
+  }
+  if( rc!=SQLITE_OK ){
     freeRows(pCur);
     return rc;
   }
@@ -907,19 +921,23 @@ int doltliteRevertViewsAndTriggers(
   rc = sqlite3_prepare_v2(db,
       "SELECT type, name FROM main.sqlite_master"
       " WHERE type IN ('view','trigger')", -1, &pStmt, 0);
-  while( rc==SQLITE_OK && sqlite3_step(pStmt)==SQLITE_ROW ){
-    const char *zType = (const char*)sqlite3_column_text(pStmt, 0);
-    const char *zName = (const char*)sqlite3_column_text(pStmt, 1);
-    char **azNew;
-    if( !zType || !zName ) continue;
-    azNew = sqlite3_realloc(azDrop, (nDrop+1)*(int)sizeof(char*));
-    if( !azNew ){ rc = SQLITE_NOMEM; break; }
-    azDrop = azNew;
-    /* Dropping a view drops its INSTEAD OF triggers with it. */
-    azDrop[nDrop] = sqlite3_mprintf("DROP %s IF EXISTS \"%w\"",
-        strcmp(zType, "view")==0 ? "VIEW" : "TRIGGER", zName);
-    if( !azDrop[nDrop] ){ rc = SQLITE_NOMEM; break; }
-    nDrop++;
+  if( rc==SQLITE_OK ){
+    int stepRc;
+    while( (stepRc = sqlite3_step(pStmt))==SQLITE_ROW ){
+      const char *zType = (const char*)sqlite3_column_text(pStmt, 0);
+      const char *zName = (const char*)sqlite3_column_text(pStmt, 1);
+      char **azNew;
+      if( !zType || !zName ) continue;
+      azNew = sqlite3_realloc(azDrop, (nDrop+1)*(int)sizeof(char*));
+      if( !azNew ){ rc = SQLITE_NOMEM; break; }
+      azDrop = azNew;
+      /* Dropping a view drops its INSTEAD OF triggers with it. */
+      azDrop[nDrop] = sqlite3_mprintf("DROP %s IF EXISTS \"%w\"",
+          strcmp(zType, "view")==0 ? "VIEW" : "TRIGGER", zName);
+      if( !azDrop[nDrop] ){ rc = SQLITE_NOMEM; break; }
+      nDrop++;
+    }
+    if( rc==SQLITE_OK && stepRc!=SQLITE_DONE ) rc = stepRc;
   }
   if( pStmt ){
     int rc2 = sqlite3_finalize(pStmt);
@@ -978,17 +996,28 @@ int doltliteLoadLiveTableSql(
   rc = sqlite3_prepare_v2(db, zQry, -1, &pStmt, 0);
   sqlite3_free(zQry);
   if( rc!=SQLITE_OK ) return rc;
-  if( sqlite3_step(pStmt)==SQLITE_ROW ){
+  rc = sqlite3_step(pStmt);
+  if( rc==SQLITE_ROW ){
     const char *zSql = (const char*)sqlite3_column_text(pStmt, 0);
-    *pFound = 1;
     *pzSql = sqlite3_mprintf("%s", zSql ? zSql : "");
     if( !*pzSql ){
       sqlite3_finalize(pStmt);
       return SQLITE_NOMEM;
     }
+    *pFound = 1;
+    rc = sqlite3_finalize(pStmt);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(*pzSql);
+      *pzSql = 0;
+      *pFound = 0;
+    }
+    return rc;
   }
-  sqlite3_finalize(pStmt);
-  return SQLITE_OK;
+  {
+    int rcFinal = sqlite3_finalize(pStmt);
+    if( rc==SQLITE_DONE ) rc = rcFinal;
+  }
+  return rc;
 }
 
 #endif

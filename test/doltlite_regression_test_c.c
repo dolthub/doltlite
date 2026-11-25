@@ -22395,6 +22395,148 @@ cleanup:
   removeDbFiles(dbpath);
 }
 
+typedef struct SchemasInterruptCtx SchemasInterruptCtx;
+struct SchemasInterruptCtx {
+  int tick;
+  int target;
+  int fired;
+};
+
+static int schemasInterruptProgress(void *pArg){
+  SchemasInterruptCtx *p = (SchemasInterruptCtx*)pArg;
+  if( ++p->tick==p->target ){
+    p->fired = 1;
+    return 1;
+  }
+  return 0;
+}
+
+static void run_dolt_schemas_step_err_and_oom(void){
+  char dbpath[512];
+  sqlite3 *db = 0;
+  sqlite3_stmt *pStmt = 0;
+  int i, target, rc;
+  int nInterrupted = 0;
+  int nTruncated = 0;
+  int nOomHit = 0;
+  sqlite3_int64 beforeOpenBytes, afterCloseBytes;
+
+  printf("=== dolt_schemas Step Error Propagation And OOM Leak Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "dolt_schemas_step_err_oom");
+  removeDbFiles(dbpath);
+
+  check("schemas_err_open", open_db(dbpath, &db)==SQLITE_OK);
+  if( !db ) return;
+
+  check("schemas_err_create_table",
+        execSql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);")==SQLITE_OK);
+  for(i=0; i<12; i++){
+    char zSql[256];
+    sqlite3_snprintf(sizeof(zSql), zSql,
+        "CREATE VIEW v_%02d AS SELECT id, v FROM t WHERE id > %d;", i, i);
+    check("schemas_err_create_view", execSql(db, zSql)==SQLITE_OK);
+  }
+  for(i=0; i<8; i++){
+    char zSql[256];
+    sqlite3_snprintf(sizeof(zSql), zSql,
+        "CREATE TRIGGER tr_%02d AFTER INSERT ON t BEGIN SELECT %d; END;", i, i);
+    check("schemas_err_create_trigger", execSql(db, zSql)==SQLITE_OK);
+  }
+
+  check("schemas_err_baseline_count",
+        queryInt64(db, "SELECT count(*) FROM dolt_schemas")==20);
+
+  for(target=1; target<=400; target++){
+    SchemasInterruptCtx ctx;
+    int nRows = 0;
+    ctx.tick = 0;
+    ctx.target = target;
+    ctx.fired = 0;
+    rc = sqlite3_prepare_v2(db,
+        "SELECT type, name, fragment FROM dolt_schemas", -1, &pStmt, 0);
+    if( rc!=SQLITE_OK ){
+      check("schemas_err_prepare", 0);
+      break;
+    }
+    sqlite3_progress_handler(db, 1, schemasInterruptProgress, &ctx);
+    while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
+      nRows++;
+    }
+    sqlite3_progress_handler(db, 0, 0, 0);
+    sqlite3_finalize(pStmt);
+    pStmt = 0;
+
+    if( rc==SQLITE_INTERRUPT ){
+      nInterrupted++;
+    }else if( rc==SQLITE_DONE ){
+      if( nRows!=20 ){
+        nTruncated++;
+      }
+      if( !ctx.fired ) break;
+    }else{
+      check("schemas_err_unexpected_rc", 0);
+      break;
+    }
+  }
+  check("schemas_err_interrupt_observed", nInterrupted>0);
+  check("schemas_err_no_silent_truncation", nTruncated==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  /* OOM during schemasFilter string allocation must not leak partial rows. */
+  beforeOpenBytes = sqlite3_memory_used();
+  check("schemas_oom_open", open_db(dbpath, &db)==SQLITE_OK);
+  if( db ){
+    char zPad[4096];
+    char zViewSql[4600];
+    sqlite3_int64 delta;
+
+    memset(zPad, 'x', sizeof(zPad)-1);
+    zPad[sizeof(zPad)-1] = 0;
+    sqlite3_snprintf(sizeof(zViewSql), zViewSql,
+        "CREATE VIEW v_large_oom_test_name_0123456789 AS SELECT '%s' AS pad;",
+        zPad);
+    check("schemas_oom_create_large_view", execSql(db, zViewSql)==SQLITE_OK);
+
+    rc = sqlite3_prepare_v2(db,
+        "SELECT type, name, fragment FROM dolt_schemas", -1, &pStmt, 0);
+    check("schemas_oom_prepare", rc==SQLITE_OK);
+    if( pStmt ){
+      sqlite3_int64 peakBase, peakDelta, lo;
+      while( sqlite3_step(pStmt)==SQLITE_ROW ){}
+      sqlite3_reset(pStmt);
+
+      peakBase = sqlite3_memory_used();
+      (void)sqlite3_memory_highwater(1);
+      while( sqlite3_step(pStmt)==SQLITE_ROW ){}
+      peakDelta = sqlite3_memory_highwater(0) - peakBase;
+      sqlite3_reset(pStmt);
+
+      lo = peakDelta > 8192 ? peakDelta - 8192 : 64;
+      for(delta=lo; delta<=peakDelta + 512; delta+=128){
+        sqlite3_int64 base = sqlite3_memory_used();
+        sqlite3_hard_heap_limit64(base + delta);
+        while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){}
+        sqlite3_hard_heap_limit64(0);
+        sqlite3_reset(pStmt);
+        if( rc==SQLITE_NOMEM ){
+          nOomHit++;
+        }
+      }
+      sqlite3_finalize(pStmt);
+      pStmt = 0;
+    }
+    sqlite3_close(db);
+    db = 0;
+  }
+  afterCloseBytes = sqlite3_memory_used();
+  check("schemas_oom_hit", nOomHit>0);
+  check("schemas_oom_no_leak", afterCloseBytes==beforeOpenBytes);
+
+  removeDbFiles(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -22693,7 +22835,8 @@ static const RegressionCase aCases[] = {
   { "push_refreshes_before_reading_refs", "Push Refreshes Before Reading Refs Test", run_push_refreshes_before_reading_refs },
   { "incrblob_payload_putdata_requireseek", "Incrblob PayloadChecked/PutData RequireSeek Test", run_incrblob_payload_putdata_requireseek },
   { "fast_intleaf_skips_degenerate_schema_rows", "Fast IntLeaf Skips Degenerate Schema Rows Test", run_fast_intleaf_skips_degenerate_schema_rows },
-  { "cursor_prev_mutmap_no_double_dec", "Cursor Previous MutMap No Double-Decrement Test", run_cursor_prev_mutmap_no_double_dec }
+  { "cursor_prev_mutmap_no_double_dec", "Cursor Previous MutMap No Double-Decrement Test", run_cursor_prev_mutmap_no_double_dec },
+  { "dolt_schemas_step_err_and_oom", "dolt_schemas Step Error Propagation And OOM Leak Test", run_dolt_schemas_step_err_and_oom }
 };
 
 static int run_case_by_name(const char *zName){
