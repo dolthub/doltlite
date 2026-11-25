@@ -169,6 +169,62 @@ oversized=413
 chunked=400
 misnamed=400" "$result"
 
+echo "--- 0b. unknown methods and endpoints do not create database files ---"
+result=$(python3 - "$SRV_PORT" "$TMP/srv" <<'PY'
+import os
+import socket
+import sys
+
+port = int(sys.argv[1])
+srv_dir = sys.argv[2]
+
+def status_of(request):
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
+        sock.sendall(request)
+        sock.shutdown(socket.SHUT_WR)
+        response = b""
+        while True:
+            try:
+                chunk = sock.recv(4096)
+            except ConnectionResetError:
+                break
+            if not chunk:
+                break
+            response += chunk
+    line = response.split(b"\r\n", 1)[0]
+    return line.split(b" ", 2)[1].decode("ascii")
+
+cases = [
+    ("post_bogus", "POST", "unknown-post.db", "bogus"),
+    ("put_bogus", "PUT", "unknown-put.db", "bogus"),
+    ("put_chunks", "PUT", "unknown-put-chunks.db", "chunks"),
+    ("delete_unknown", "DELETE", "unknown-delete.db", "unknown"),
+    ("patch_refs", "PATCH", "unknown-patch.db", "refs"),
+    ("get_bogus", "GET", "unknown-get.db", "bogus"),
+]
+for label, method, db, ep in cases:
+    req = (
+        f"{method} /{db}/{ep} HTTP/1.1\r\n"
+        f"Host: localhost\r\n"
+        f"Content-Length: 0\r\n\r\n"
+    ).encode("ascii")
+    st1 = status_of(req)
+    st2 = status_of(req)
+    exists = int(
+        os.path.exists(os.path.join(srv_dir, db))
+        or os.path.exists(os.path.join(srv_dir, f".{db}-lock"))
+    )
+    print(f"{label}={st1}|{st2}|{exists}")
+PY
+)
+check "unknown methods and endpoints return 4xx without creating db files" \
+"post_bogus=404|404|0
+put_bogus=404|404|0
+put_chunks=404|404|0
+delete_unknown=400|400|0
+patch_refs=400|400|0
+get_bogus=404|404|0" "$result"
+
 cat >"$TMP/proxy.py" <<'PY'
 import re
 import socket
