@@ -319,15 +319,17 @@ int csGrowRecent(ChunkStore *cs, int nAdd){
   return SQLITE_OK;
 }
 
-int csGrowWriteBuf(ChunkStore *cs, int nNeeded){
+int csGrowWriteBuf(ChunkStore *cs, i64 nNeeded){
   i64 nRequired;
   assert( cs!=0 );
-  assert( nNeeded>=0 );
   assert( cs->staging.nWriteBuf>=0
        && cs->staging.nWriteBuf<=cs->staging.nWriteBufAlloc );
   assert( cs->staging.nCommittedWriteBuf>=0
        && cs->staging.nCommittedWriteBuf<=cs->staging.nWriteBuf );
-  nRequired = cs->staging.nWriteBuf + (i64)nNeeded;
+  if( nNeeded<0 || nNeeded > SQLITE_MAX_ALLOCATION_SIZE - cs->staging.nWriteBuf ){
+    return SQLITE_TOOBIG;
+  }
+  nRequired = cs->staging.nWriteBuf + nNeeded;
   if( nRequired > cs->staging.nWriteBufAlloc ){
     i64 nNew = cs->staging.nWriteBufAlloc ? cs->staging.nWriteBufAlloc : CS_INIT_WRITEBUF_SIZE;
     u8 *pNew;
@@ -339,7 +341,7 @@ int csGrowWriteBuf(ChunkStore *cs, int nNeeded){
         nNew += nNew / 2;
       }
     }
-    if( nNew > SQLITE_MAX_ALLOCATION_SIZE && nRequired <= SQLITE_MAX_ALLOCATION_SIZE ){
+    if( nNew > SQLITE_MAX_ALLOCATION_SIZE ){
       nNew = SQLITE_MAX_ALLOCATION_SIZE;
     }
     pNew = (u8 *)sqlite3_realloc64(cs->staging.pWriteBuf, (sqlite3_uint64)nNew);

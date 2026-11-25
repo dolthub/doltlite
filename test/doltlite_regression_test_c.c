@@ -23136,6 +23136,61 @@ static void run_cv_without_rowid_pk_delete(void){
   removeDbFiles(zDb);
 }
 
+static void run_chunk_store_put_int_overflow(void){
+  char zDb[256];
+  ChunkStore csMem;
+  ChunkStore csDisk;
+  ProllyHash h;
+  ProllyHash hOut;
+  int rc;
+
+  printf("=== Chunk Store Put Int Overflow Test ===\n\n");
+
+  prollyHashCompute((const u8 *)"overflow-check", 14, &h);
+  memset(&csMem, 0, sizeof(csMem));
+  rc = chunkStoreOpen(&csMem, sqlite3_vfs_find(0), ":memory:", SQLITE_OPEN_CREATE);
+  check("put_overflow: open memory store", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    rc = chunkStorePutHashed(&csMem, 0, INT_MAX - 10, &h);
+    check("put_overflow: mem putHashed INT_MAX-10", rc==SQLITE_TOOBIG);
+    rc = chunkStorePutHashed(&csMem, 0, INT_MAX, &h);
+    check("put_overflow: mem putHashed INT_MAX", rc==SQLITE_TOOBIG);
+    rc = chunkStorePut(&csMem, 0, INT_MAX - 10, &hOut);
+    check("put_overflow: mem put INT_MAX-10", rc==SQLITE_TOOBIG);
+    rc = chunkStorePutSparse(&csMem, 0, INT_MAX - 10, 0, &hOut);
+    check("put_overflow: mem putSparse zero-tail 0", rc==SQLITE_TOOBIG);
+    rc = chunkStorePutSparse(&csMem, 0, INT_MAX - 10, 5, &hOut);
+    check("put_overflow: mem putSparse zero-tail 5", rc==SQLITE_TOOBIG);
+    check("put_overflow: mem staging untouched",
+          csMem.staging.nPending==0 && csMem.staging.nWriteBuf==0);
+    chunkStoreClose(&csMem);
+  }
+
+  snprintf(zDb, sizeof(zDb), "%s/test_cs_put_overflow_%d.db",
+           DOLTLITE_TEST_TMPDIR, (int)getpid());
+  removeDbFiles(zDb);
+  memset(&csDisk, 0, sizeof(csDisk));
+  rc = chunkStoreOpen(&csDisk, sqlite3_vfs_find(0), zDb,
+                      SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_MAIN_DB);
+  check("put_overflow: open disk store", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    rc = chunkStorePutHashed(&csDisk, 0, INT_MAX - 10, &h);
+    check("put_overflow: disk putHashed INT_MAX-10", rc==SQLITE_TOOBIG);
+    rc = chunkStorePutHashed(&csDisk, 0, INT_MAX, &h);
+    check("put_overflow: disk putHashed INT_MAX", rc==SQLITE_TOOBIG);
+    rc = chunkStorePut(&csDisk, 0, INT_MAX - 10, &hOut);
+    check("put_overflow: disk put INT_MAX-10", rc==SQLITE_TOOBIG);
+    rc = chunkStorePutSparse(&csDisk, 0, INT_MAX - 10, 0, &hOut);
+    check("put_overflow: disk putSparse zero-tail 0", rc==SQLITE_TOOBIG);
+    rc = chunkStorePutSparse(&csDisk, 0, INT_MAX - 10, 5, &hOut);
+    check("put_overflow: disk putSparse zero-tail 5", rc==SQLITE_TOOBIG);
+    check("put_overflow: disk staging untouched",
+          csDisk.staging.nPending==0 && csDisk.staging.nWriteBuf==0);
+    chunkStoreClose(&csDisk);
+  }
+  removeDbFiles(zDb);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -23441,7 +23496,8 @@ static const RegressionCase aCases[] = {
   { "clean_close_marker_respects_shared_lock", "Clean Close Marker Respects Shared Lock Test", run_clean_close_marker_respects_shared_lock },
   { "remote_refs_error_rollback", "Remote Refs Error Rollback Test", run_remote_refs_error_rollback },
   { "wal_tail_replay_rollback_nrecent", "WAL Tail Replay Rollback nRecent Test", run_wal_tail_replay_rollback_nrecent },
-  { "cv_without_rowid_pk_delete", "Constraint Violation Delete On PK-Only WITHOUT ROWID Table", run_cv_without_rowid_pk_delete }
+  { "cv_without_rowid_pk_delete", "Constraint Violation Delete On PK-Only WITHOUT ROWID Table", run_cv_without_rowid_pk_delete },
+  { "chunk_store_put_int_overflow", "Chunk Store Put Int Overflow Test", run_chunk_store_put_int_overflow }
 };
 
 static int run_case_by_name(const char *zName){

@@ -1970,6 +1970,10 @@ void chunkStoreClearStoredHits(ChunkStore *cs){
   cs->storedHitLost = 0;
 }
 
+#define CS_MAX_CHUNK_OVERHEAD \
+  (CS_WAL_CHUNK_HDR_SIZE > (4 + CHUNK_STORE_BORROW_PAD) \
+    ? CS_WAL_CHUNK_HDR_SIZE : (4 + CHUNK_STORE_BORROW_PAD))
+
 static int csPutChunk(
   ChunkStore *cs,
   const u8 *pData,
@@ -1980,7 +1984,9 @@ static int csPutChunk(
   ProllyHash h;
 
   if( cs->notADatabase ) return SQLITE_NOTADB;
-  if( nData<0 ) return SQLITE_TOOBIG;
+  if( nData<0 || nData > 0x7fffffff - CS_MAX_CHUNK_OVERHEAD ){
+    return SQLITE_TOOBIG;
+  }
   prollyHashCompute(pData, nData, &h);
   if( pExpected && prollyHashCompare(&h, pExpected)!=0 ) return SQLITE_CORRUPT;
   if( pHash ) memcpy(pHash, &h, sizeof(ProllyHash));
@@ -1998,7 +2004,9 @@ int chunkStorePutHashed(
   ProllyHash h = *pHash;
 
   if( cs->notADatabase ) return SQLITE_NOTADB;
-  if( nData<0 ) return SQLITE_TOOBIG;
+  if( nData<0 || nData > 0x7fffffff - CS_MAX_CHUNK_OVERHEAD ){
+    return SQLITE_TOOBIG;
+  }
   prollyStatAdd(cs->pStats, nHashBytes, (u64)nData);
 
   {
@@ -2015,9 +2023,9 @@ int chunkStorePutHashed(
   if( rc != SQLITE_OK ) return rc;
 
   if( cs->isMemory ){
-    rc = csGrowWriteBuf(cs, 4 + nData + CHUNK_STORE_BORROW_PAD);
+    rc = csGrowWriteBuf(cs, (i64)4 + nData + CHUNK_STORE_BORROW_PAD);
   }else{
-    rc = csGrowWriteBuf(cs, CS_WAL_CHUNK_HDR_SIZE + nData);
+    rc = csGrowWriteBuf(cs, (i64)CS_WAL_CHUNK_HDR_SIZE + nData);
   }
   if( rc != SQLITE_OK ) return rc;
 
@@ -2088,7 +2096,9 @@ int chunkStorePutSparse(
   int nData;
 
   if( cs->notADatabase ) return SQLITE_NOTADB;
-  if( nPrefix<0 || nZeroTail<0 || nTotal64 > (i64)0x7fffffff ){
+  if( nPrefix<0 || nZeroTail<0
+   || nPrefix > 0x7fffffff - CS_WAL_CHUNK_HDR_SIZE
+   || nTotal64 > (i64)0x7fffffff ){
     return SQLITE_TOOBIG;
   }
   nData = (int)nTotal64;
@@ -2121,7 +2131,7 @@ int chunkStorePutSparse(
 
   rc = csGrowPending(cs);
   if( rc != SQLITE_OK ) return rc;
-  rc = csGrowWriteBuf(cs, CS_WAL_CHUNK_HDR_SIZE + nPrefix);
+  rc = csGrowWriteBuf(cs, (i64)CS_WAL_CHUNK_HDR_SIZE + nPrefix);
   if( rc != SQLITE_OK ) return rc;
 
   {
