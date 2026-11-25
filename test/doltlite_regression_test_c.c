@@ -1,3 +1,6 @@
+#ifndef DOLTLITE_PROLLY
+#define DOLTLITE_PROLLY 1
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
