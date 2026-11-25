@@ -1065,6 +1065,68 @@ static void test_open_failure_cleanup(void){
   printf("  test_open_failure_cleanup passed\n");
 }
 
+static void test_corrupt_value_error(void){
+  ChunkStore cs;
+  ProllyCache cache;
+  ProllyHash ancestor, ours, theirs;
+  u8 corrupt[] = {2, 15};
+  int rc;
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wd_corrupt_val";
+
+  rc = openTestStore(&cs, &cache, path);
+  check("corrupt_val: open", rc==SQLITE_OK);
+
+  {
+    i64 keys[] = {1};
+    const char *vals[] = {"base"};
+    rc = buildTree(&cs, &cache, keys, vals, 1, &ancestor);
+    check("corrupt_val: build ancestor", rc==SQLITE_OK);
+  }
+
+  rc = prollyMutateInsert(&cs, &cache, &ancestor, PROLLY_NODE_INTKEY,
+                          0, 0, 5, corrupt, sizeof(corrupt), &ours);
+  check("corrupt_val: ours add", rc==SQLITE_OK);
+  rc = chunkStoreCommit(&cs);
+  check("corrupt_val: ours add commit", rc==SQLITE_OK);
+
+  rc = prollyMutateInsert(&cs, &cache, &ancestor, PROLLY_NODE_INTKEY,
+                          0, 0, 5, corrupt, sizeof(corrupt), &theirs);
+  check("corrupt_val: theirs add", rc==SQLITE_OK);
+  rc = chunkStoreCommit(&cs);
+  check("corrupt_val: theirs add commit", rc==SQLITE_OK);
+
+  resetChanges();
+  rc = prollyThreeWayDiff(&cs, &cache, &ancestor, &ours, &theirs,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY,
+                          PROLLY_NODE_INTKEY, collectCallback, 0);
+  check("corrupt_val: convergent add returns SQLITE_CORRUPT",
+        rc==SQLITE_CORRUPT);
+  check("corrupt_val: convergent add emits no changes", nChanges==0);
+
+  rc = prollyMutateInsert(&cs, &cache, &ancestor, PROLLY_NODE_INTKEY,
+                          0, 0, 1, corrupt, sizeof(corrupt), &ours);
+  check("corrupt_val: ours mod", rc==SQLITE_OK);
+  rc = chunkStoreCommit(&cs);
+  check("corrupt_val: ours mod commit", rc==SQLITE_OK);
+
+  rc = prollyMutateInsert(&cs, &cache, &ancestor, PROLLY_NODE_INTKEY,
+                          0, 0, 1, corrupt, sizeof(corrupt), &theirs);
+  check("corrupt_val: theirs mod", rc==SQLITE_OK);
+  rc = chunkStoreCommit(&cs);
+  check("corrupt_val: theirs mod commit", rc==SQLITE_OK);
+
+  resetChanges();
+  rc = prollyThreeWayDiff(&cs, &cache, &ancestor, &ours, &theirs,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY,
+                          PROLLY_NODE_INTKEY, collectCallback, 0);
+  check("corrupt_val: convergent mod returns SQLITE_CORRUPT",
+        rc==SQLITE_CORRUPT);
+  check("corrupt_val: convergent mod emits no changes", nChanges==0);
+
+  closeTestStore(&cs, &cache, path);
+  printf("  test_corrupt_value_error passed\n");
+}
+
 static void test_record_equality(void){
   static const struct {
     u8 a[16];
@@ -1138,6 +1200,7 @@ int main(void){
   test_many_rows();
   test_sorted_output();
   test_open_failure_cleanup();
+  test_corrupt_value_error();
 
   printf("\n%d passed, %d failed\n", nPass, nFail);
   return nFail>0 ? 1 : 0;

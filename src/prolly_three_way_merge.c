@@ -60,12 +60,6 @@ static int fmEmitSubtreeRows(
   return SQLITE_OK;
 }
 
-static int fmEq(const u8 *pX, int nX, const u8 *pY, int nY){
-  int equal = 0;
-  if( prollyValuesEqual(pX, nX, pY, nY, &equal)!=SQLITE_OK ) return 0;
-  return equal;
-}
-
 static int fmResolveAndEmit(
   ProllyChunker *pCh,
   const u8 *pK, int nK,
@@ -73,30 +67,45 @@ static int fmResolveAndEmit(
   int has_o, const u8 *pOV, int nOV,
   int has_t, const u8 *pTV, int nTV
 ){
+  int rc;
   if( has_a && has_o && has_t ){
-    int same_o = fmEq(pOV, nOV, pAV, nAV);
-    int same_t = fmEq(pTV, nTV, pAV, nAV);
+    int same_o = 0, same_t = 0, same_ot = 0;
+    rc = prollyValuesEqual(pOV, nOV, pAV, nAV, &same_o);
+    if( rc != SQLITE_OK ) return rc;
+    rc = prollyValuesEqual(pTV, nTV, pAV, nAV, &same_t);
+    if( rc != SQLITE_OK ) return rc;
     if( same_o && same_t ){
       return prollyChunkerAdd(pCh, pK, nK, pAV, nAV);
     }else if( same_o ){
       return prollyChunkerAdd(pCh, pK, nK, pTV, nTV);
     }else if( same_t ){
       return prollyChunkerAdd(pCh, pK, nK, pOV, nOV);
-    }else if( fmEq(pOV, nOV, pTV, nTV) ){
-      return prollyChunkerAdd(pCh, pK, nK, pOV, nOV);
-    }else{
-      return FM_FALLBACK;
     }
+    rc = prollyValuesEqual(pOV, nOV, pTV, nTV, &same_ot);
+    if( rc != SQLITE_OK ) return rc;
+    if( same_ot ){
+      return prollyChunkerAdd(pCh, pK, nK, pOV, nOV);
+    }
+    return FM_FALLBACK;
   }else if( has_a && has_o && !has_t ){
-    if( fmEq(pOV, nOV, pAV, nAV) ) return SQLITE_OK;
+    int same_o = 0;
+    rc = prollyValuesEqual(pOV, nOV, pAV, nAV, &same_o);
+    if( rc != SQLITE_OK ) return rc;
+    if( same_o ) return SQLITE_OK;
     return FM_FALLBACK;
   }else if( has_a && !has_o && has_t ){
-    if( fmEq(pTV, nTV, pAV, nAV) ) return SQLITE_OK;
+    int same_t = 0;
+    rc = prollyValuesEqual(pTV, nTV, pAV, nAV, &same_t);
+    if( rc != SQLITE_OK ) return rc;
+    if( same_t ) return SQLITE_OK;
     return FM_FALLBACK;
   }else if( has_a && !has_o && !has_t ){
     return SQLITE_OK;
   }else if( !has_a && has_o && has_t ){
-    if( fmEq(pOV, nOV, pTV, nTV) ){
+    int same_ot = 0;
+    rc = prollyValuesEqual(pOV, nOV, pTV, nTV, &same_ot);
+    if( rc != SQLITE_OK ) return rc;
+    if( same_ot ){
       return prollyChunkerAdd(pCh, pK, nK, pOV, nOV);
     }
     return FM_FALLBACK;

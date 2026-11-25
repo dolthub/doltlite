@@ -149,11 +149,61 @@ static void test_flags_disagree_with_nodes(void){
   closeStore(&cs, &cache, path);
 }
 
+static void test_corrupt_value_error(void){
+  ChunkStore cs;
+  ProllyCache cache;
+  ProllyHash empty, anc, ours, theirs, tmp, merged;
+  u8 validA[] = {2, 15, 'a'};
+  u8 validO[] = {2, 15, 'o'};
+  u8 validT[] = {2, 15, 't'};
+  u8 corrupt[] = {2, 15};
+  int rc, handled = 0;
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wm_corrupt";
+
+  rc = openStore(&cs, &cache, path);
+  check("corrupt: open", rc==SQLITE_OK);
+  memset(&empty, 0, sizeof(empty));
+
+  rc = insertInt(&cs, &cache, &empty, 1, validA, sizeof(validA), &anc);
+  check("corrupt: anc", rc==SQLITE_OK);
+  rc = insertInt(&cs, &cache, &anc, 2, validO, sizeof(validO), &ours);
+  check("corrupt: ours", rc==SQLITE_OK);
+  rc = insertInt(&cs, &cache, &anc, 1, corrupt, sizeof(corrupt), &theirs);
+  check("corrupt: theirs", rc==SQLITE_OK);
+
+  memset(&merged, 0, sizeof(merged));
+  handled = -1;
+  rc = prollyThreeWayMergeFast(&cs, &cache, &anc, &ours, &theirs,
+                               PROLLY_NODE_INTKEY, &merged, &handled);
+  check("corrupt: modify returns SQLITE_CORRUPT", rc==SQLITE_CORRUPT);
+  check("corrupt: modify not handled", handled==0);
+
+  rc = insertInt(&cs, &cache, &anc, 2, corrupt, sizeof(corrupt), &tmp);
+  check("corrupt: ours add corrupt", rc==SQLITE_OK);
+  rc = insertInt(&cs, &cache, &tmp, 3, validO, sizeof(validO), &ours);
+  check("corrupt: ours add valid", rc==SQLITE_OK);
+
+  rc = insertInt(&cs, &cache, &anc, 2, corrupt, sizeof(corrupt), &tmp);
+  check("corrupt: theirs add corrupt", rc==SQLITE_OK);
+  rc = insertInt(&cs, &cache, &tmp, 4, validT, sizeof(validT), &theirs);
+  check("corrupt: theirs add valid", rc==SQLITE_OK);
+
+  memset(&merged, 0, sizeof(merged));
+  handled = -1;
+  rc = prollyThreeWayMergeFast(&cs, &cache, &anc, &ours, &theirs,
+                               PROLLY_NODE_INTKEY, &merged, &handled);
+  check("corrupt: convergent add returns SQLITE_CORRUPT", rc==SQLITE_CORRUPT);
+  check("corrupt: convergent add not handled", handled==0);
+
+  closeStore(&cs, &cache, path);
+}
+
 int main(void){
   sqlite3_initialize();
   test_same_shape_still_handles();
   test_mixed_shape_does_not_handle();
   test_flags_disagree_with_nodes();
+  test_corrupt_value_error();
   printf("%d passed, %d failed\n", nPass, nFail);
   return nFail>0 ? 1 : 0;
 }

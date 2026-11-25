@@ -4,9 +4,12 @@
 #include "prolly_three_way_diff.h"
 #include <string.h>
 
-static int valuesEqual(const u8 *pA, int nA, const u8 *pB, int nB){
-  int equal = 0;
-  return prollyValuesEqual(pA, nA, pB, nB, &equal)==SQLITE_OK && equal;
+static int valuesEqual(
+  const u8 *pA, int nA,
+  const u8 *pB, int nB,
+  int *pEqual
+){
+  return prollyValuesEqual(pA, nA, pB, nB, pEqual);
 }
 
 static int diffChangeKeyCmp(
@@ -105,12 +108,11 @@ static int emitBothSides(
                   | (pRight->type!=PROLLY_DIFF_DELETE ? THREE_WAY_HAS_THEIRS : 0);
 
   if( pLeft->type==PROLLY_DIFF_ADD && pRight->type==PROLLY_DIFF_ADD ){
-    if( valuesEqual(pLeft->pNewVal, pLeft->nNewVal,
-                    pRight->pNewVal, pRight->nNewVal) ){
-      change.type = THREE_WAY_CONVERGENT;
-    }else{
-      change.type = THREE_WAY_CONFLICT_MM;
-    }
+    int equal = 0;
+    int rc = valuesEqual(pLeft->pNewVal, pLeft->nNewVal,
+                         pRight->pNewVal, pRight->nNewVal, &equal);
+    if( rc!=SQLITE_OK ) return rc;
+    change.type = equal ? THREE_WAY_CONVERGENT : THREE_WAY_CONFLICT_MM;
     change.pOurVal = pLeft->pNewVal;
     change.nOurVal = pLeft->nNewVal;
     change.pTheirVal = pRight->pNewVal;
@@ -126,18 +128,17 @@ static int emitBothSides(
   }
 
   if( pLeft->type==PROLLY_DIFF_MODIFY && pRight->type==PROLLY_DIFF_MODIFY ){
+    int equal = 0;
+    int rc = valuesEqual(pLeft->pNewVal, pLeft->nNewVal,
+                         pRight->pNewVal, pRight->nNewVal, &equal);
+    if( rc!=SQLITE_OK ) return rc;
     change.pBaseVal = pLeft->pOldVal;
     change.nBaseVal = pLeft->nOldVal;
     change.pOurVal = pLeft->pNewVal;
     change.nOurVal = pLeft->nNewVal;
     change.pTheirVal = pRight->pNewVal;
     change.nTheirVal = pRight->nNewVal;
-    if( valuesEqual(pLeft->pNewVal, pLeft->nNewVal,
-                    pRight->pNewVal, pRight->nNewVal) ){
-      change.type = THREE_WAY_CONVERGENT;
-    }else{
-      change.type = THREE_WAY_CONFLICT_MM;
-    }
+    change.type = equal ? THREE_WAY_CONVERGENT : THREE_WAY_CONFLICT_MM;
     return xCallback(pCtx, &change);
   }
 
