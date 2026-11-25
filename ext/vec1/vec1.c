@@ -6620,7 +6620,7 @@ static int vec1StreamingNext(Vec1Csr *pCsr){
   Vec1AnnHeap *pHeap = &pQuery->heap;
 
   int ii;
-  int nSort = (int)(pHeap->nRes - pCsr->nCurrentRes);
+  int nSort;
 
   {
     i64 nRes = pHeap->nRes;
@@ -6630,7 +6630,7 @@ static int vec1StreamingNext(Vec1Csr *pCsr){
     }
   }
 
-  while( pQuery->nBucket>0 && nSort<=(pQuery->nOrigRes/2) ){
+  while( pQuery->nBucket>0 && pHeap->nRes<=(pQuery->nOrigRes/2) ){
     Vec1Buffer a = {0,0,0};
     Vec1Buffer b = {0,0,0};
     Vec1Buffer c = {0,0,0};

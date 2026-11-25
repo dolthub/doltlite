@@ -117,5 +117,48 @@ for {set ii 1} {$ii <= 16} {incr ii} {
   } [sequence 400]
 }
 
+do_test 3.3.1 {
+  set nFirst [db one {
+    SELECT count(*) FROM docs(vec(5,5,5,5), '{K:400,streaming:0,nprobe:1}')
+  }]
+  set nLimit [expr {$nFirst + 1}]
+  set expectTop5 [db eval {
+    SELECT rowid FROM docs(vec(5,5,5,5), '{K:5,streaming:0,nprobe:1}')
+  }]
+
+  set ::nBucketScan 0
+  db profile { apply {{sql ns} {
+    if {[string match "*docs_idx*WHERE bucket*" $sql]} {
+      incr ::nBucketScan
+    }
+  }} }
+  set res [db eval {
+    SELECT rowid FROM docs(vec(5,5,5,5), '{K:5,streaming:1,nprobe:1}')
+    LIMIT $nLimit
+  }]
+  db profile {}
+
+  list \
+    [expr {[llength $res] == $nLimit}] \
+    [expr {[llength [lsort -unique $res]] == $nLimit}] \
+    [expr {[lrange $res 0 4] eq $expectTop5}] \
+    [expr {$::nBucketScan >= 2 && $::nBucketScan < 16}]
+} {1 1 1 1}
+
+do_test 3.3.2 {
+  set ::nBucketScan 0
+  db profile { apply {{sql ns} {
+    if {[string match "*docs_idx*WHERE bucket*" $sql]} {
+      incr ::nBucketScan
+    }
+  }} }
+  set res [db eval {
+    SELECT rowid FROM docs(vec(5,5,5,5), '{K:5,streaming:1,nprobe:1}')
+  }]
+  db profile {}
+
+  list [expr {[lsort -integer $res] eq [sequence 400]}] $::nBucketScan
+} {1 16}
+
 finish_test
 
