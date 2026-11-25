@@ -1,0 +1,83 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+set testprefix doltlite_incrblob_requireseek
+
+ifcapable !incrblob {
+  finish_test
+  return
+}
+
+do_execsql_test 1.0 {
+  CREATE TABLE t1(id INTEGER PRIMARY KEY, v BLOB);
+  INSERT INTO t1 VALUES(1, X'00010203040506070809');
+} {}
+
+# Open incrblob on row 1, insert row 2 on same connection, then read and write
+# on row 1's blob handle.
+do_test 1.1 {
+  set B [db incrblob t1 v 1]
+  fconfigure $B -translation binary
+  db eval {INSERT INTO t1 VALUES(2, X'AABBCCDDEEFF00112233')}
+  binary scan [read $B 4] H* before
+  seek $B 2
+  puts -nonewline $B [binary format H* DEADBEEF]
+  seek $B 0
+  binary scan [read $B] H* after
+  close $B
+  list $before $after [db one {SELECT hex(v) FROM t1 WHERE id=1}]
+} {00010203 0001deadbeef06070809 0001DEADBEEF06070809}
+
+# Two consecutive sqlite3_blob_write calls with DOLTLITE_MUTMAP_DRAIN_BYTES=1
+# forcing a mutmap drain (-> CURSOR_REQUIRESEEK) after the first write.
+do_test 2.1 {
+  set had_drain_env [info exists ::env(DOLTLITE_MUTMAP_DRAIN_BYTES)]
+  if {$had_drain_env} {
+    set saved_drain_env $::env(DOLTLITE_MUTMAP_DRAIN_BYTES)
+  }
+  set ::env(DOLTLITE_MUTMAP_DRAIN_BYTES) 1
+  set err ""
+  set res ""
+  set rc [catch {
+    db eval {
+      CREATE TABLE t2(id INTEGER PRIMARY KEY, v BLOB);
+      INSERT INTO t2 VALUES(1, zeroblob(16));
+    }
+    unset -nocomplain B
+    sqlite3_blob_open db main t2 v 1 1 B
+    sqlite3_blob_write $B 0 [binary format H* 11223344]
+    sqlite3_blob_write $B 4 [binary format H* 55667788]
+    binary scan [sqlite3_blob_read $B 0 8] H* rd
+    sqlite3_blob_close $B
+    set res [list $rd [db one {SELECT hex(v) FROM t2 WHERE id=1}]]
+  } err]
+  if {$rc} {
+    catch {sqlite3_blob_close $B}
+  }
+  if {$had_drain_env} {
+    set ::env(DOLTLITE_MUTMAP_DRAIN_BYTES) $saved_drain_env
+  } else {
+    unset -nocomplain ::env(DOLTLITE_MUTMAP_DRAIN_BYTES)
+  }
+  if {$rc} { error $err }
+  set res
+} {1122334455667788 11223344556677880000000000000000}
+
+# Deleting row 1 while incrblob is open must still abort read and write.
+do_test 3.1 {
+  db eval {
+    CREATE TABLE t3(id INTEGER PRIMARY KEY, v BLOB);
+    INSERT INTO t3 VALUES(1, X'0102030405060708');
+  }
+  unset -nocomplain B1 B2
+  sqlite3_blob_open db main t3 v 1 0 B1
+  sqlite3_blob_open db main t3 v 1 1 B2
+  db eval {DELETE FROM t3 WHERE id=1}
+  set r1 [catch {sqlite3_blob_read $B1 0 4} m1]
+  set r2 [catch {sqlite3_blob_write $B2 0 ABCD} m2]
+  sqlite3_blob_close $B1
+  sqlite3_blob_close $B2
+  list $r1 $m1 $r2 $m2
+} {1 SQLITE_ABORT 1 SQLITE_ABORT}
+
+finish_test
