@@ -457,5 +457,34 @@ run_test "branch_Head_allowed_and_not_shadowed" "SELECT dolt_branch('Head', 'HEA
 run_test "branch_header_allowed" "SELECT dolt_branch('header');" "0" "$DB28"
 run_test "branch_my_head_allowed" "SELECT dolt_branch('my_head');" "0" "$DB28"
 
-rm -f "$DB" "$DB2" "$DB2B" "$DB2C" "$DB2D" "$DB2E" "$DB2F" "$DB2G" "$DB2H" "$DB2I" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB26" "$DB27" "$DB28"
+DB29=/tmp/test_branch_detached_dirty_$$.db
+rm -f "$DB29"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-Am','c1'); SELECT dolt_tag('v1'); SELECT dolt_branch('feature'); INSERT INTO t VALUES(2,'dirty');" | $DOLTLITE "$DB29" > /dev/null 2>&1
+HASH29=$($DOLTLITE "$DB29" "SELECT dolt_hashof('v1');" 2>/dev/null)
+run_test "detached_tag_sees_dirty_main" \
+  "SELECT name, dirty FROM dolt_branches ORDER BY name;" \
+  "feature|0
+main|1" "$DB29/v1"
+run_test "detached_hash_sees_dirty_main" \
+  "SELECT name, dirty FROM dolt_branches ORDER BY name;" \
+  "feature|0
+main|1" "$DB29/$HASH29"
+echo "SELECT dolt_add('-A');" | $DOLTLITE "$DB29" > /dev/null 2>&1
+run_test "detached_tag_sees_staged_main" \
+  "SELECT name, dirty FROM dolt_branches ORDER BY name;" \
+  "feature|0
+main|1" "$DB29/v1"
+echo "SELECT dolt_reset('--hard');" | $DOLTLITE "$DB29" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(3,'feat_dirty');" | $DOLTLITE "$DB29/feature" > /dev/null 2>&1
+run_test "detached_tag_sees_clean_main_dirty_feature" \
+  "SELECT name, dirty FROM dolt_branches ORDER BY name;" \
+  "feature|1
+main|0" "$DB29/v1"
+echo "SELECT dolt_reset('--hard');" | $DOLTLITE "$DB29/feature" > /dev/null 2>&1
+run_test "detached_tag_sees_all_clean" \
+  "SELECT name, dirty FROM dolt_branches ORDER BY name;" \
+  "feature|0
+main|0" "$DB29/v1"
+
+rm -f "$DB" "$DB2" "$DB2B" "$DB2C" "$DB2D" "$DB2E" "$DB2F" "$DB2G" "$DB2H" "$DB2I" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB26" "$DB27" "$DB28" "$DB29"
 dltest_finish
