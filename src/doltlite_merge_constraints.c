@@ -957,7 +957,16 @@ int scanMergeColumnFlagViolations(
   }
   sqlite3_str_appendall(pStr, ")");
   zQuery = sqlite3_str_finish(pStr);
-  rc = zQuery ? sqlite3_prepare_v2(db, zQuery, -1, &pQ, 0) : SQLITE_NOMEM;
+  {
+    Table *pTab = sqlite3FindTable(db, zTable, "main");
+    u32 savedStrict = pTab ? (pTab->tabFlags & TF_Strict) : 0;
+    if( savedStrict ) pTab->tabFlags &= ~TF_Strict;
+    rc = zQuery ? sqlite3_prepare_v2(db, zQuery, -1, &pQ, 0) : SQLITE_NOMEM;
+    if( savedStrict ){
+      pTab = sqlite3FindTable(db, zTable, "main");
+      if( pTab ) pTab->tabFlags |= savedStrict;
+    }
+  }
   sqlite3_free(zQuery);
   if( rc!=SQLITE_OK ){
     freeMergePkInfo(&pkInfo);

@@ -239,4 +239,88 @@ ROLLBACK;" | $DOLTLITE "$DB7" 2>&1 | grep '^TX|')
 fi
 rm -f "$DB7"
 
+DB8=/tmp/test_merge_strict_virtual_gen_$$.db
+rm -f "$DB8"
+SETUP8="
+CREATE TABLE t(id INTEGER PRIMARY KEY, a ANY, g INT GENERATED ALWAYS AS (a) VIRTUAL);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('bad_feat');
+SELECT dolt_branch('ok_feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, a ANY, g INT GENERATED ALWAYS AS (a) VIRTUAL) STRICT;
+SELECT dolt_commit('-am', 'make strict');
+SELECT dolt_checkout('bad_feat');
+INSERT INTO t(id, a) VALUES (1, 'not_an_int'), (2, 42);
+SELECT dolt_commit('-am', 'insert bad and good');
+SELECT dolt_checkout('ok_feat');
+INSERT INTO t(id, a) VALUES (2, 42);
+SELECT dolt_commit('-am', 'insert good only');
+SELECT dolt_checkout('main');
+"
+if dltest_require "strict_virtual_gen_setup" "$DB8" "$SETUP8"; then
+  TX_OUT=$(echo "BEGIN;
+SELECT dolt_merge('bad_feat');
+SELECT 'TX|' || (SELECT \"table\" || ':' || num_violations FROM dolt_constraint_violations) || '|' ||
+       (SELECT group_concat(id || '=' || a || ':' || violation_type || ':' || violation_info, ',')
+          FROM (SELECT id, a, violation_type, violation_info FROM dolt_constraint_violations_t ORDER BY id)) || '|' ||
+       (SELECT dolt_verify_constraints('--all'));
+ROLLBACK;" | $DOLTLITE "$DB8" 2>&1 | grep '^TX|')
+  if [ "$TX_OUT" = 'TX|t:1|1=not_an_int:strict type:{"Columns": ["g"]}|1' ]; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+    ERRORS="$ERRORS\nFAIL: strict_virtual_gen_violation\n  expected: TX|t:1|1=not_an_int:strict type:{\"Columns\": [\"g\"]}|1\n  got:      $TX_OUT"
+  fi
+  run_test_match "strict_virtual_gen_merge_ok" \
+    "SELECT dolt_merge('ok_feat');" "^[0-9a-f]{40}$" "$DB8"
+  run_test "strict_virtual_gen_verify_ok" \
+    "SELECT dolt_verify_constraints('--all');" "0" "$DB8"
+  run_test "strict_virtual_gen_rows_ok" \
+    "SELECT id || ':' || a || ':' || g FROM t;" "2:42:42" "$DB8"
+  run_test_lastline "strict_virtual_gen_integrity" "PRAGMA integrity_check;" "ok" "$DB8"
+fi
+rm -f "$DB8"
+
+DB9=/tmp/test_merge_strict_stored_gen_$$.db
+rm -f "$DB9"
+SETUP9="
+CREATE TABLE t(id INTEGER PRIMARY KEY, a ANY, g INT GENERATED ALWAYS AS (a) STORED);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('bad_feat');
+SELECT dolt_branch('ok_feat');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, a ANY, g INT GENERATED ALWAYS AS (a) STORED) STRICT;
+SELECT dolt_commit('-am', 'make strict');
+SELECT dolt_checkout('bad_feat');
+INSERT INTO t(id, a) VALUES (1, 'not_an_int'), (2, 42);
+SELECT dolt_commit('-am', 'insert bad and good');
+SELECT dolt_checkout('ok_feat');
+INSERT INTO t(id, a) VALUES (2, 42);
+SELECT dolt_commit('-am', 'insert good only');
+SELECT dolt_checkout('main');
+"
+if dltest_require "strict_stored_gen_setup" "$DB9" "$SETUP9"; then
+  TX_OUT=$(echo "BEGIN;
+SELECT dolt_merge('bad_feat');
+SELECT 'TX|' || (SELECT \"table\" || ':' || num_violations FROM dolt_constraint_violations) || '|' ||
+       (SELECT group_concat(id || '=' || a || ':' || violation_type || ':' || violation_info, ',')
+          FROM (SELECT id, a, violation_type, violation_info FROM dolt_constraint_violations_t ORDER BY id)) || '|' ||
+       (SELECT dolt_verify_constraints('--all'));
+ROLLBACK;" | $DOLTLITE "$DB9" 2>&1 | grep '^TX|')
+  if [ "$TX_OUT" = 'TX|t:1|1=not_an_int:strict type:{"Columns": ["g"]}|1' ]; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1))
+    ERRORS="$ERRORS\nFAIL: strict_stored_gen_violation\n  expected: TX|t:1|1=not_an_int:strict type:{\"Columns\": [\"g\"]}|1\n  got:      $TX_OUT"
+  fi
+  run_test_match "strict_stored_gen_merge_ok" \
+    "SELECT dolt_merge('ok_feat');" "^[0-9a-f]{40}$" "$DB9"
+  run_test "strict_stored_gen_verify_ok" \
+    "SELECT dolt_verify_constraints('--all');" "0" "$DB9"
+  run_test "strict_stored_gen_rows_ok" \
+    "SELECT id || ':' || a || ':' || g FROM t;" "2:42:42" "$DB9"
+  run_test_lastline "strict_stored_gen_integrity" "PRAGMA integrity_check;" "ok" "$DB9"
+fi
+rm -f "$DB9"
+
 dltest_finish
