@@ -40,6 +40,13 @@ void chunkStagingResetAfterSweep(ChunkStaging *st){
   st->nRecent = 0;
   st->nRecentUncommitted = 0;
   st->iUncommittedStart = 0;
+  sqlite3_free(st->aPendingHT);
+  sqlite3_free(st->aPendingHTNext);
+  st->aPendingHT = 0;
+  st->aPendingHTNext = 0;
+  st->nPendingHTBuilt = 0;
+  st->nPendingHTNextAlloc = 0;
+  st->nPendingHTSize = 0;
   sqlite3_free(st->aRecentHT);
   sqlite3_free(st->aRecentHTNext);
   st->aRecentHT = 0;
@@ -61,6 +68,7 @@ void csPendHTClear(ChunkStore *cs){
   cs->staging.aPendingHT = 0;
   cs->staging.aPendingHTNext = 0;
   cs->staging.nPendingHTBuilt = 0;
+  cs->staging.nPendingHTNextAlloc = 0;
   cs->staging.nPendingHTSize = 0;
 }
 

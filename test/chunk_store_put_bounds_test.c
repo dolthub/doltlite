@@ -230,6 +230,97 @@ static void testCheckedPut(void){
   chunkStoreClose(&cs);
 }
 
+static void testPendingHtResetAfterSweep(void){
+  ChunkStore cs;
+  ProllyHash oldHashes[32];
+  ProllyHash newHashes[24];
+  u8 *pRead = 0;
+  int nRead = 0;
+  int has = 0;
+  int i;
+  int rc;
+
+  memset(&cs, 0, sizeof(cs));
+  rc = chunkStoreOpen(&cs, 0, ":memory:", SQLITE_OPEN_CREATE);
+  check("sweep_ht_open", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) return;
+
+  for(i=0; i<32; i++){
+    rc = putI(&cs, 1000 + i, &oldHashes[i]);
+    if( rc!=SQLITE_OK ){
+      check("sweep_ht_pre_put", 0);
+      chunkStoreClose(&cs);
+      return;
+    }
+  }
+  rc = chunkStoreHas(&cs, &oldHashes[0], &has);
+  check("sweep_ht_pre_has", rc==SQLITE_OK && has==1);
+  check("sweep_ht_pre_built", cs.staging.aPendingHT!=0
+        && cs.staging.nPendingHTBuilt==32);
+
+  chunkStagingResetAfterSweep(&cs.staging);
+  check("sweep_ht_cleared", cs.staging.aPendingHT==0
+        && cs.staging.aPendingHTNext==0
+        && cs.staging.nPendingHTBuilt==0
+        && cs.staging.nPendingHTSize==0
+        && cs.staging.nPendingHTNextAlloc==0);
+
+  for(i=0; i<24; i++){
+    rc = putI(&cs, 2000 + i, &newHashes[i]);
+    if( rc!=SQLITE_OK ){
+      check("sweep_ht_post_put", 0);
+      chunkStoreClose(&cs);
+      return;
+    }
+  }
+
+  for(i=0; i<24; i++){
+    u8 expect[4];
+    int v = 2000 + i;
+    expect[0] = (u8)v; expect[1] = (u8)(v>>8);
+    expect[2] = (u8)(v>>16); expect[3] = (u8)(v>>24);
+    rc = chunkStoreHas(&cs, &newHashes[i], &has);
+    if( rc!=SQLITE_OK || has!=1 ){
+      check("sweep_ht_post_has", 0);
+      break;
+    }
+    pRead = 0;
+    nRead = 0;
+    rc = chunkStoreGet(&cs, &newHashes[i], &pRead, &nRead);
+    if( rc!=SQLITE_OK || nRead!=4 || memcmp(pRead, expect, 4)!=0 ){
+      sqlite3_free(pRead);
+      check("sweep_ht_post_get", 0);
+      break;
+    }
+    sqlite3_free(pRead);
+  }
+  if( i==24 ){
+    check("sweep_ht_post_has", 1);
+    check("sweep_ht_post_get", 1);
+  }
+
+  for(i=0; i<32; i++){
+    rc = chunkStoreHas(&cs, &oldHashes[i], &has);
+    if( rc!=SQLITE_OK || has!=0 ){
+      check("sweep_ht_old_absent", 0);
+      break;
+    }
+  }
+  if( i==32 ){
+    check("sweep_ht_old_absent", 1);
+  }
+
+  rc = putI(&cs, 1000 + 28, &oldHashes[28]);
+  check("sweep_ht_restage_old_put", rc==SQLITE_OK);
+  pRead = 0;
+  nRead = 0;
+  rc = chunkStoreGet(&cs, &oldHashes[28], &pRead, &nRead);
+  check("sweep_ht_restage_old_get", rc==SQLITE_OK && nRead==4);
+  sqlite3_free(pRead);
+
+  chunkStoreClose(&cs);
+}
+
 int main(void){
   int rc;
 
@@ -254,6 +345,7 @@ int main(void){
   testPendingHtNomemKeepsHits();
   testMemoryCopies();
   testCheckedPut();
+  testPendingHtResetAfterSweep();
 
   printf("%d passed, %d failed\n", nPass, nFail);
   sqlite3_shutdown();
