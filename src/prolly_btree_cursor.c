@@ -69,8 +69,12 @@ static int skipDegenerateSchemaRows(BtCursor *pCur, int dir, int *pRes){
     rc = dir>=0 ? prollyBtCursorNext(pCur, 0) : prollyBtCursorPrevious(pCur, 0);
     if( rc!=SQLITE_OK && rc!=SQLITE_DONE ) break;
     if( pCur->eState==CURSOR_INVALID ){
-      if( pRes ) *pRes = 1;
-      rc = SQLITE_OK;
+      if( pRes ){
+        *pRes = 1;
+        rc = SQLITE_OK;
+      }else{
+        rc = SQLITE_DONE;
+      }
       break;
     }
   }
@@ -99,6 +103,7 @@ static SQLITE_INLINE int prollyBtCursorNextFastIntLeaf(BtCursor *pCur){
   if( pCur->eState!=CURSOR_VALID
    || pProllyCur->eState!=PROLLY_CURSOR_VALID
    || !pCur->curIntKey
+   || pCur->pgnoRoot==1
    || pCur->mmActive
    || pCur->pMutMap!=0
    || pCur->cachedPayloadOwned
@@ -792,7 +797,7 @@ int prollyBtCursorNext(BtCursor *pCur, int flags){
     return SQLITE_DONE;
   }
 
-  if( !pCur->mmActive && pCur->pMutMap==0 ){
+  if( !pCur->mmActive && pCur->pMutMap==0 && pCur->pgnoRoot!=1 ){
     rc = prollyCursorFinishTreeStep(pCur, prollyCursorNextFastLeaf(&pCur->pCur));
     if( rc==SQLITE_DONE ) return rc;
     pCur->curFlags &= ~(BTCF_AtLast|BTCF_ValidNKey|BTCF_DeleteKey);
