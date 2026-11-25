@@ -1052,6 +1052,7 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
   CsFileLock lockFd = CS_FILE_LOCK_INIT;
   char *lockName = 0;
   int lockHeld;
+  int fileLocked = 0;
 
   if( cs->isMemory || cs->isBuffer || cs->isSharedMemory || cs->readOnly
    || cs->movedReadOnly || cs->corruptMidStream ){
@@ -1084,6 +1085,15 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
     if( fileSize!=cs->file.iFileSize ) goto done;
     if( !csLogicalEndIsOurs(cs) ) goto done;
   }
+
+  rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_SHARED);
+  if( rc==SQLITE_OK ) rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_RESERVED);
+  if( rc==SQLITE_OK ) rc = sqlite3OsLock(cs->file.pFile, SQLITE_LOCK_EXCLUSIVE);
+  if( rc!=SQLITE_OK ){
+    sqlite3OsUnlock(cs->file.pFile, SQLITE_LOCK_NONE);
+    goto done;
+  }
+  fileLocked = 1;
 
   if( (sqlite3OsDeviceCharacteristics(cs->file.pFile)
        & (SQLITE_IOCAP_POWERSAFE_OVERWRITE|SQLITE_IOCAP_ATOMIC))==0 ){
@@ -1133,6 +1143,7 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
   }
 
 done:
+  if( fileLocked ) sqlite3OsUnlock(cs->file.pFile, SQLITE_LOCK_NONE);
   if( !lockHeld ) csFileUnlock(lockFd, &lockName);
 }
 
