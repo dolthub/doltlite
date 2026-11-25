@@ -1714,7 +1714,6 @@ static void *serverWorkerEntry(void *pArg){
     if( conn ){
       handleRequest(pSrv, conn, job.zPrefix, job.nPrefix, job.nHeader,
                     job.pBody, job.nBody, job.requestStatus);
-      doltliteConnClose(conn);
     }
     sqlite3_free(job.zPrefix);
     sqlite3_free(job.pBody);
@@ -1723,6 +1722,10 @@ static void *serverWorkerEntry(void *pArg){
     pSrv->nBodyAlloc -= job.nBodyAlloc;
     pSrv->activeFd[pWorker->index] = -1;
     pthread_mutex_unlock(&pSrv->mutex);
+
+    if( conn ){
+      doltliteConnClose(conn);
+    }
   }
   return 0;
 }

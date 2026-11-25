@@ -692,3 +692,57 @@ SQL
 start_server "$TMP/tls-body.log" 30000 --cert "$TMP/cert.pem" --key "$TMP/key.pem"
 check_stalled_bodies "$TMP/tls-body-clone.db" "$TMP/cert.pem"
 stop_server_with_stalled_clients "$PORT"
+
+echo "=== rapid connect/disconnect during shutdown ==="
+for cycle in 1 2 3 4 5; do
+  start_server "$TMP/churn-$cycle.log" 5000
+  python3 - "$PORT" <<'PY' &
+import socket
+import sys
+import threading
+
+port = int(sys.argv[1])
+stop = threading.Event()
+req = b"GET /missing.db/root HTTP/1.1\r\nHost: localhost\r\n\r\n"
+
+def worker():
+    while not stop.is_set():
+        s = None
+        try:
+            s = socket.create_connection(("127.0.0.1", port), timeout=1)
+            s.sendall(req)
+            s.recv(256)
+        except OSError:
+            pass
+        finally:
+            if s is not None:
+                try:
+                    s.close()
+                except OSError:
+                    pass
+
+threads = [threading.Thread(target=worker) for _ in range(8)]
+for t in threads:
+    t.start()
+stop.wait(10)
+for t in threads:
+    t.join(timeout=1)
+PY
+  CLIENT_PID=$!
+  sleep 0.15
+  stop_process "$SRV_PID"
+  for _ in $(seq 1 30); do
+    kill -0 "$SRV_PID" 2>/dev/null || break
+    sleep 0.1
+  done
+  if kill -0 "$SRV_PID" 2>/dev/null; then
+    echo "FAIL: server shutdown blocked during rapid connect/disconnect (cycle $cycle)"
+    exit 1
+  fi
+  wait "$SRV_PID" 2>/dev/null || true
+  SRV_PID=""
+  stop_process "$CLIENT_PID" 2>/dev/null || true
+  wait "$CLIENT_PID" 2>/dev/null || true
+  CLIENT_PID=""
+done
+echo "  PASS: rapid connect/disconnect during shutdown completes cleanly"
