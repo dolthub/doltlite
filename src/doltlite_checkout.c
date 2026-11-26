@@ -192,6 +192,8 @@ struct CheckoutMutationCtx {
   u8 oldBranchExists;
   u8 oldBranchMissing;
   u8 oldWorkingSetMoved;
+  u8 allowRemoteTracking;
+  u8 createdFromTracking;
   int haveOldState;
   /* Top-level branch-connection checkout must persist despite a savepoint
   ** frame; nested savepoint checkout remains rollbackable. */
@@ -373,6 +375,50 @@ static int checkoutRestoreOnFailure(sqlite3 *db, CheckoutMutationCtx *p, int rc)
   return rc;
 }
 
+/* Checkout must not create a local branch whose name is a tracking ref.
+** origin/feature/x is that ref; feature/x is the remote's branch name. */
+static int trackingRefNameEquals(
+  const char *zRemote,
+  const char *zBranchName,
+  const char *zName
+){
+  int nRemote;
+  if( !zRemote || !zBranchName || !zName ) return 0;
+  nRemote = (int)strlen(zRemote);
+  if( strncmp(zName, zRemote, (size_t)nRemote)!=0 ) return 0;
+  if( zName[nRemote]!='/' ) return 0;
+  return strcmp(zName + nRemote + 1, zBranchName)==0;
+}
+
+static int checkoutResolveRemoteTracking(
+  ChunkStore *cs,
+  const char *zBranch,
+  ProllyHash *pCommitHash
+){
+  const TrackingBranch *aTk = 0;
+  int nTk = 0;
+  int i;
+  int iMatch = -1;
+
+  if( !cs ) return SQLITE_NOTFOUND;
+  refsTableGetTracking(&cs->refs, &nTk, &aTk);
+  for(i=0; i<nTk; i++){
+    if( trackingRefNameEquals(aTk[i].zRemote, aTk[i].zBranch, zBranch) ){
+      return SQLITE_NOTFOUND;
+    }
+  }
+  for(i=0; i<nTk; i++){
+    if( aTk[i].zBranch && strcmp(aTk[i].zBranch, zBranch)==0 ){
+      if( iMatch>=0 ) return SQLITE_NOTFOUND;
+      iMatch = i;
+    }
+  }
+  if( iMatch<0 ) return SQLITE_NOTFOUND;
+  if( prollyHashIsEmpty(&aTk[iMatch].commitHash) ) return SQLITE_NOTFOUND;
+  memcpy(pCommitHash, &aTk[iMatch].commitHash, sizeof(ProllyHash));
+  return SQLITE_OK;
+}
+
 static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   CheckoutMutationCtx *p = (CheckoutMutationCtx*)pArg;
   int bSavepoint = doltliteCommandHasUserSavepoint(db);
@@ -388,6 +434,18 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
     if( p->createRc!=SQLITE_OK ) return p->createRc;
   }
   rc = chunkStoreFindBranch(cs, p->zTargetBranch, &p->targetCommit);
+  if( rc==SQLITE_NOTFOUND && p->allowRemoteTracking ){
+    BranchMutationCtx create;
+    memset(&create, 0, sizeof(create));
+    rc = checkoutResolveRemoteTracking(cs, p->zTargetBranch, &create.head);
+    if( rc==SQLITE_OK ){
+      create.zName = p->zTargetBranch;
+      p->createRc = mutateBranchRef(db, cs, &create);
+      if( p->createRc!=SQLITE_OK ) return p->createRc;
+      p->createdFromTracking = 1;
+      rc = chunkStoreFindBranch(cs, p->zTargetBranch, &p->targetCommit);
+    }
+  }
   if( rc!=SQLITE_OK ) return rc;
   if( !p->savedWasDetached && !p->oldBranchMissing ){
     p->oldBranchExists =
@@ -491,54 +549,6 @@ static int checkoutTrackingNameExists(ChunkStore *cs, const char *zBranch){
     if( aTk[i].zBranch && strcmp(aTk[i].zBranch, zBranch)==0 ) return 1;
   }
   return 0;
-}
-
-/* Checkout must not create a local branch whose name is a tracking ref.
-** origin/feature/x is that ref; feature/x is the remote's branch name. */
-static int trackingRefNameEquals(
-  const char *zRemote,
-  const char *zBranchName,
-  const char *zName
-){
-  int nRemote;
-  if( !zRemote || !zBranchName || !zName ) return 0;
-  nRemote = (int)strlen(zRemote);
-  if( strncmp(zName, zRemote, (size_t)nRemote)!=0 ) return 0;
-  if( zName[nRemote]!='/' ) return 0;
-  return strcmp(zName + nRemote + 1, zBranchName)==0;
-}
-
-static int checkoutCreateFromRemoteTracking(
-  sqlite3 *db,
-  const char *zBranch
-){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  const TrackingBranch *aTk = 0;
-  int nTk = 0;
-  int i;
-  int iMatch = -1;
-  BranchMutationCtx m;
-
-  if( !cs ) return SQLITE_NOTFOUND;
-  refsTableGetTracking(&cs->refs, &nTk, &aTk);
-  for(i=0; i<nTk; i++){
-    if( trackingRefNameEquals(aTk[i].zRemote, aTk[i].zBranch, zBranch) ){
-      return SQLITE_NOTFOUND;
-    }
-  }
-  for(i=0; i<nTk; i++){
-    if( aTk[i].zBranch && strcmp(aTk[i].zBranch, zBranch)==0 ){
-      if( iMatch>=0 ) return SQLITE_NOTFOUND;
-      iMatch = i;
-    }
-  }
-  if( iMatch<0 ) return SQLITE_NOTFOUND;
-  if( prollyHashIsEmpty(&aTk[iMatch].commitHash) ) return SQLITE_NOTFOUND;
-
-  memset(&m, 0, sizeof(m));
-  m.zName = zBranch;
-  memcpy(&m.head, &aTk[iMatch].commitHash, sizeof(ProllyHash));
-  return doltliteMutateRefs(db, mutateBranchRef, &m);
 }
 
 void doltConnectBranchFunc(
@@ -1645,6 +1655,7 @@ static void doltCheckoutParsedFunc(
 
   m.zTargetBranch = zBranch;
   m.zCurrentBranch = zCurrentBranch;
+  m.allowRemoteTracking = !createBranch;
   doltliteSetSessionDetached(db, 0);
   rc = checkoutApplyRefs(db, &m);
   if( rc!=SQLITE_OK ) rc = checkoutRestoreOnFailure(db, &m, rc);
@@ -1658,43 +1669,6 @@ static void doltCheckoutParsedFunc(
     return;
   }
   if( rc==SQLITE_NOTFOUND ){
-    rc = checkoutCreateFromRemoteTracking(db, zBranch);
-    if( rc==SQLITE_OK ){
-      isCreateAndSwitch = 1;
-      memset(&m, 0, sizeof(m));
-      doltliteGetSessionHead(db, &m.oldCommitHash);
-      zCurrentBranch = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
-      if( !zCurrentBranch ){
-        (void)doltliteVcSealSavepointError(db);
-        sqlite3_result_error_nomem(ctx);
-        return;
-      }
-      rc = checkoutCaptureOldCatalog(db, cs, &m.oldCatHash, &m.oldWorkingSet,
-                                     &m.oldBranchMissing);
-      if( rc!=SQLITE_OK ){
-        sqlite3_free(zCurrentBranch);
-        doltliteVcResultErrorCode(ctx, db,
-            "failed to snapshot current branch state", rc);
-        return;
-      }
-      m.haveOldState = 1;
-      checkoutSaveSession(db, &m);
-      m.zTargetBranch = zBranch;
-      m.zCurrentBranch = zCurrentBranch;
-      doltliteSetSessionDetached(db, 0);
-      rc = checkoutApplyRefs(db, &m);
-      if( rc!=SQLITE_OK ) rc = checkoutRestoreOnFailure(db, &m, rc);
-      checkoutFreeSavedSession(&m);
-      sqlite3_free(zCurrentBranch);
-      zCurrentBranch = 0;
-      goto checkout_done;
-    }
-    if( rc!=SQLITE_NOTFOUND ){
-      (void)doltliteVcSealSavepointError(db);
-      doltliteVcResultErrorCode(ctx, db, "checkout failed", rc);
-      return;
-    }
-
     if( doltliteRefuseShadowTableArgs(ctx, db, argv, 0, argc) ) return;
     rc = doltliteCheckoutTables(db, ctx, 0, argv, 0, argc, &zMissing, 0, 0);
     checkoutTablesResult(ctx, db, rc, zMissing, zBranch);
@@ -1734,7 +1708,7 @@ checkout_done:
     return;
   }
   if( hadExplicitTxn
-   && (isCreateAndSwitch || m.oldBranchMissing
+   && (isCreateAndSwitch || m.createdFromTracking || m.oldBranchMissing
        || doltliteSavepointIsTopLevelTxn(db)) ){
     rc = doltliteVcSealBranchStyleTxn(db);
     if( rc!=SQLITE_OK ){
