@@ -1031,6 +1031,13 @@ static void vtabRollbackNamed(sqlite3 *db, VTable **ap, int n){
   for(i=0; i<n; i++) vtabRollbackInstance(db, ap[i]);
 }
 
+static int checkoutSetMissing(char **pzMissing, const char *zName){
+  if( !pzMissing ) return SQLITE_NOTFOUND;
+  sqlite3_free(*pzMissing);
+  *pzMissing = sqlite3_mprintf("%s", zName);
+  return *pzMissing ? SQLITE_NOTFOUND : SQLITE_NOMEM;
+}
+
 static int checkoutTablesInTxn(
   sqlite3 *db,
   sqlite3_context *context,
@@ -1038,7 +1045,7 @@ static int checkoutTablesInTxn(
   sqlite3_value **argv,
   int iFirstName,
   int nNames,
-  const char **pzMissing,
+  char **pzMissing,
   int bSourceHead,
   int bDropIfAbsent
 ){
@@ -1062,6 +1069,7 @@ static int checkoutTablesInTxn(
   int i, j;
   int rc;
 
+  if( pzMissing ) *pzMissing = 0;
   if( !cs ) return SQLITE_ERROR;
   if( nNames<=0 ) return SQLITE_NOTFOUND;
   if( nNames==1 ){
@@ -1131,8 +1139,7 @@ static int checkoutTablesInTxn(
         sqlite3_free(zSql);
         if( rc!=SQLITE_OK ) goto checkout_tables_done;
         if( !hasVtab && !bDropIfAbsent ){
-          if( pzMissing ) *pzMissing = zName;
-          rc = SQLITE_NOTFOUND;
+          rc = checkoutSetMissing(pzMissing, zName);
           goto checkout_tables_done;
         }
       }
@@ -1188,8 +1195,7 @@ static int checkoutTablesInTxn(
     }
     if( rc==SQLITE_OK && !bDropIfAbsent
      && !aSchema[i].hasCurrent && !aSchema[i].hasSource ){
-      if( pzMissing ) *pzMissing = zName;
-      rc = SQLITE_NOTFOUND;
+      rc = checkoutSetMissing(pzMissing, zName);
     }
     if( rc!=SQLITE_OK ) goto checkout_tables_done;
   }
@@ -1286,8 +1292,7 @@ static int checkoutTablesInTxn(
       }
       if( doltliteCheckoutSqlIsVtab(aSchema[i].zSourceSql)
        || doltliteCheckoutSqlIsVtab(aSchema[i].zCurrentSql) ) continue;
-      if( pzMissing ) *pzMissing = zName;
-      rc = SQLITE_NOTFOUND;
+      rc = checkoutSetMissing(pzMissing, zName);
       goto checkout_tables_done;
     }
 
@@ -1385,7 +1390,7 @@ int doltliteCheckoutTables(
   sqlite3_value **argv,
   int iFirstName,
   int nNames,
-  const char **pzMissing,
+  char **pzMissing,
   int bSourceHead,
   int bDropIfAbsent
 ){
@@ -1441,7 +1446,7 @@ static void doltCheckoutParsedFunc(
   CheckoutMutationCtx m;
   BranchMutationCtx branchCreate;
   const char *zBranch;
-  const char *zMissing = 0;
+  char *zMissing = 0;
   char *zCurrentBranch = 0;
   int createBranch = zNewBranch!=0;
   int isCreateAndSwitch = 0;
@@ -1596,6 +1601,7 @@ static void doltCheckoutParsedFunc(
       rc = doltliteCheckoutTables(db, ctx, 0, argv, 0, argc, &zMissing, 0, 0);
     }
     checkoutTablesResult(ctx, db, rc, zMissing, zBranch);
+    sqlite3_free(zMissing);
     return;
   }
 
@@ -1677,6 +1683,7 @@ static void doltCheckoutParsedFunc(
     if( doltliteRefuseShadowTableArgs(ctx, db, argv, 0, argc) ) return;
     rc = doltliteCheckoutTables(db, ctx, 0, argv, 0, argc, &zMissing, 0, 0);
     checkoutTablesResult(ctx, db, rc, zMissing, zBranch);
+    sqlite3_free(zMissing);
     return;
   }
 checkout_done:

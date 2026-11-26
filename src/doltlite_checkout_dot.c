@@ -143,7 +143,7 @@ static int dotRun(
   int nName,
   int bSourceHead,
   int bDropIfAbsent,
-  const char **pzMissing
+  char **pzMissing
 ){
   sqlite3_value **apVal;
   int i;
@@ -159,17 +159,10 @@ static int dotRun(
       return SQLITE_NOMEM;
     }
     sqlite3ValueSetStr(apVal[i], -1, azName[i], SQLITE_UTF8,
-                       SQLITE_TRANSIENT);
+                       SQLITE_STATIC);
   }
   rc = doltliteCheckoutTables(db, context, zSourceRef, apVal, 0, nName,
                               pzMissing, bSourceHead, bDropIfAbsent);
-  if( rc==SQLITE_NOTFOUND && pzMissing && *pzMissing ){
-    char *zKeep = sqlite3_mprintf("%s", *pzMissing);
-    if( zKeep ){
-      sqlite3_set_auxdata(context, 0, zKeep, sqlite3_free);
-      *pzMissing = (const char*)sqlite3_get_auxdata(context, 0);
-    }
-  }
   dotFreeValues(apVal, nName);
   return rc;
 }
@@ -229,7 +222,7 @@ int doltliteCheckoutDot(
   sqlite3 *db,
   sqlite3_context *context,
   const char *zSourceRef,
-  const char **pzMissing
+  char **pzMissing
 ){
   DotName *aName = 0;
   char **azPrimary = 0;
