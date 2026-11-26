@@ -1,0 +1,100 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+
+set testprefix doltlite_vc_oom
+
+do_test 1.0 {
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO t VALUES(1, 'v1');
+    SELECT dolt_commit('-A', '-m', 'c1');
+    UPDATE t SET v = 'v2' WHERE id = 1;
+    CREATE TABLE untracked(id INTEGER PRIMARY KEY, a INT, b TEXT);
+    CREATE INDEX idx_u_a ON untracked(a);
+    CREATE INDEX idx_u_b ON untracked(b);
+    INSERT INTO untracked VALUES(1, 10, 'keep');
+  }
+  set {} {}
+} {}
+faultsim_save_and_close
+
+do_faultsim_test 1.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db eval { SELECT dolt_reset('--hard') }
+  set v [db one { SELECT v FROM t WHERE id = 1 }]
+  set u [db one { SELECT b FROM untracked WHERE id = 1 }]
+  set nidx [db one {
+    SELECT count(*) FROM sqlite_master
+    WHERE type='index' AND tbl_name='untracked'
+  }]
+  list $v $u $nidx
+} -test {
+  faultsim_test_result {0 {v1 keep 2}} \
+      {1 {out of memory}} {1 {disk I/O error}} {1 {failed to read HEAD}}
+  catchsql ROLLBACK
+  faultsim_integrity_check
+}
+
+faultsim_restore_and_reopen
+do_test 2.0 {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO t VALUES(1, 'orig');
+    SELECT dolt_commit('-A', '-m', 'c1');
+    UPDATE t SET v = 'dirty' WHERE id = 1;
+  }
+  set {} {}
+} {}
+faultsim_save_and_close
+
+do_faultsim_test 2.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db eval { SELECT dolt_checkout('t') }
+  db one { SELECT v FROM t WHERE id = 1 }
+} -test {
+  faultsim_test_result {0 orig} \
+      {1 {out of memory}} {1 {disk I/O error}} \
+      {1 {failed to snapshot current branch state}} {1 {checkout failed}}
+  catchsql ROLLBACK
+  faultsim_integrity_check
+}
+
+ifcapable fts5 {
+  faultsim_restore_and_reopen
+  do_test 3.0 {
+    reset_db
+    execsql {
+      CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+      INSERT INTO t VALUES(1, 'orig');
+      CREATE VIRTUAL TABLE docs USING fts5(body);
+      INSERT INTO docs VALUES('hello world');
+      SELECT dolt_commit('-A', '-m', 'c1');
+      UPDATE t SET v = 'dirty' WHERE id = 1;
+    }
+    set {} {}
+  } {}
+  faultsim_save_and_close
+
+  do_faultsim_test 3.1 -faults oom-transient -prep {
+    faultsim_restore_and_reopen
+    db eval {
+      BEGIN;
+      INSERT INTO docs VALUES('pending vtab write');
+    }
+  } -body {
+    db eval { SELECT dolt_checkout('t') }
+    db one { SELECT v FROM t WHERE id = 1 }
+  } -test {
+    faultsim_test_result {0 orig} \
+        {1 {out of memory}} {1 {disk I/O error}} \
+        {1 {failed to snapshot current branch state}} {1 {checkout failed}}
+    catchsql ROLLBACK
+    faultsim_integrity_check
+  }
+}
+
+finish_test
