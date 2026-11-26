@@ -1706,7 +1706,10 @@ static int csDrainPendingToWal(ChunkStore *cs){
   int i;
   int dense;
   i64 nDense = 0;
+  i64 origFileSize;
+  i64 origWalOffset;
   i64 writeOff;
+  int bWrote = 0;
 
   if( cs->isMemory || cs->readOnly || cs->corruptMidStream ){
     return SQLITE_OK;
@@ -1740,19 +1743,22 @@ static int csDrainPendingToWal(ChunkStore *cs){
     cs->staging.iUncommittedStart = cs->file.iFileSize;
   }
 
-  writeOff = cs->file.iFileSize;
+  rc = csGrowRecent(cs, cs->staging.nPending);
+  if( rc!=SQLITE_OK ) return rc;
+
+  origFileSize = cs->file.iFileSize;
+  origWalOffset = cs->wal.iWalOffset;
+  writeOff = origFileSize;
   if( writeOff == 0 ){
     u8 manifest[CHUNK_MANIFEST_SIZE];
     cs->wal.iWalOffset = CHUNK_MANIFEST_SIZE;
     csSerializeManifest(cs, manifest);
     csManifestSeal(manifest, 0);
+    bWrote = 1;
     rc = sqlite3OsWrite(cs->file.pFile, manifest, CHUNK_MANIFEST_SIZE, 0);
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ) goto drain_error;
     writeOff = CHUNK_MANIFEST_SIZE;
   }
-
-  rc = csGrowRecent(cs, cs->staging.nPending);
-  if( rc!=SQLITE_OK ) return rc;
 
   for(i=0; i<cs->staging.nPending; i++){
     ChunkIndexEntry *pe = &cs->staging.aPending[i];
@@ -1763,13 +1769,17 @@ static int csDrainPendingToWal(ChunkStore *cs){
   dense = i==cs->staging.nPending && nDense==cs->staging.nWriteBuf;
   if( dense ){
     int pos = 0;
-    if( writeOff>LARGEST_INT64-nDense ) return SQLITE_TOOBIG;
+    if( writeOff>LARGEST_INT64-nDense ){
+      rc = SQLITE_TOOBIG;
+      goto drain_error;
+    }
     while( pos<cs->staging.nWriteBuf ){
       int n = cs->staging.nWriteBuf-pos;
       if( n>65536 ) n = 65536;
+      bWrote = 1;
       rc = sqlite3OsWrite(cs->file.pFile, cs->staging.pWriteBuf+pos,
                           n, writeOff+pos);
-      if( rc!=SQLITE_OK ) return rc;
+      if( rc!=SQLITE_OK ) goto drain_error;
       pos += n;
     }
   }
@@ -1784,7 +1794,8 @@ static int csDrainPendingToWal(ChunkStore *cs){
 
     if( writeOff > LARGEST_INT64 - (i64)CS_WAL_CHUNK_HDR_SIZE
      || writeOff + (i64)CS_WAL_CHUNK_HDR_SIZE > LARGEST_INT64 - (i64)pe->size ){
-      return SQLITE_TOOBIG;
+      rc = SQLITE_TOOBIG;
+      goto drain_error;
     }
 
     *pr = *pe;
@@ -1799,14 +1810,15 @@ static int csDrainPendingToWal(ChunkStore *cs){
 
     csFillChunkHdr(recHdr, &pe->hash, (u32)pe->size);
 
+    bWrote = 1;
     rc = sqlite3OsWrite(cs->file.pFile, recHdr, CS_WAL_CHUNK_HDR_SIZE, writeOff);
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ) goto drain_error;
     writeOff += CS_WAL_CHUNK_HDR_SIZE;
 
     while( remaining > 0 ){
       int toWrite = remaining > 65536 ? 65536 : remaining;
       rc = sqlite3OsWrite(cs->file.pFile, pSrc, toWrite, writeOff);
-      if( rc!=SQLITE_OK ) return rc;
+      if( rc!=SQLITE_OK ) goto drain_error;
       pSrc += toWrite;
       writeOff += toWrite;
       remaining -= toWrite;
@@ -1816,7 +1828,7 @@ static int csDrainPendingToWal(ChunkStore *cs){
       int toWrite = zeroTail > (i64)sizeof(aZeroWin)
                   ? (int)sizeof(aZeroWin) : (int)zeroTail;
       rc = sqlite3OsWrite(cs->file.pFile, aZeroWin, toWrite, writeOff);
-      if( rc!=SQLITE_OK ) return rc;
+      if( rc!=SQLITE_OK ) goto drain_error;
       writeOff += toWrite;
       zeroTail -= toWrite;
     }
@@ -1838,6 +1850,18 @@ static int csDrainPendingToWal(ChunkStore *cs){
     cs->staging.nWriteBufAlloc = 0;
   }
   return SQLITE_OK;
+
+drain_error:
+  if( bWrote && cs->file.pFile ){
+    sqlite3_file *pRetiredFile = 0;
+    (void)csRollbackFailedAppend(cs, origFileSize, &pRetiredFile);
+    csCloseFile(pRetiredFile);
+  }
+  cs->wal.iWalOffset = origWalOffset;
+  if( cs->staging.nRecentUncommitted==0 ){
+    cs->staging.iUncommittedStart = 0;
+  }
+  return rc;
 }
 
 static void csNoteStoredHit(ChunkStore *cs, const ProllyHash *h){
