@@ -41,4 +41,174 @@ foreach {name coldef} {
   } {0 {0 1 1 5 2 2 6 ok}}
 }
 
+foreach {name coldef expect} {
+  int-pos  {c INT DEFAULT 5}      5
+  text     {c TEXT DEFAULT 'abc'} abc
+  int-neg  {c INT DEFAULT -1}     -1
+} {
+  reset_db
+  sqlite3_db_config db DEFENSIVE 0
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+    INSERT INTO t VALUES(1, 10), (2, 20);
+    SELECT dolt_commit('-Am', 'm0');
+  }
+  set new_sql "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, $coldef)"
+  execsql {
+    PRAGMA writable_schema=ON;
+    UPDATE sqlite_master SET sql=$new_sql WHERE name='t';
+    PRAGMA writable_schema=RESET;
+  }
+  execsql {
+    DELETE FROM t WHERE id=2;
+    INSERT INTO t VALUES(2, 20, NULL), (3, 30, NULL);
+    SELECT dolt_commit('-Am', 'm1');
+  }
+  set patch [execsql {
+    SELECT statement FROM dolt_patch('HEAD~1','HEAD') ORDER BY statement_order
+  }]
+  execsql {SELECT dolt_checkout('-b','ap','HEAD~1')}
+  do_test patch-add-column-short-record-$name {
+    set rc 0
+    foreach stmt $patch {
+      if {[catch {db eval $stmt} msg]} { set rc $msg ; break }
+    }
+    set has_row1_null [expr {[lsearch -exact $patch {UPDATE "t" SET "c"=NULL WHERE "id"=1;}] >= 0}]
+    set has_row2_null [expr {[lsearch -exact $patch {UPDATE "t" SET "c"=NULL WHERE "id"=2;}] >= 0}]
+    list $rc $has_row1_null $has_row2_null [execsql {
+      SELECT count(*) FROM dolt_patch('WORKING','main');
+      SELECT id, a, coalesce(c, '<NULL>') FROM t ORDER BY id;
+      PRAGMA integrity_check;
+    }]
+  } [list 0 0 1 [list 0 1 10 $expect 2 20 <NULL> 3 30 <NULL> ok]]
+}
+
+reset_db
+sqlite3_db_config db DEFENSIVE 0
+execsql {
+  CREATE TABLE w(k INT PRIMARY KEY) WITHOUT ROWID;
+  INSERT INTO w VALUES(1), (2);
+  SELECT dolt_commit('-Am', 'm0');
+  PRAGMA writable_schema=ON;
+  UPDATE sqlite_master
+     SET sql='CREATE TABLE w(k INT PRIMARY KEY, c INT DEFAULT 5) WITHOUT ROWID'
+   WHERE name='w';
+  PRAGMA writable_schema=RESET;
+  DELETE FROM w WHERE k=2;
+  INSERT INTO w VALUES(2, NULL);
+  SELECT dolt_commit('-Am', 'm1');
+}
+set patch [execsql {
+  SELECT statement FROM dolt_patch('HEAD~1','HEAD') ORDER BY statement_order
+}]
+execsql {SELECT dolt_checkout('-b','ap','HEAD~1')}
+do_test patch-add-column-short-record-without-rowid-keyonly {
+  set rc 0
+  foreach stmt $patch {
+    if {[catch {db eval $stmt} msg]} { set rc $msg ; break }
+  }
+  set has_row1_null [expr {[lsearch -exact $patch {UPDATE "w" SET "c"=NULL WHERE "k"=1;}] >= 0}]
+  set has_row2_null [expr {[lsearch -exact $patch {UPDATE "w" SET "c"=NULL WHERE "k"=2;}] >= 0}]
+  list $rc $has_row1_null $has_row2_null [execsql {
+    SELECT count(*) FROM dolt_patch('WORKING','main');
+    SELECT k, coalesce(c, '<NULL>') FROM w ORDER BY k;
+    PRAGMA integrity_check;
+  }]
+} {0 0 1 {0 1 5 2 <NULL> ok}}
+
+reset_db
+sqlite3_db_config db DEFENSIVE 0
+execsql {
+  CREATE TABLE w(k INT PRIMARY KEY, v TEXT) WITHOUT ROWID;
+  INSERT INTO w VALUES(1, 'a'), (2, 'b');
+  SELECT dolt_commit('-Am', 'm0');
+  PRAGMA writable_schema=ON;
+  UPDATE sqlite_master
+     SET sql='CREATE TABLE w(k INT PRIMARY KEY, v TEXT, c INT DEFAULT 5) WITHOUT ROWID'
+   WHERE name='w';
+  PRAGMA writable_schema=RESET;
+  DELETE FROM w WHERE k=2;
+  INSERT INTO w VALUES(2, 'b', NULL);
+  SELECT dolt_commit('-Am', 'm1');
+}
+set patch [execsql {
+  SELECT statement FROM dolt_patch('HEAD~1','HEAD') ORDER BY statement_order
+}]
+execsql {SELECT dolt_checkout('-b','ap','HEAD~1')}
+do_test patch-add-column-short-record-without-rowid-nonkey {
+  set rc 0
+  foreach stmt $patch {
+    if {[catch {db eval $stmt} msg]} { set rc $msg ; break }
+  }
+  set has_row1_null [expr {[lsearch -exact $patch {UPDATE "w" SET "c"=NULL WHERE "k"=1;}] >= 0}]
+  set has_row2_null [expr {[lsearch -exact $patch {UPDATE "w" SET "c"=NULL WHERE "k"=2;}] >= 0}]
+  list $rc $has_row1_null $has_row2_null [execsql {
+    SELECT count(*) FROM dolt_patch('WORKING','main');
+    SELECT k, v, coalesce(c, '<NULL>') FROM w ORDER BY k;
+    PRAGMA integrity_check;
+  }]
+} {0 0 1 {0 1 a 5 2 b <NULL> ok}}
+
+reset_db
+sqlite3_db_config db DEFENSIVE 0
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+  INSERT INTO t VALUES(1, 10), (2, 20);
+  SELECT dolt_commit('-Am', 'm0');
+  PRAGMA writable_schema=ON;
+  UPDATE sqlite_master
+     SET sql='CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, c1 INT DEFAULT 5, c2 TEXT DEFAULT ''abc'', c3 INT DEFAULT -1, c4 REAL DEFAULT 2.5)'
+   WHERE name='t';
+  PRAGMA writable_schema=RESET;
+  DELETE FROM t WHERE id=2;
+  INSERT INTO t VALUES(2, 20, NULL, NULL, NULL, NULL);
+  SELECT dolt_commit('-Am', 'm1');
+}
+set patch [execsql {
+  SELECT statement FROM dolt_patch('HEAD~1','HEAD') ORDER BY statement_order
+}]
+execsql {SELECT dolt_checkout('-b','ap','HEAD~1')}
+do_test patch-rebuild-short-record-defaults {
+  set rc 0
+  foreach stmt $patch {
+    if {[catch {db eval $stmt} msg]} { set rc $msg ; break }
+  }
+  list $rc [execsql {
+    SELECT count(*) FROM dolt_patch('WORKING','main');
+    SELECT id, a, coalesce(c1,'N'), coalesce(c2,'N'), coalesce(c3,'N'), coalesce(c4,'N') FROM t ORDER BY id;
+    PRAGMA integrity_check;
+  }]
+} {0 {0 1 10 5 abc -1 2.5 2 20 N N N N ok}}
+
+reset_db
+sqlite3_db_config db DEFENSIVE 0
+execsql {
+  CREATE TABLE w(k INT PRIMARY KEY) WITHOUT ROWID;
+  INSERT INTO w VALUES(1), (2);
+  SELECT dolt_commit('-Am', 'm0');
+  PRAGMA writable_schema=ON;
+  UPDATE sqlite_master
+     SET sql='CREATE TABLE w(k INT PRIMARY KEY, c1 INT DEFAULT 5, c2 TEXT DEFAULT ''hi'') WITHOUT ROWID'
+   WHERE name='w';
+  PRAGMA writable_schema=RESET;
+  DELETE FROM w WHERE k=2;
+  INSERT INTO w VALUES(2, NULL, NULL);
+  SELECT dolt_commit('-Am', 'm1');
+}
+set patch [execsql {
+  SELECT statement FROM dolt_patch('HEAD~1','HEAD') ORDER BY statement_order
+}]
+execsql {SELECT dolt_checkout('-b','ap','HEAD~1')}
+do_test patch-rebuild-short-record-without-rowid-keyonly {
+  set rc 0
+  foreach stmt $patch {
+    if {[catch {db eval $stmt} msg]} { set rc $msg ; break }
+  }
+  list $rc [execsql {
+    SELECT count(*) FROM dolt_patch('WORKING','main');
+    SELECT k, coalesce(c1,'N'), coalesce(c2,'N') FROM w ORDER BY k;
+    PRAGMA integrity_check;
+  }]
+} {0 {0 1 5 hi 2 N N ok}}
+
 finish_test
