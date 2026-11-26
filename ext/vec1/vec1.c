@@ -6765,25 +6765,34 @@ static int vec1LoadModel(Vec1Tab *pTab){
   rc = sqlite3_blob_open(db, pTab->zDb, pTab->zTrainTbl, "val", 1, 0, &pBlob);
   if( rc==SQLITE_OK ){
     int nByte = sqlite3_blob_bytes(pBlob);
-    void *pData = sqlite3_malloc(nByte);
-    if( pData==0 ){
-      rc = SQLITE_NOMEM;
+    if( nByte<VEC1_HEADER_SIZE ){
+      vec1VtabError(pTab, "vec1: model too small - %d bytes", nByte);
+      rc = SQLITE_ERROR;
     }else{
-      rc = sqlite3_blob_read(pBlob, pData, nByte, 0);
-    }
-    if( rc==SQLITE_OK ){
-      rc = vec1DecodeModel(pData, nByte, &pTab->mod, &pTab->base.zErrMsg);
-    }
-    if( rc==SQLITE_OK ){
-      pTab->pModBlob = pData;
-    }else{
-      sqlite3_free(pData);
+      void *pData = sqlite3_malloc(nByte);
+      if( pData==0 ){
+        rc = SQLITE_NOMEM;
+      }else{
+        rc = sqlite3_blob_read(pBlob, pData, nByte, 0);
+      }
+      if( rc==SQLITE_OK ){
+        rc = vec1DecodeModel(pData, nByte, &pTab->mod, &pTab->base.zErrMsg);
+      }
+      if( rc==SQLITE_OK ){
+        pTab->pModBlob = pData;
+      }else{
+        sqlite3_free(pData);
+        vec1UnloadModel(pTab);
+      }
     }
     sqlite3_blob_close(pBlob);
   }
 
   if( rc==SQLITE_OK ){
     rc = vec1ModelTransform(&pTab->mod, &pTab->mod.aModelT);
+    if( rc!=SQLITE_OK ){
+      vec1UnloadModel(pTab);
+    }
   }
 
   return rc;
