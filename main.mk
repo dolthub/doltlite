@@ -2917,6 +2917,7 @@ DOLTLITE_C_TESTS = \
 	fetch_download_lock_test$(T.exe) \
 	push_tracking_precondition_test$(T.exe) \
 	record_info_stack_test$(T.exe) \
+	sortkey_test$(T.exe) \
 	oom_dolt_fault_test$(T.exe) \
 	crash_recovery_test$(T.exe) \
 	concurrent_branch_test$(T.exe) \
@@ -2993,6 +2994,10 @@ push_tracking_precondition_test$(T.exe): $(TOP)/test/push_tracking_precondition_
 
 record_info_stack_test$(T.exe): $(TOP)/test/record_info_stack_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/record_info_stack_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+sortkey_test$(T.exe): $(TOP)/test/sortkey_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/sortkey_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 readonly_reader_writer_test$(T.exe): $(TOP)/test/readonly_reader_writer_test.c libdoltlite$(T.lib)
