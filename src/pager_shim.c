@@ -1157,6 +1157,41 @@ static sqlite3_backup *backupInitLocked(sqlite3 *pDest, const char *zDestDb,
   return (sqlite3_backup*)p;
 }
 
+static void adoptReplacementStore(ChunkStore *destCs, ChunkStore *pTmp){
+  CsWsSession *pWsNext = destCs->wsMain.pNext;
+  CsWsSession *pWs = destCs->pWs;
+  sqlite3_vfs *pOwnedVfs = destCs->pOwnedVfs;
+  int (*xWriteGate)(void*) = destCs->xWriteGate;
+  void *pWriteGateArg = destCs->pWriteGateArg;
+  int (*xDefaultBusy)(void*) = destCs->xDefaultBusy;
+  void *pDefaultBusyArg = destCs->pDefaultBusyArg;
+  ProllyStats *pStats = destCs->pStats;
+  u32 reloadGen = destCs->reloadGen;
+
+  /* Detach sibling branch sessions and close the old file handle before
+  ** closing destCs so chunkStoreClose neither frees attached session state
+  ** nor writes close markers into the replacement handle. */
+  destCs->wsMain.pNext = 0;
+  destCs->pOwnedVfs = 0;
+  if( chunkFileGetHandle(&destCs->file) ){
+    csCloseFile(chunkFileGetHandle(&destCs->file));
+    chunkFileSetHandle(&destCs->file, 0);
+  }
+  chunkStoreClose(destCs);
+
+  pTmp->wsMain.pNext = pWsNext;
+  pTmp->pWs = pWs;
+  pTmp->pOwnedVfs = pOwnedVfs;
+  pTmp->xWriteGate = xWriteGate;
+  pTmp->pWriteGateArg = pWriteGateArg;
+  pTmp->xDefaultBusy = xDefaultBusy;
+  pTmp->pDefaultBusyArg = pDefaultBusyArg;
+  pTmp->pStats = pStats;
+  pTmp->reloadGen = reloadGen + 1;
+  *destCs = *pTmp;
+  memset(pTmp, 0, sizeof(*pTmp));
+}
+
 int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
   DoltliteBackup *p = (DoltliteBackup*)pBackup;
   ChunkStore *srcCs = 0;
@@ -1311,7 +1346,6 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
   if( rc!=SQLITE_OK ) goto backup_step_done;
 
   if( destCs->isMemory ){
-    ChunkStore old = *destCs;
     openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
               | SQLITE_OPEN_MEMORY | SQLITE_OPEN_MAIN_DB;
     rc = chunkStoreOpen(&tmpStore, pDestVfs, ":memory:", openFlags);
@@ -1322,14 +1356,7 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
 
     chunkStoreUnlock(destCs);
     destLocked = 0;
-    chunkStoreClose(destCs);
-    tmpStore.xWriteGate = old.xWriteGate;
-    tmpStore.pWriteGateArg = old.pWriteGateArg;
-    tmpStore.xDefaultBusy = old.xDefaultBusy;
-    tmpStore.pDefaultBusyArg = old.pDefaultBusyArg;
-    tmpStore.pStats = old.pStats;
-    *destCs = tmpStore;
-    memset(&tmpStore, 0, sizeof(tmpStore));
+    adoptReplacementStore(destCs, &tmpStore);
     tmpStoreOpen = 0;
     memoryAdopted = 1;
     doltliteBtreeInstallBackupBranch(pDestBt, zPreparedBranch);
@@ -1344,8 +1371,7 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     ** and copy into it. */
     sqlite3_file *pHold = 0;
     char *zName = 0;
-    int bShared;
-    ChunkStore old = *destCs;
+    int expectedHandles;
     openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
               | SQLITE_OPEN_MAIN_DB;
     rc = chunkStoreDupFilenameDoubleNul(
@@ -1357,34 +1383,33 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
       sqlite3_free(zName);
       goto backup_step_done;
     }
-    chunkStoreUnlock(destCs);
-    destLocked = 0;
-    chunkStoreClose(destCs);
     /* Another connection reads this file through its own store, which
     ** would not notice the contents being replaced under it. */
-    bShared = sqlite3DoltliteSharedMemHandles(pHold)>1;
-    if( !bShared ) rc = sqlite3OsTruncate(pHold, 0);
-    if( rc==SQLITE_OK ) rc = chunkStoreOpen(destCs, pDestVfs, zName, openFlags);
-    sqlite3OsCloseFree(pHold);
-    sqlite3_free(zName);
-    destCs->xWriteGate = old.xWriteGate;
-    destCs->pWriteGateArg = old.pWriteGateArg;
-    destCs->xDefaultBusy = old.xDefaultBusy;
-    destCs->pDefaultBusyArg = old.pDefaultBusyArg;
-    destCs->pStats = old.pStats;
-    if( rc==SQLITE_OK && bShared ){
+    expectedHandles = 1 + chunkStoreOwnFileHandles(destCs);
+    if( sqlite3DoltliteSharedMemHandles(pHold)>expectedHandles ){
+      sqlite3OsCloseFree(pHold);
+      sqlite3_free(zName);
       sqlite3ErrorWithMsg(p->pDestDb, SQLITE_BUSY,
                           "destination database is in use");
       rc = SQLITE_BUSY;
-      doltliteInvalidateBtreeWorkingState(pDestBt);
       goto backup_step_done;
     }
-    if( rc==SQLITE_OK ) rc = chunkStoreCopyIntoEmpty(srcCs, destCs);
-    memoryAdopted = 1;
+    chunkStoreUnlock(destCs);
+    destLocked = 0;
+    rc = sqlite3OsTruncate(pHold, 0);
     if( rc==SQLITE_OK ){
-      doltliteBtreeInstallBackupBranch(pDestBt, zPreparedBranch);
-      zPreparedBranch = 0;
+      rc = chunkStoreOpen(&tmpStore, pDestVfs, zName, openFlags);
+      if( rc==SQLITE_OK ) tmpStoreOpen = 1;
     }
+    sqlite3OsCloseFree(pHold);
+    sqlite3_free(zName);
+    if( rc==SQLITE_OK ) rc = chunkStoreCopyIntoEmpty(srcCs, &tmpStore);
+    if( rc!=SQLITE_OK ) goto backup_step_done;
+    adoptReplacementStore(destCs, &tmpStore);
+    tmpStoreOpen = 0;
+    memoryAdopted = 1;
+    doltliteBtreeInstallBackupBranch(pDestBt, zPreparedBranch);
+    zPreparedBranch = 0;
     doltliteInvalidateBtreeWorkingState(pDestBt);
     goto backup_step_done;
   }
@@ -1392,8 +1417,6 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
   if( destCs->isBuffer ){
     sqlite3_file *pHold = 0;
     char *zName = 0;
-    ChunkStore old = *destCs;
-    sqlite3_vfs *pOwnedVfs = destCs->pOwnedVfs;
     openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
               | SQLITE_OPEN_MAIN_DB;
     rc = chunkStoreDupFilenameDoubleNul(
@@ -1407,26 +1430,20 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     }
     chunkStoreUnlock(destCs);
     destLocked = 0;
-    destCs->pOwnedVfs = 0;
-    chunkStoreClose(destCs);
     rc = sqlite3OsTruncate(pHold, 0);
     if( rc==SQLITE_OK ){
-      rc = chunkStoreOpen(destCs, pDestVfs, zName, openFlags);
+      rc = chunkStoreOpen(&tmpStore, pDestVfs, zName, openFlags);
+      if( rc==SQLITE_OK ) tmpStoreOpen = 1;
     }
     sqlite3OsCloseFree(pHold);
     sqlite3_free(zName);
-    destCs->pOwnedVfs = pOwnedVfs;
-    destCs->xWriteGate = old.xWriteGate;
-    destCs->pWriteGateArg = old.pWriteGateArg;
-    destCs->xDefaultBusy = old.xDefaultBusy;
-    destCs->pDefaultBusyArg = old.pDefaultBusyArg;
-    destCs->pStats = old.pStats;
-    if( rc==SQLITE_OK ) rc = chunkStoreCopyIntoEmpty(srcCs, destCs);
+    if( rc==SQLITE_OK ) rc = chunkStoreCopyIntoEmpty(srcCs, &tmpStore);
+    if( rc!=SQLITE_OK ) goto backup_step_done;
+    adoptReplacementStore(destCs, &tmpStore);
+    tmpStoreOpen = 0;
     memoryAdopted = 1;
-    if( rc==SQLITE_OK ){
-      doltliteBtreeInstallBackupBranch(pDestBt, zPreparedBranch);
-      zPreparedBranch = 0;
-    }
+    doltliteBtreeInstallBackupBranch(pDestBt, zPreparedBranch);
+    zPreparedBranch = 0;
     doltliteInvalidateBtreeWorkingState(pDestBt);
     goto backup_step_done;
   }

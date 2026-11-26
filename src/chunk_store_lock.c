@@ -385,6 +385,13 @@ void csFileUnlock(CsFileLock pLock, char **pzName){
   }
 }
 
+int chunkStoreOwnFileHandles(const ChunkStore *cs){
+  int n = 0;
+  if( cs->file.pFile ) n++;
+  if( cs->pGraphLockFile && cs->pGraphLockFile->pGuard ) n++;
+  return n;
+}
+
 int chunkStoreReplaceLockedFile(ChunkStore *cs, const char *zTmp, int *pRetainTmp){
 #if defined(SQLITE_WASM) || defined(__EMSCRIPTEN__)
   if( cs->isMemory || cs->isBuffer || !CS_GRAPH_LOCK(cs) ){

@@ -404,6 +404,7 @@ int csReadSliced(ChunkStore *cs, void *pBuf, i64 nByte, i64 iOff);
 int chunkStoreLockAndRefresh(ChunkStore *cs);
 int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged);
 void chunkStoreUnlock(ChunkStore *cs);
+int chunkStoreOwnFileHandles(const ChunkStore *cs);
 
 /* Memory/buffer stores have no peer; lock calls are no-ops (lockDepth 0). */
 #define PROLLY_ASSERT_STORE_GRAPH_LOCKED(cs) do{ \

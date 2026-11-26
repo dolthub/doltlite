@@ -3342,9 +3342,20 @@ void doltliteBtreeBackupFinish(Btree *p){
 
 void doltliteInvalidateBtreeWorkingState(Btree *p){
   BtShared *pBt = p ? p->pBt : 0;
+  sqlite3 *db;
+  int i;
   if( !pBt ) return;
   pBt->iWorkingStateVersion++;
   if( pBt->iWorkingStateVersion==0 ) pBt->iWorkingStateVersion = 1;
+  db = pBt->db;
+  for(i=0; db && i<db->nDb; i++){
+    Btree *q = db->aDb[i].pBt;
+    if( q && q->pOps==&prollyBtreeOps && q->pBt
+     && q->pBt!=pBt && q->pBt->pStore==pBt->pStore ){
+      q->pBt->iWorkingStateVersion++;
+      if( q->pBt->iWorkingStateVersion==0 ) q->pBt->iWorkingStateVersion = 1;
+    }
+  }
 }
 
 ChunkStore *doltliteGetChunkStore(sqlite3 *db){
