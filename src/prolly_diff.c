@@ -705,7 +705,7 @@ int prollyDiffIterOpenCompare(
       rc = chunkStoreSourcePrefetchMany(pStore, &rootHash, 1);
     }
     if( rc!=SQLITE_OK ){
-      pIter->eof = 1;
+      prollyDiffIterClose(pIter);
       pIter->rc = rc;
       return rc;
     }
@@ -717,7 +717,7 @@ int prollyDiffIterOpenCompare(
     rc = diffIterDescendPair(pIter, pOldRoot, pNewRoot, -1);
   }
   if( rc!=SQLITE_OK ){
-    pIter->eof = 1;
+    prollyDiffIterClose(pIter);
     pIter->rc = rc;
     return rc;
   }

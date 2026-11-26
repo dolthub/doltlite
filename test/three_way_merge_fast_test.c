@@ -368,6 +368,112 @@ static void test_corrupt_child_level_and_depth(void){
   closeStore(&cs, &cache, path);
 }
 
+static int dummySourceGet(
+  void *pCtx,
+  const unsigned char aHash[20],
+  unsigned char **ppBytes,
+  int *pnBytes
+){
+  (void)pCtx;
+  (void)aHash;
+  (void)ppBytes;
+  (void)pnBytes;
+  return DOLTLITE_SOURCE_NOTFOUND;
+}
+
+static int dummySourceGetMany(
+  void *pCtx,
+  int nHash,
+  const unsigned char *aHash,
+  unsigned char **apBytes,
+  int *anBytes
+){
+  (void)pCtx;
+  (void)nHash;
+  (void)aHash;
+  (void)apBytes;
+  (void)anBytes;
+  return DOLTLITE_SOURCE_NOTFOUND;
+}
+
+static void test_diff_open_error_frees_prefetch_buf(void){
+  ChunkStore cs;
+  ProllyCache cache;
+  ProllyHash empty, leafA, leafO, deepOld, deepNew;
+  ProllyDiffIter iter;
+  doltlite_chunk_source src;
+  u8 recA[] = {2, 15, 'a'};
+  u8 recO[] = {2, 15, 'o'};
+  sqlite3_int64 memBefore;
+  int rc;
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wm_diff_prefetch_leak";
+
+  rc = openStore(&cs, &cache, path);
+  check("diff_prefetch_leak: open", rc==SQLITE_OK);
+  memset(&empty, 0, sizeof(empty));
+
+  rc = insertInt(&cs, &cache, &empty, 1, recA, sizeof(recA), &leafA);
+  check("diff_prefetch_leak: leafA", rc==SQLITE_OK);
+  rc = insertInt(&cs, &cache, &leafA, 2, recO, sizeof(recO), &leafO);
+  check("diff_prefetch_leak: leafO", rc==SQLITE_OK);
+
+  rc = putSingleEntryNode(&cs, PROLLY_CURSOR_MAX_DEPTH, 1,
+                          leafA.data, PROLLY_HASH_SIZE, &deepOld);
+  check("diff_prefetch_leak: deepOld", rc==SQLITE_OK);
+  rc = putSingleEntryNode(&cs, PROLLY_CURSOR_MAX_DEPTH, 1,
+                          leafO.data, PROLLY_HASH_SIZE, &deepNew);
+  check("diff_prefetch_leak: deepNew", rc==SQLITE_OK);
+  rc = chunkStoreCommit(&cs);
+  check("diff_prefetch_leak: commit", rc==SQLITE_OK);
+
+  memset(&src, 0, sizeof(src));
+  src.iVersion = 1;
+  src.xGet = dummySourceGet;
+  src.xGetMany = dummySourceGetMany;
+  rc = chunkStoreSourceSet(&cs, 0, &src, 0);
+  check("diff_prefetch_leak: set source", rc==SQLITE_OK);
+  check("diff_prefetch_leak: source attached", cs.pChunkSource!=0);
+
+  /* Error during diffIterPrefetchPairs after pPrefetchPairs is allocated. */
+  memBefore = sqlite3_memory_used();
+  rc = prollyDiffIterOpen(&iter, &cs, &cache, &deepOld, &deepNew,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY);
+  check("diff_prefetch_leak: prefetch error rc", rc==SQLITE_CORRUPT);
+  check("diff_prefetch_leak: prefetch error iter.rc", iter.rc==SQLITE_CORRUPT);
+  check("diff_prefetch_leak: prefetch error iter.eof", iter.eof==1);
+  check("diff_prefetch_leak: prefetch error pPrefetchPairs NULL",
+        iter.pPrefetchPairs==0);
+  check("diff_prefetch_leak: prefetch error pPrefetchHashes NULL",
+        iter.pPrefetchHashes==0);
+  check("diff_prefetch_leak: prefetch error no leak without close",
+        sqlite3_memory_used()==memBefore);
+  prollyDiffIterClose(&iter);
+  check("diff_prefetch_leak: prefetch error idempotent close",
+        sqlite3_memory_used()==memBefore);
+
+  /* Error during diffIterActivateRange after diffIterPrefetchPairs succeeds. */
+  prollyCacheFree(&cache);
+  memBefore = sqlite3_memory_used();
+  rc = prollyCacheInit(&cache, 64*4096);
+  check("diff_prefetch_leak: reinit cache", rc==SQLITE_OK);
+  rc = prollyDiffIterOpen(&iter, &cs, &cache, &deepOld, &deepNew,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_BLOBKEY);
+  check("diff_prefetch_leak: activate error rc", rc!=SQLITE_OK);
+  check("diff_prefetch_leak: activate error iter.rc", iter.rc==rc);
+  check("diff_prefetch_leak: activate error iter.eof", iter.eof==1);
+  check("diff_prefetch_leak: activate error pPrefetchPairs NULL",
+        iter.pPrefetchPairs==0);
+  check("diff_prefetch_leak: activate error pPrefetchHashes NULL",
+        iter.pPrefetchHashes==0);
+  prollyCacheFree(&cache);
+  check("diff_prefetch_leak: activate error no leak without close",
+        sqlite3_memory_used()==memBefore);
+
+  chunkStoreSourceSet(&cs, 0, 0, 0);
+  chunkStoreClose(&cs);
+  remove(path);
+}
+
 int main(void){
   sqlite3_initialize();
   test_same_shape_still_handles();
@@ -375,6 +481,7 @@ int main(void){
   test_flags_disagree_with_nodes();
   test_corrupt_value_error();
   test_corrupt_child_level_and_depth();
+  test_diff_open_error_frees_prefetch_buf();
   printf("%d passed, %d failed\n", nPass, nFail);
   return nFail>0 ? 1 : 0;
 }
