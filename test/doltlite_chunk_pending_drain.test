@@ -89,6 +89,66 @@ foreach {key decl keyexpr} {
   } {2147581953}
 }
 
+# I/O write error during pending drain on a brand-new DB after writing the
+# offset-0 manifest must truncate the file back to 0 bytes so reopen succeeds.
+proc drain_tvfs_cb {method file args} {
+  if {![string match *drain_ioerr.db $file]} { return SQLITE_OK }
+  if {$::drain_fail_after_hdr && $method eq "xWrite"} {
+    set off [lindex $args 1]
+    set len [lindex $args 2]
+    if {$off > 0} {
+      if {$len >= 32768} {
+        set ::drain_fault_fired 1
+      }
+      return SQLITE_IOERR
+    }
+  }
+  return SQLITE_OK
+}
+
+testvfs drain_tvfs
+drain_tvfs filter {xWrite}
+drain_tvfs script drain_tvfs_cb
+
+do_test drain-newdb-ioerr-trunc {
+  catch {db close}
+  forcedelete drain_ioerr.db
+  set ::drain_fail_after_hdr 1
+  set ::drain_fault_fired 0
+  sqlite3 db drain_ioerr.db -vfs drain_tvfs
+  set r [catchsql {
+    BEGIN;
+    CREATE TABLE t_drain(id INTEGER PRIMARY KEY, b BLOB);
+    WITH RECURSIVE c(i) AS (
+      VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<200
+    )
+    INSERT INTO t_drain SELECT i, randomblob(1000) FROM c;
+    COMMIT;
+  }]
+  set ::drain_fail_after_hdr 0
+  catch {db eval {ROLLBACK}}
+  db close
+  list $::drain_fault_fired [lindex $r 0] [file size drain_ioerr.db]
+} {1 1 0}
+
+do_test drain-newdb-ioerr-reopen {
+  sqlite3 db drain_ioerr.db
+  set ic1 [db eval {PRAGMA integrity_check}]
+  db eval {
+    CREATE TABLE t_ok(k INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO t_ok VALUES(1, 'clean');
+  }
+  db close
+  sqlite3 db drain_ioerr.db
+  set res [db eval {SELECT k, v FROM t_ok; PRAGMA integrity_check}]
+  db close
+  forcedelete drain_ioerr.db
+  list $ic1 $res
+} {ok {1 clean ok}}
+
+drain_tvfs delete
+sqlite3 db test.db
+
 if {$had_pending_drain_limit} {
   set env(DOLTLITE_CHUNK_PENDING_DRAIN_LIMIT) $saved_pending_drain_limit
 } else {

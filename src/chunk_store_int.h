@@ -42,6 +42,8 @@ int csWasmRecoverReplacement(ChunkStore *cs);
 #endif
 int csReadUnlock(ChunkStore *cs, CsReadLock *pLock);
 int csReclaimTail(ChunkStore *cs);
+int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize,
+                           sqlite3_file **ppRetired);
 int csFileLockPromote(sqlite3_file *pFile);
 int csFileLockOutput(sqlite3_file *pFile);
 void csFileUnlock(CsFileLock pFile, char **pzName);

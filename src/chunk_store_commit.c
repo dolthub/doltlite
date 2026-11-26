@@ -41,7 +41,7 @@ static int csReloadInjectionActive(void){
   return zEnv && atoi(zEnv)>0;
 }
 #endif
-static int csRollbackFailedAppend(
+int csRollbackFailedAppend(
   ChunkStore *cs, i64 origFileSize, sqlite3_file **ppRetired
 ){
   sqlite3_int64 sizeNow = -1;
@@ -59,6 +59,9 @@ static int csRollbackFailedAppend(
     return SQLITE_OK;
   }
 
+  if( !cs->file.zFilename ){
+    return rc==SQLITE_OK ? SQLITE_IOERR_TRUNCATE : rc;
+  }
   rc = csOpenFile(cs->file.pVfs, cs->file.zFilename, &pReopened,
                   SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB, 0);
   if( rc!=SQLITE_OK ) return rc;
