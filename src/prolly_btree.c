@@ -2546,6 +2546,7 @@ int prollyBtCursorCloseCursor(BtCursor *pCur){
   }
   pCur->pSeekSortKey = 0;
   pCur->nSeekSortKeyAlloc = 0;
+  CLEAR_CACHED_SEEK_KEY(pCur);
   if( pCur->pCompareSortKey ){
     sqlite3_free(pCur->pCompareSortKey);
     pCur->pCompareSortKey = 0;
@@ -2768,6 +2769,7 @@ void prollyBtCursorClearCursor(BtCursor *pCur){
     pCur->nKey = 0;
   }
   CLEAR_CACHED_PAYLOAD(pCur);
+  CLEAR_CACHED_SEEK_KEY(pCur);
   clearMergeCursorState(pCur);
   pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_AtLast|BTCF_DeleteKey);
   if( pCur->eState==CURSOR_FAULT && pCur->bCatalogGone ) return;
