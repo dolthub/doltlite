@@ -711,6 +711,7 @@ static int csReplayWalFrom(
   ChunkStoreReplayState saved;
   i64 pos;
   i64 lastBoundary;
+  i64 lastRootEnd;
   i64 resumePos = 0;
   int damageAction = 0;
   int sawMidStream = 0;
@@ -773,6 +774,8 @@ static int csReplayWalFrom(
 
   cs->wal.nWalData = walSize;
   lastBoundary = iStart - cs->wal.iWalOffset;
+  lastRootEnd = iStart > cs->wal.iWalOffset ? saved.wal.nWalData : 0;
+  if( lastRootEnd > walSize ) lastRootEnd = walSize;
   cs->wal.cleanCloseMarker = lastBoundary>=walSize;
 
   pos = lastBoundary;
@@ -944,6 +947,7 @@ static int csReplayWalFrom(
       memcpy(cs->refs.refsHash.data, m + CS_MANIFEST_REFS_HASH_OFF, PROLLY_HASH_SIZE);
 
       pos = recPos + 1 + CHUNK_MANIFEST_SIZE;
+      lastRootEnd = pos;
       {
         i64 recAbs = cs->wal.iWalOffset + recPos;
         i64 durableTo = CS_READ_I64(m + CS_MANIFEST_DURABLE_TO_OFF);
@@ -996,7 +1000,7 @@ static int csReplayWalFrom(
 
   /* Reclaim uncommitted tail unless poisoned. */
   if( !sawMidStream ){
-    cs->wal.nWalData = lastBoundary < walSize ? lastBoundary : walSize;
+    cs->wal.nWalData = lastRootEnd;
     cs->file.iFileSize = cs->wal.iWalOffset + lastBoundary;
   }
 
@@ -1448,6 +1452,7 @@ int csTryLoadWalCheckpoint(
     cs->wal.checkpointMagic = stamp.checkpointMagic;
     cs->wal.nCheckpointRun = nRun;
     memcpy(cs->wal.aCheckpointRun, aRun, nRun*sizeof(aRun[0]));
+    cs->wal.nWalData = iRoot + (i64)sizeof(aRoot) - cs->wal.iWalOffset;
     rc = csReplayWalFrom(cs, stamp.iCheckpointReplay, 0, 0, 0, iEnd);
     if( rc!=SQLITE_OK ){
       csIndexCacheFree(cs);
@@ -1533,6 +1538,7 @@ int csTryLoadWalCheckpoint(
   aIndex = 0;
   sqlite3_free(aBuf);
   aBuf = 0;
+  cs->wal.nWalData = iRoot + (i64)sizeof(aRoot) - cs->wal.iWalOffset;
   rc = csReplayWalFrom(cs, stamp.iCheckpointReplay, 0, 0, 0, iEnd);
   if( rc!=SQLITE_OK ) return rc;
   *pLoaded = 1;
