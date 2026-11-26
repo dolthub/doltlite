@@ -870,8 +870,7 @@ static int csCommitWithBusyHandler(
   if( cs->isMemory ) return csCommitToMemory(cs);
   if( !cs->isBuffer && cs->lockDepth<=0 && cs->file.zFilename ){
     ProllyHash baseRefsHash;
-    preserveRefs = cs->staging.nPending > 0
-                && prollyHashCompare(&cs->refs.refsHash,
+    preserveRefs = prollyHashCompare(&cs->refs.refsHash,
                                      &cs->refs.committedRefsHash)!=0;
     if( preserveRefs ){
       savedRefsHash = cs->refs.refsHash;
