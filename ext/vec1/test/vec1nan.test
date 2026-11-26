@@ -43,6 +43,64 @@ do_catchsql_test 1.5 {
   SELECT vec1_train(x, '{codesize:4}') FROM tr
 } {1 {vec1_train: non-finite value not allowed in vector}}
 
+# Finite float32 vectors whose squared L2 distance overflows to +INFINITY.
+reset_db
+vec1_load db
+do_execsql_test 2.0 {
+  CREATE VIRTUAL TABLE v2 USING vec1(v);
+  CREATE TABLE tr2(id INTEGER PRIMARY KEY, x BLOB);
+  WITH RECURSIVE s(i) AS (
+    VALUES(1) UNION ALL SELECT i+1 FROM s WHERE i<600
+  )
+  INSERT INTO tr2 SELECT i,
+    CASE WHEN i%2=0
+      THEN vec1_from_json('[2e19,2e19,2e19,2e19,2e19,2e19,2e19,2e19]')
+      ELSE vec1_from_json('[-2e19,-2e19,-2e19,-2e19,-2e19,-2e19,-2e19,-2e19]')
+    END
+  FROM s;
+  CREATE TABLE m2(b BLOB);
+  INSERT INTO m2 SELECT vec1_train(x, '{nbucket:4, codesize:4, distance:"l2"}') FROM tr2;
+  INSERT INTO v2(rowid, v) SELECT id, x FROM tr2 WHERE id<=32;
+  INSERT INTO v2(cmd, arg) VALUES('rebuild', (SELECT b FROM m2));
+  INSERT INTO v2(rowid, v) VALUES(1000, vec1_from_json('[-2e19,-2e19,-2e19,-2e19,-2e19,-2e19,-2e19,-2e19]'));
+  SELECT count(*) FROM v2_base;
+  PRAGMA integrity_check;
+} {33 ok}
+
+do_execsql_test 2.1 {
+  SELECT count(*)>=1 FROM v2(
+    vec1_from_json('[2e19,2e19,2e19,2e19,2e19,2e19,2e19,2e19]'),
+    '{k:4, nprobe:4}'
+  );
+} {1}
+
+# Also test training on uniform +2e19 vectors and quantizing -2e19 vectors,
+# so every centroid distance overflows to +INFINITY.
+reset_db
+vec1_load db
+do_execsql_test 2.2 {
+  CREATE VIRTUAL TABLE v3 USING vec1(v);
+  CREATE TABLE tr3(id INTEGER PRIMARY KEY, x BLOB);
+  WITH RECURSIVE s(i) AS (
+    VALUES(1) UNION ALL SELECT i+1 FROM s WHERE i<600
+  )
+  INSERT INTO tr3 SELECT i,
+    vec1_from_json('[2e19,2e19,2e19,2e19,2e19,2e19,2e19,2e19]')
+  FROM s;
+  CREATE TABLE m3(b BLOB);
+  INSERT INTO m3 SELECT vec1_train(x, '{nbucket:4, codesize:4, distance:"l2"}') FROM tr3;
+  INSERT INTO v3(cmd, arg) VALUES('rebuild', (SELECT b FROM m3));
+  WITH RECURSIVE s(i) AS (
+    VALUES(1) UNION ALL SELECT i+1 FROM s WHERE i<32
+  )
+  INSERT INTO v3(rowid, v) SELECT i,
+    vec1_from_json('[-2e19,-2e19,-2e19,-2e19,-2e19,-2e19,-2e19,-2e19]')
+  FROM s;
+  INSERT INTO v3(cmd, arg) VALUES('rebuild', (SELECT b FROM m3));
+  INSERT INTO v3(rowid, v) VALUES(100, vec1_from_json('[-2e19,-2e19,-2e19,-2e19,-2e19,-2e19,-2e19,-2e19]'));
+  SELECT count(*) FROM v3_base;
+  PRAGMA integrity_check;
+} {33 ok}
 
 finish_test
 
