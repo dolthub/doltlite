@@ -1,0 +1,169 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# Verify violation_info is valid JSON and preserves exact identifiers
+# containing double quotes and backslashes across constraint types.
+
+# 1. UNIQUE index violation: column and index names containing quote and backslash
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, "col""a\b" INT);
+  CREATE UNIQUE INDEX "idx""x\y" ON t("col""a\b");
+  INSERT INTO t VALUES(1, 10), (2, 20);
+  SELECT dolt_commit('-Am', 'base');
+  SELECT dolt_checkout('-b', 'side');
+  UPDATE t SET "col""a\b" = 99 WHERE id = 2;
+  SELECT dolt_commit('-Am', 'side');
+  SELECT dolt_checkout('main');
+  UPDATE t SET "col""a\b" = 99 WHERE id = 1;
+  SELECT dolt_commit('-Am', 'main');
+}
+execsql BEGIN
+do_test cv-json-unique-merge {
+  set r [catchsql {SELECT dolt_merge('side')}]
+  list [lindex $r 0] [string match {*constraint violations*} [lindex $r 1]]
+} {1 1}
+do_test cv-json-unique-info {
+  execsql {
+    SELECT DISTINCT
+      json_valid(violation_info),
+      json_extract(violation_info, '$.Columns[0]'),
+      json_extract(violation_info, '$.Name')
+    FROM dolt_constraint_violations_t
+  }
+} [list 1 {col"a\b} {idx"x\y}]
+execsql ROLLBACK
+
+# 2. FOREIGN KEY violation: parent table, parent column, child column with quote and backslash
+reset_db
+execsql {
+  PRAGMA foreign_keys = ON;
+  CREATE TABLE "par""t\1"("ref""c\1" INTEGER PRIMARY KEY);
+  INSERT INTO "par""t\1" VALUES(1), (2);
+  CREATE TABLE t(
+    id INTEGER PRIMARY KEY,
+    "fk""c\1" INT,
+    FOREIGN KEY("fk""c\1") REFERENCES "par""t\1"("ref""c\1")
+  );
+  INSERT INTO t VALUES(1, 1);
+  SELECT dolt_commit('-Am', 'base');
+  SELECT dolt_checkout('-b', 'side');
+  INSERT INTO t VALUES(2, 2);
+  SELECT dolt_commit('-Am', 'side');
+  SELECT dolt_checkout('main');
+  DELETE FROM "par""t\1" WHERE "ref""c\1" = 2;
+  SELECT dolt_commit('-Am', 'main');
+}
+execsql BEGIN
+do_test cv-json-fk-merge {
+  set r [catchsql {SELECT dolt_merge('side')}]
+  list [lindex $r 0] [string match {*constraint violations*} [lindex $r 1]]
+} {1 1}
+do_test cv-json-fk-info {
+  execsql {
+    SELECT
+      json_valid(violation_info),
+      json_extract(violation_info, '$.Columns[0]'),
+      json_extract(violation_info, '$.ReferencedTable'),
+      json_extract(violation_info, '$.ReferencedColumns[0]')
+    FROM dolt_constraint_violations_t
+  }
+} [list 1 {fk"c\1} {par"t\1} {ref"c\1}]
+execsql ROLLBACK
+
+# 3. NOT NULL violation: column name containing quote and backslash
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, "nn""c\1" INT);
+  INSERT INTO t VALUES(1, 10);
+  SELECT dolt_commit('-Am', 'base');
+  SELECT dolt_checkout('-b', 'side');
+  INSERT INTO t VALUES(2, NULL);
+  SELECT dolt_commit('-Am', 'side');
+  SELECT dolt_checkout('main');
+  CREATE TABLE t2(id INTEGER PRIMARY KEY, "nn""c\1" INT NOT NULL);
+  INSERT INTO t2 SELECT * FROM t;
+  DROP TABLE t;
+  ALTER TABLE t2 RENAME TO t;
+  SELECT dolt_commit('-Am', 'main');
+}
+execsql BEGIN
+do_test cv-json-notnull-merge {
+  set r [catchsql {SELECT dolt_merge('side')}]
+  list [lindex $r 0] [string match {*constraint violations*} [lindex $r 1]]
+} {1 1}
+do_test cv-json-notnull-info {
+  execsql {
+    SELECT
+      json_valid(violation_info),
+      json_extract(violation_info, '$.Columns[0]')
+    FROM dolt_constraint_violations_t
+  }
+} [list 1 {nn"c\1}]
+execsql ROLLBACK
+
+# 4. STRICT type violation: column name containing quote and backslash
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, "st""c\1" INT);
+  INSERT INTO t VALUES(1, 10);
+  SELECT dolt_commit('-Am', 'base');
+  SELECT dolt_checkout('-b', 'side');
+  INSERT INTO t VALUES(2, 'bad');
+  SELECT dolt_commit('-Am', 'side');
+  SELECT dolt_checkout('main');
+  CREATE TABLE t2(id INTEGER PRIMARY KEY, "st""c\1" INT) STRICT;
+  INSERT INTO t2 SELECT * FROM t;
+  DROP TABLE t;
+  ALTER TABLE t2 RENAME TO t;
+  SELECT dolt_commit('-Am', 'main');
+}
+execsql BEGIN
+do_test cv-json-strict-merge {
+  set r [catchsql {SELECT dolt_merge('side')}]
+  list [lindex $r 0] [string match {*constraint violations*} [lindex $r 1]]
+} {1 1}
+do_test cv-json-strict-info {
+  execsql {
+    SELECT
+      json_valid(violation_info),
+      json_extract(violation_info, '$.Columns[0]')
+    FROM dolt_constraint_violations_t
+  }
+} [list 1 {st"c\1}]
+execsql ROLLBACK
+
+# 5. CHECK constraint violation: constraint name containing quote and backslash
+reset_db
+execsql {
+  CREATE TABLE t(
+    id INTEGER PRIMARY KEY,
+    v INT,
+    w INT,
+    CONSTRAINT "ck""n\1" CHECK(v <= w)
+  );
+  INSERT INTO t VALUES(1, 1, 5);
+  SELECT dolt_commit('-Am', 'base');
+  SELECT dolt_checkout('-b', 'side');
+  UPDATE t SET v = 4 WHERE id = 1;
+  SELECT dolt_commit('-Am', 'side');
+  SELECT dolt_checkout('main');
+  UPDATE t SET w = 2 WHERE id = 1;
+  SELECT dolt_commit('-Am', 'main');
+}
+execsql BEGIN
+do_test cv-json-check-merge {
+  set r [catchsql {SELECT dolt_merge('side')}]
+  list [lindex $r 0] [string match {*constraint violations*} [lindex $r 1]]
+} {1 1}
+do_test cv-json-check-info {
+  execsql {
+    SELECT
+      json_valid(violation_info),
+      json_extract(violation_info, '$.Name')
+    FROM dolt_constraint_violations_t
+  }
+} [list 1 {ck"n\1}]
+execsql ROLLBACK
+
+finish_test

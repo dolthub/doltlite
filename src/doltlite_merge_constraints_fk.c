@@ -460,8 +460,8 @@ static char *buildFkViolationInfo(
           sqlite3_str_appendall(pCols, ", ");
           sqlite3_str_appendall(pRefCols, ", ");
         }
-        sqlite3_str_appendf(pCols, "\"%w\"", zFrom ? zFrom : "");
-        sqlite3_str_appendf(pRefCols, "\"%w\"", zTo ? zTo : "");
+        doltliteMergeAppendJsonString(pCols, zFrom ? zFrom : "");
+        doltliteMergeAppendJsonString(pRefCols, zTo ? zTo : "");
         if( nMatches==0 ){
           if( zParent ) zParentBuf = sqlite3_mprintf("%s", zParent);
           zOnUpBuf  = sqlite3_mprintf("%s", zOnUp  ? zOnUp  : "NO ACTION");
@@ -492,16 +492,17 @@ static char *buildFkViolationInfo(
     return 0;
   }
 
-  sqlite3_str_appendall(pJson, "{");
-  sqlite3_str_appendf(pJson,
-      "\"Columns\": [%s], \"ReferencedTable\": \"%w\", "
-      "\"ReferencedColumns\": [%s], "
-      "\"OnUpdate\": \"%w\", \"OnDelete\": \"%w\"}",
-      zColsBuf ? zColsBuf : "",
-      zParentBuf ? zParentBuf : "",
-      zRefColsBuf ? zRefColsBuf : "",
-      zOnUpBuf ? zOnUpBuf : "NO ACTION",
-      zOnDelBuf ? zOnDelBuf : "NO ACTION");
+  sqlite3_str_appendall(pJson, "{\"Columns\": [");
+  sqlite3_str_appendall(pJson, zColsBuf);
+  sqlite3_str_appendall(pJson, "], \"ReferencedTable\": ");
+  doltliteMergeAppendJsonString(pJson, zParentBuf ? zParentBuf : "");
+  sqlite3_str_appendall(pJson, ", \"ReferencedColumns\": [");
+  sqlite3_str_appendall(pJson, zRefColsBuf);
+  sqlite3_str_appendall(pJson, "], \"OnUpdate\": ");
+  doltliteMergeAppendJsonString(pJson, zOnUpBuf ? zOnUpBuf : "NO ACTION");
+  sqlite3_str_appendall(pJson, ", \"OnDelete\": ");
+  doltliteMergeAppendJsonString(pJson, zOnDelBuf ? zOnDelBuf : "NO ACTION");
+  sqlite3_str_appendchar(pJson, 1, '}');
   zResult = sqlite3_str_finish(pJson);
   if( !zResult ) *pRc = SQLITE_NOMEM;
   sqlite3_free(zColsBuf);

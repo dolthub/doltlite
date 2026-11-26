@@ -69,9 +69,20 @@ static int appendUniqueViolation(
   if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
   if( rc!=SQLITE_OK ) return rc;
 
-  zInfo = sqlite3_mprintf(
-      "{\"Columns\": [%s], \"Name\": \"%w\"}",
-      zCols, zIndexName);
+  {
+    sqlite3_str *pInfo = sqlite3_str_new(db);
+    sqlite3_str_appendall(pInfo, "{\"Columns\": [");
+    sqlite3_str_appendall(pInfo, zCols);
+    sqlite3_str_appendall(pInfo, "], \"Name\": ");
+    doltliteMergeAppendJsonString(pInfo, zIndexName ? zIndexName : "");
+    sqlite3_str_appendchar(pInfo, 1, '}');
+    zInfo = sqlite3_str_finish(pInfo);
+  }
+  if( !zInfo ){
+    sqlite3_free(pKey);
+    sqlite3_free(pVal);
+    return SQLITE_NOMEM;
+  }
   rc = doltliteAppendConstraintViolation(
       db, zTable, DOLTLITE_CV_UNIQUE_INDEX,
       pPk ? (sqlite3_int64)0 : rowid, pKey, nKey, pVal, nVal, zInfo);
@@ -1014,21 +1025,6 @@ expr_done:
   return rc;
 }
 
-static void uniqueAppendJsonString(sqlite3_str *p, const char *z){
-  sqlite3_str_appendchar(p, 1, '"');
-  for( ; z && *z; z++ ){
-    if( *z=='"' || *z=='\\' ){
-      sqlite3_str_appendchar(p, 1, '\\');
-      sqlite3_str_appendchar(p, 1, *z);
-    }else if( *z=='\n' ){
-      sqlite3_str_appendall(p, "\\n");
-    }else{
-      sqlite3_str_appendchar(p, 1, *z);
-    }
-  }
-  sqlite3_str_appendchar(p, 1, '"');
-}
-
 /* Select-list text and the JSON label list for an expression index. */
 static int uniqueIndexExprLists(
   sqlite3 *db, Index *pIdx, char **pzSelect, char **pzJson
@@ -1053,7 +1049,7 @@ static int uniqueIndexExprLists(
     ** the probe is computed from the row. A wrong index entry must not
     ** hide a collision or invent one. */
     sqlite3_str_appendf(pSelect, "(CASE WHEN 1 THEN %s END)", az[i]);
-    uniqueAppendJsonString(pJson, az[i]);
+    doltliteMergeAppendJsonString(pJson, az[i]);
     sqlite3_free(az[i]);
   }
   sqlite3_free(az);
@@ -1218,9 +1214,11 @@ static int uniqueWalkTable(
 
     pColList = sqlite3_str_new(0);
     {
+      sqlite3_str *pJsonCols = sqlite3_str_new(0);
       int hasExpr = 0;
       char *zSelect = 0;
       char *zJson = 0;
+      char *zJsonCols = 0;
       for(i=0; i<pIdx->nKeyCol; i++){
         int cno = pIdx->aiColumn[i];
         if( cno==XN_EXPR ){
@@ -1233,24 +1231,31 @@ static int uniqueWalkTable(
         }
         if( sqlite3_str_length(pColList)>0 ){
           sqlite3_str_appendall(pColList, ", ");
+          sqlite3_str_appendall(pJsonCols, ", ");
         }
         sqlite3_str_appendf(
             pColList, "\"%w\"", pIdx->pTable->aCol[cno].zCnName);
+        doltliteMergeAppendJsonString(
+            pJsonCols, pIdx->pTable->aCol[cno].zCnName);
       }
       {
         int strErr = sqlite3_str_errcode(pColList);
+        int jsonErr = sqlite3_str_errcode(pJsonCols);
         zColList = sqlite3_str_finish(pColList);
+        zJsonCols = sqlite3_str_finish(pJsonCols);
         if( strErr ) rc = strErr;
-        else if( !zColList ){
-          zColList = sqlite3_mprintf("");
-          if( !zColList ) rc = SQLITE_NOMEM;
+        else if( jsonErr ) rc = jsonErr;
+        else if( !zColList || !zJsonCols ){
+          if( !zColList ) zColList = sqlite3_mprintf("");
+          if( !zJsonCols ) zJsonCols = sqlite3_mprintf("");
+          if( !zColList || !zJsonCols ) rc = SQLITE_NOMEM;
         }
       }
       if( rc==SQLITE_OK && supported && hasExpr ){
         rc = uniqueIndexExprLists(db, pIdx, &zSelect, &zJson);
       }else if( supported && zColList && *zColList ){
         zSelect = zColList;
-        zJson = zColList;
+        zJson = zJsonCols;
       }
       if( rc==SQLITE_OK && supported && zSelect && *zSelect ){
         if( hasRowid ){
@@ -1266,8 +1271,9 @@ static int uniqueWalkTable(
         }
       }
       if( zSelect!=zColList ) sqlite3_free(zSelect);
-      if( zJson!=zColList ) sqlite3_free(zJson);
+      if( zJson!=zJsonCols ) sqlite3_free(zJson);
       sqlite3_free(zColList);
+      sqlite3_free(zJsonCols);
     }
     sqlite3_free(zIdx);
     if( rc != SQLITE_OK ) break;

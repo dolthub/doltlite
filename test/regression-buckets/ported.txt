@@ -326,3 +326,4 @@ doltlite_gc_reopen_fail
 doltlite_hashof_oom
 doltlite_prolly_btree_error_paths
 doltlite_merge_cv_oom
+doltlite_constraint_violation_json

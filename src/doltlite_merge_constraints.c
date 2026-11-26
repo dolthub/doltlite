@@ -2,6 +2,22 @@
 
 #include "doltlite_merge_constraints_int.h"
 
+void doltliteMergeAppendJsonString(sqlite3_str *pJson, const char *z){
+  sqlite3_str_appendchar(pJson, 1, '"');
+  for(; z && *z; z++){
+    unsigned char c = (unsigned char)*z;
+    if( c=='"' || c=='\\' ){
+      sqlite3_str_appendchar(pJson, 1, '\\');
+      sqlite3_str_appendchar(pJson, 1, c);
+    }else if( c<0x20 ){
+      sqlite3_str_appendf(pJson, "\\u%04x", c);
+    }else{
+      sqlite3_str_appendchar(pJson, 1, c);
+    }
+  }
+  sqlite3_str_appendchar(pJson, 1, '"');
+}
+
 static int copyCursorRow(
   ProllyCursor *pCur,
   u8 **ppKey, int *pnKey,
@@ -1032,7 +1048,8 @@ int scanMergeColumnFlagViolations(
       sqlite3_str_appendall(pInfo, "{\"Columns\": [");
       for(i=0; i<nCols; i++){
         if( sqlite3_column_int(pQ, nKeyCol + i) ){
-          sqlite3_str_appendf(pInfo, "%s\"%w\"", nNamed ? ", " : "", azCols[i]);
+          if( nNamed ) sqlite3_str_appendall(pInfo, ", ");
+          doltliteMergeAppendJsonString(pInfo, azCols[i]);
           nNamed++;
         }
       }
