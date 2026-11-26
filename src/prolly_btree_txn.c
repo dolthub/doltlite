@@ -1462,15 +1462,14 @@ static int commitPhaseTwoPrepSchemaReload(
         prollyCursorReleaseAll(&pC->pCur);
       }
       pC->pMutMap = 0;
-      pC->mmActive = 0;
-      pC->mmPhysActive = 0;
-      pC->deferredTreeSeek = 0;
-      pC->mmIdx = -1;
-      pC->mmPhysIdx = -1;
+      CLEAR_CACHED_PAYLOAD(pC);
+      clearMergeCursorState(pC);
     }else{
       pC->eState = CURSOR_FAULT;
       pC->skipNext = SQLITE_ABORT;
-      pC->mmActive = 0;
+      pC->pMutMap = 0;
+      CLEAR_CACHED_PAYLOAD(pC);
+      clearMergeCursorState(pC);
       prollyCursorReleaseAll(&pC->pCur);
     }
   }
@@ -1519,6 +1518,9 @@ static void commitPhaseTwoRemapReaders(Btree *p, Btree *pReload){
     }else{
       pC->eState = CURSOR_FAULT;
       pC->skipNext = SQLITE_ABORT;
+      pC->pMutMap = 0;
+      CLEAR_CACHED_PAYLOAD(pC);
+      clearMergeCursorState(pC);
       prollyCursorReleaseAll(&pC->pCur);
     }
   }
@@ -1588,13 +1590,10 @@ static int commitPhaseTwoFailRestore(
   {
     BtCursor *pC;
     for(pC = pBt->pCursor; pC; pC = pC->pNext){
-      if( pC->pBtree!=p || pC->pMutMap==0 ) continue;
+      if( pC->pBtree!=p ) continue;
       pC->pMutMap = 0;
-      pC->mmActive = 0;
-      pC->mmPhysActive = 0;
-      pC->deferredTreeSeek = 0;
-      pC->mmIdx = -1;
-      pC->mmPhysIdx = -1;
+      CLEAR_CACHED_PAYLOAD(pC);
+      clearMergeCursorState(pC);
     }
   }
   rc2 = restoreFromCommitted(p);
@@ -2456,11 +2455,8 @@ static int commandRollback(Btree *p, BtShared *pBt, int tripCode){
       pC->skipNext = tripCode ? tripCode : SQLITE_ABORT;
     }
     pC->pMutMap = 0;
-    pC->mmActive = 0;
-    pC->mmPhysActive = 0;
-    pC->deferredTreeSeek = 0;
-    pC->mmIdx = -1;
-    pC->mmPhysIdx = -1;
+    CLEAR_CACHED_PAYLOAD(pC);
+    clearMergeCursorState(pC);
     prollyCursorReleaseAll(&pC->pCur);
   }
   rc = p->db ? doltliteNestedTxnRestore(p->db) : SQLITE_NOTFOUND;
@@ -2530,17 +2526,11 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
           pC->eState = CURSOR_FAULT;
           pC->skipNext = tripCode;
           pC->bCatalogGone = 1;
-          pC->mmActive = 0;
           prollyCursorReleaseAll(&pC->pCur);
         }
-        if( pC->pMutMap ){
-          pC->pMutMap = 0;
-          pC->mmActive = 0;
-          pC->mmPhysActive = 0;
-          pC->deferredTreeSeek = 0;
-          pC->mmIdx = -1;
-          pC->mmPhysIdx = -1;
-        }
+        pC->pMutMap = 0;
+        CLEAR_CACHED_PAYLOAD(pC);
+        clearMergeCursorState(pC);
       }
     }
     rc = restoreFromCommitted(p);
@@ -2552,6 +2542,10 @@ int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
           pC->eState = CURSOR_FAULT;
           pC->skipNext = rc;
         }
+        pC->bCatalogGone = 1;
+        pC->pMutMap = 0;
+        CLEAR_CACHED_PAYLOAD(pC);
+        clearMergeCursorState(pC);
         prollyCursorReleaseAll(&pC->pCur);
       }
       btreeFreeCatalogTables(p);
@@ -2716,20 +2710,17 @@ static int rollbackCommittedState(Btree *p, BtShared *pBt, int bKeepReaders){
   }
   /* Keep an existing fault code; do not clobber SQLITE_ABORT_ROLLBACK. */
   for(pC=pBt->pCursor; pC; pC=pC->pNext){
+    pC->pMutMap = 0;
+    CLEAR_CACHED_PAYLOAD(pC);
+    clearMergeCursorState(pC);
     if( bKeepReaders && pC->pBtree==p && pC->eState!=CURSOR_FAULT ){
-      pC->pMutMap = 0;
-      pC->mmActive = 0;
-      pC->mmPhysActive = 0;
-      pC->deferredTreeSeek = 0;
-      pC->mmIdx = -1;
-      pC->mmPhysIdx = -1;
       continue;
     }
     if( pC->eState!=CURSOR_FAULT ){
       pC->eState = CURSOR_FAULT;
       pC->skipNext = SQLITE_ABORT;
     }
-    pC->mmActive = 0;
+    pC->bCatalogGone = 1;
     prollyCursorReleaseAll(&pC->pCur);
   }
   if( bSchemaChangedRollback ) resetConnectionSchema(p);

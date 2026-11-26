@@ -562,19 +562,18 @@ static inline struct TableEntry *addTable(Btree *p, Pgno iTable, u8 flags){
 static inline void removeTable(Btree *p, Pgno iTable){
   catRemove(&p->cat, iTable);
 }
+void clearMergeCursorState(BtCursor *pCur);
+
 /* Cursors alias the pending map of a TableEntry; a statement left open
 ** across a catalog swap would otherwise reach the freed entry. */
 static inline void btreeFreeCatalogTables(Btree *p){
   BtCursor *pC;
   sqlite3BtreeClearSqlRowidCache(p, 0);
   for(pC = p->pBt ? p->pBt->pCursor : 0; pC; pC = pC->pNext){
-    if( pC->pBtree!=p || pC->pMutMap==0 ) continue;
+    if( pC->pBtree!=p ) continue;
     pC->pMutMap = 0;
-    pC->mmActive = 0;
-    pC->mmPhysActive = 0;
-    pC->deferredTreeSeek = 0;
-    pC->mmIdx = -1;
-    pC->mmPhysIdx = -1;
+    CLEAR_CACHED_PAYLOAD(pC);
+    clearMergeCursorState(pC);
   }
   catFree(&p->cat);
 }
@@ -903,7 +902,6 @@ int unpackedRecordHasNocaseNul(const KeyInfo*, const UnpackedRecord*);
 int sortKeyFromUnpackedForCount(BtCursor*, UnpackedRecord*, u8**, int*, int*);
 int materializeDeferredMergedSeekBackward(BtCursor *pCur);
 int tableEntryIsTableRoot(Btree*, struct TableEntry*, int*);
-void clearMergeCursorState(BtCursor*);
 int mergeLast(BtCursor *pCur, int *pRes);
 int mergeScan(BtCursor *pCur, int dir, int *pRes);
 static SQLITE_INLINE int prollyCursorCheckInterrupt(BtCursor *pCur){
