@@ -586,4 +586,58 @@ run_test "history_lateral_correlated_subquery" \
 main|1" "$DB"
 rm -f "$DB"
 
+DB=/tmp/test_hist_pk_pushdown_ref_err_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'a'), (2, 'b');
+CREATE TABLE w(k INT PRIMARY KEY, v TEXT) WITHOUT ROWID;
+INSERT INTO w VALUES (1, 'a'), (2, 'b');
+CREATE TABLE wc(a INT, b INT, v TEXT, PRIMARY KEY(a, b)) WITHOUT ROWID;
+INSERT INTO wc VALUES (1, 2, 'a');
+SELECT dolt_commit('-Am', 'c1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_error_match "history_rowid_bad_ref_empty_pk_range" \
+  "SELECT * FROM dolt_history_t('no_such_ref') WHERE id > 10 AND id < 5;" \
+  "ref not found: no_such_ref" "$DB"
+run_test_error_match "history_rowid_null_ref_empty_pk_range" \
+  "SELECT * FROM dolt_history_t(NULL) WHERE id > 10 AND id < 5;" \
+  "invalid argument: NULL" "$DB"
+run_test_error_match "history_rowid_bad_ref_null_pk_eq" \
+  "SELECT * FROM dolt_history_t('no_such_ref') WHERE id = NULL;" \
+  "ref not found: no_such_ref" "$DB"
+run_test_error_match "history_rowid_null_ref_null_pk_eq" \
+  "SELECT * FROM dolt_history_t(NULL) WHERE id = NULL;" \
+  "invalid argument: NULL" "$DB"
+run_test_error_match "history_rowid_bad_ref_null_pk_gt" \
+  "SELECT * FROM dolt_history_t('no_such_ref') WHERE id > NULL;" \
+  "ref not found: no_such_ref" "$DB"
+run_test_error_match "history_rowid_bad_ref_type_mismatch_pk" \
+  "SELECT * FROM dolt_history_t('no_such_ref') WHERE id = 'bad';" \
+  "ref not found: no_such_ref" "$DB"
+run_test_error_match "history_rowid_bad_ref_null_pk_and_bad_commit" \
+  "SELECT * FROM dolt_history_t('no_such_ref') WHERE id = NULL AND commit_hash = 'notahash';" \
+  "ref not found: no_such_ref" "$DB"
+
+run_test_error_match "history_wor_bad_ref_null_pk" \
+  "SELECT * FROM dolt_history_w('no_such_ref') WHERE k = NULL;" \
+  "ref not found: no_such_ref" "$DB"
+run_test_error_match "history_wor_null_ref_null_pk" \
+  "SELECT * FROM dolt_history_w(NULL) WHERE k = NULL;" \
+  "invalid argument: NULL" "$DB"
+run_test_error_match "history_wor_bad_ref_empty_range" \
+  "SELECT * FROM dolt_history_w('no_such_ref') WHERE k > 10 AND k < 5;" \
+  "ref not found: no_such_ref" "$DB"
+run_test_error_match "history_wor_null_ref_empty_range" \
+  "SELECT * FROM dolt_history_w(NULL) WHERE k > 10 AND k < 5;" \
+  "invalid argument: NULL" "$DB"
+run_test_error_match "history_wor_composite_bad_ref_null_pk" \
+  "SELECT * FROM dolt_history_wc('no_such_ref') WHERE a = 1 AND b = NULL;" \
+  "ref not found: no_such_ref" "$DB"
+run_test_error_match "history_wor_composite_null_ref_null_pk" \
+  "SELECT * FROM dolt_history_wc(NULL) WHERE a = 1 AND b = NULL;" \
+  "invalid argument: NULL" "$DB"
+run_test_error_match "history_wor_bad_ref_null_pk_and_bad_commit" \
+  "SELECT * FROM dolt_history_w('no_such_ref') WHERE k = NULL AND commit_hash = 'notahash';" \
+  "ref not found: no_such_ref" "$DB"
+rm -f "$DB"
+
 dltest_finish
