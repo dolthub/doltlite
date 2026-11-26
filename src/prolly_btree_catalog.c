@@ -2291,16 +2291,19 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
 #endif
 
   for(i=0; i<nTables; i++){
-    int nType = aSorted[i].zType ? (int)strlen(aSorted[i].zType) : 0;
-    int nName = aSorted[i].zName ? (int)strlen(aSorted[i].zName) : 0;
-    int nTbl = aSorted[i].zTblName ? (int)strlen(aSorted[i].zTblName) : 0;
-    if( sz > 0x7FFFFFFF - (4 + 1 + PROLLY_HASH_SIZE*2 + 6 + nType + nName + nTbl) ){
+    size_t nType = aSorted[i].zType ? strlen(aSorted[i].zType) : 0;
+    size_t nName = aSorted[i].zName ? strlen(aSorted[i].zName) : 0;
+    size_t nTbl = aSorted[i].zTblName ? strlen(aSorted[i].zTblName) : 0;
+    if( nType>0xffff || nName>0xffff || nTbl>0xffff
+     || sz > 0x7FFFFFFF - (4 + 1 + PROLLY_HASH_SIZE*2 + 6
+                           + (int)nType + (int)nName + (int)nTbl) ){
       sqlite3_free(aSorted);
       freeSchemaCatalogRows(aRows, nRows);
       freeCatalogEntryMeta(aMeta, nMeta);
       return SQLITE_TOOBIG;
     }
-    sz += 4 + 1 + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE + 6 + nType + nName + nTbl;
+    sz += 4 + 1 + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE + 6
+        + (int)nType + (int)nName + (int)nTbl;
   }
 
   buf = sqlite3_malloc(sz);
