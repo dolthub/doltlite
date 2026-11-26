@@ -719,4 +719,46 @@ do_execsql_test 9.4 {
   SELECT rowid FROM v1;
 } {{[1,0,0,0]} 2}
 
+#-------------------------------------------------------------------------
+# Malformed model headers passed to 'rebuild' or stored in %_model must
+# be rejected cleanly by vec1DecodeModel().
+#
+reset_db
+vec1_load db
+
+do_execsql_test 10.0 {
+  CREATE VIRTUAL TABLE v1 USING vec1;
+  INSERT INTO v1(rowid, vector) VALUES
+    (1, vec1_from_json('[1,0,0,0,0,0,0,0]')),
+    (2, vec1_from_json('[0,1,0,0,0,0,0,0]'));
+}
+
+proc vec1_make_model_hex {ver flags nelem ncodebook nbucket edist nzero} {
+  set hdr [format %08X%08X%08X%08X%08X%08X $ver $flags $nelem $ncodebook $nbucket $edist]
+  return "${hdr}[string repeat 00 $nzero]"
+}
+
+foreach {tn blob_hex} [list \
+  1 [vec1_make_model_hex 7 0x09 8 0 0 1 0] \
+  2 [vec1_make_model_hex 7 0x0D 8 1 0 1 0] \
+  3 [vec1_make_model_hex 4 0x05 8 0 1 1 32] \
+  4 [vec1_make_model_hex 4 0x03 8 0 0 1 256] \
+  5 [vec1_make_model_hex 7 0x0B 8 1 0 1 256] \
+  6 [vec1_make_model_hex 4 0x01 0 0 0 0 0] \
+  7 [vec1_make_model_hex 4 0x01 0 0 0 3 0] \
+] {
+  do_catchsql_test 10.$tn "
+    INSERT INTO v1(cmd, arg) VALUES('rebuild', X'$blob_hex');
+  " {1 {vec1: model is corrupt}}
+}
+
+do_execsql_test 10.8 {
+  INSERT INTO v1(cmd, arg) VALUES('rebuild', '{index:"flat"}');
+  UPDATE v1_model SET val = X'000000070000000900000008000000000000000000000001' WHERE id=1;
+  UPDATE v1_config SET val = val + 1 WHERE id=0;
+} {}
+do_catchsql_test 10.9 {
+  SELECT rowid FROM v1(vec1_from_json('[1,0,0,0,0,0,0,0]'), 2);
+} {1 {vec1: model is corrupt}}
+
 finish_test

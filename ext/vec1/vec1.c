@@ -5386,6 +5386,8 @@ static int vec1DecodeModel(
   if( pMod->hdr.nElem>VEC1_VECSIZE_MAX 
    || pMod->hdr.nBucket>VEC1_MAX_BUCKET 
    || pMod->hdr.nCodebook>pMod->hdr.nElem
+   || (pMod->hdr.eDistance!=VEC1_DISTANCE_L2
+    && pMod->hdr.eDistance!=VEC1_DISTANCE_COS)
    || (pMod->hdr.nElem==0 && (
         pMod->hdr.nBucket>0
      || (pMod->hdr.flags & (
@@ -5393,6 +5395,11 @@ static int vec1DecodeModel(
          |VEC1_MODEL_BITQUANT|VEC1_MODEL_WHT
         ))
       ))
+   || ((pMod->hdr.flags & VEC1_MODEL_BITQUANT) && pMod->hdr.nCodebook==0)
+   || ((pMod->hdr.flags & VEC1_MODEL_RESIDUAL)
+    && (pMod->hdr.nBucket==0 || pMod->hdr.nCodebook==0))
+   || ((pMod->hdr.flags & VEC1_MODEL_ROTATE)
+    && (pMod->hdr.nCodebook==0 || (pMod->hdr.flags & VEC1_MODEL_BITQUANT)))
   ){
     *pzErr = sqlite3_mprintf("vec1: model is corrupt");
     return SQLITE_ERROR;
@@ -5437,29 +5444,33 @@ static int vec1DecodeModel(
 #if defined(VEC1_USE_TRANSPOSITION)
 static int vec1ModelAllocTCent(Vec1Model *pMod){
   int rc = SQLITE_OK;
-  if( pMod->aCentroidNT==0 && (pMod->hdr.nBucket>0 || pMod->aModel) ){
+  if( pMod->aCentroidNT==0
+   && (pMod->hdr.nBucket>0 || pMod->aModel || pMod->aRotation)
+  ){
     int nElem = pMod->hdr.nElem;
-    int nByte = sizeof_f32 *  nElem * pMod->hdr.nBucket;
+    int nByte = sizeof_f32 * nElem * pMod->hdr.nBucket;
     if( pMod->aModel ){
       int nFloatPerCodebook = pMod->nCodeElem * pMod->hdr.nCodebook;
       nByte += (VEC1_PQ_CODEBOOK_SZ * nFloatPerCodebook * sizeof_f32);
-      if( pMod->aRotation ){
-        nByte += (nElem * nElem) * sizeof_f32;
-      }
+    }
+    if( pMod->aRotation ){
+      nByte += (nElem * nElem) * sizeof_f32;
     }
     pMod->aCentroidNT = (float*)sqlite3_malloc(nByte);
     if( pMod->aCentroidNT==0 ){
       rc = SQLITE_NOMEM;
     }else{
+      float *pCsr = pMod->aCentroidNT;
       assert( pMod->aCentroid || pMod->hdr.nBucket==0 );
       vec1CodebookTranspose(pMod->aCentroid, nElem,
-          VEC1_NTRANSPOSE_WIDTH, pMod->hdr.nBucket, pMod->aCentroidNT
+          VEC1_NTRANSPOSE_WIDTH, pMod->hdr.nBucket, pCsr
       );
+      pCsr += nElem * pMod->hdr.nBucket;
 
       if( pMod->aModel ){
         u32 M;
         int szCodebook = pMod->nCodeElem * VEC1_PQ_CODEBOOK_SZ;
-        pMod->aModelNT = &pMod->aCentroidNT[nElem * pMod->hdr.nBucket];
+        pMod->aModelNT = pCsr;
         for(M=0; M<pMod->hdr.nCodebook; M++){
           vec1CodebookTranspose(
               &pMod->aModel[szCodebook*M], 
@@ -5467,14 +5478,15 @@ static int vec1ModelAllocTCent(Vec1Model *pMod){
               &pMod->aModelNT[szCodebook*M]
           );
         }
+        pCsr += szCodebook * pMod->hdr.nCodebook;
+      }
 
-        if( pMod->aRotation ){
-          /* Create a transposed version of the rotation matrix. */
-          pMod->aRotationNT = &pMod->aModelNT[szCodebook * M];
-          vec1CodebookTranspose(pMod->aRotation, 
-              nElem, VEC1_NTRANSPOSE_WIDTH, nElem, pMod->aRotationNT
-          );
-        }
+      if( pMod->aRotation ){
+        /* Create a transposed version of the rotation matrix. */
+        pMod->aRotationNT = pCsr;
+        vec1CodebookTranspose(pMod->aRotation, 
+            nElem, VEC1_NTRANSPOSE_WIDTH, nElem, pMod->aRotationNT
+        );
       }
     }
   }
