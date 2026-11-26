@@ -365,6 +365,107 @@ foreach mode {empty nonempty} {
 }
 src close
 
+# Backup into a shared-memory destination must keep attached branch sessions
+# on the same connection intact, refreshed, writable, and cleanly detachable.
+set long_br "feat_[string repeat x 70]"
+forcedelete backup-shm-src.db
+sqlite3 src backup-shm-src.db
+src eval "
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO t VALUES(1, 'main-src');
+  SELECT dolt_commit('-Am', 'src-main');
+  SELECT dolt_checkout('-b', '$long_br');
+  INSERT INTO t VALUES(2, 'feat-src');
+  SELECT dolt_commit('-Am', 'src-feat');
+  SELECT dolt_checkout('main');
+"
+
+foreach {tag base_uri attach_uri} [list \
+  sharedmem \
+  "file:backup_shm_ws_1?mode=memory&cache=shared" \
+  "file:backup_shm_ws_1@${long_br}?mode=memory&cache=shared" \
+  memdb \
+  "file:/backup_shm_ws_2?vfs=memdb" \
+  "file:/backup_shm_ws_2@${long_br}?vfs=memdb" \
+] {
+  set prefix backup-shm-attached-branch-$tag
+  sqlite3 db $base_uri -uri 1
+  db eval "
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO t VALUES(99, 'old-main');
+    SELECT dolt_commit('-Am', 'old-main');
+    SELECT dolt_checkout('-b', '$long_br');
+    INSERT INTO t VALUES(100, 'old-feat');
+    SELECT dolt_commit('-Am', 'old-feat');
+    SELECT dolt_checkout('main');
+    ATTACH '$attach_uri' AS feat;
+  "
+  do_test $prefix.pre {
+    list [db eval {SELECT id, v FROM main.t ORDER BY id}] \
+         [db eval {SELECT id, v FROM feat.t ORDER BY id}]
+  } {{99 old-main} {99 old-main 100 old-feat}}
+  sqlite3_backup B db main src main
+  do_test $prefix.step {B step -1} SQLITE_DONE
+  do_test $prefix.finish {list [B finish] [sqlite3_errcode db]} {SQLITE_OK SQLITE_OK}
+  do_test $prefix.post-read {
+    list [db eval {SELECT id, v FROM main.t ORDER BY id}] \
+         [db eval {SELECT id, v FROM feat.t ORDER BY id}] \
+         [db one {PRAGMA main.integrity_check}] \
+         [db one {PRAGMA feat.integrity_check}]
+  } {{1 main-src} {1 main-src 2 feat-src} ok ok}
+  do_test $prefix.post-write-attached {
+    db eval {INSERT INTO feat.t VALUES(3, 'feat-after')}
+    list [db eval {SELECT id, v FROM main.t ORDER BY id}] \
+         [db eval {SELECT id, v FROM feat.t ORDER BY id}]
+  } {{1 main-src} {1 main-src 2 feat-src 3 feat-after}}
+  # Repeated backup into the same shared-memory destination with branch still attached.
+  sqlite3_backup B2 db main src main
+  do_test $prefix.repeat {
+    list [B2 step -1] [B2 finish] \
+         [db eval {SELECT id, v FROM main.t ORDER BY id}] \
+         [db eval {SELECT id, v FROM feat.t ORDER BY id}]
+  } {SQLITE_DONE SQLITE_OK {1 main-src} {1 main-src 2 feat-src}}
+  do_test $prefix.detach {
+    db eval {DETACH feat}
+    db eval {INSERT INTO main.t VALUES(4, 'main-after'); SELECT id FROM main.t ORDER BY id}
+  } {1 4}
+  db close
+}
+
+# OOM during shared-memory backup with an attached branch must not leave a
+# closed/zeroed ChunkStore or crash on subsequent finish/detach/close.
+if {[info commands sqlite3_memdebug_fail] ne ""} {
+  do_test backup-shm-oom-attached-branch {
+    set saw_nomem 0
+    for {set i 1} {$i <= 40} {incr i} {
+      set u "file:backup_shm_oom_${i}?mode=memory&cache=shared"
+      set ua "file:backup_shm_oom_${i}@${long_br}?mode=memory&cache=shared"
+      sqlite3 db $u -uri 1
+      db eval "
+        CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+        INSERT INTO t VALUES(99, 'old');
+        SELECT dolt_commit('-Am', 'old');
+        SELECT dolt_branch('$long_br');
+        ATTACH '$ua' AS feat;
+        SELECT * FROM feat.t;
+      "
+      sqlite3_backup B db main src main
+      sqlite3_memdebug_fail $i -repeat 0
+      set rc [B step -1]
+      sqlite3_memdebug_fail -1
+      B finish
+      if {$rc eq "SQLITE_NOMEM" || $rc eq "SQLITE_IOERR_NOMEM"} {
+        set saw_nomem 1
+      }
+      db eval {DETACH feat}
+      db close
+    }
+    set saw_nomem
+  } 1
+}
+src close
+forcedelete backup-shm-src.db
+
 sqlite3 db test.db
 
 finish_test
