@@ -1057,6 +1057,8 @@ static int checkoutTablesInTxn(
   int sourceIsStaged = 0, headLoaded = 0;
   int fkeys = 0;
   int restoreDatabase = 0;
+  DoltliteTxnState savedState;
+  int hasSavedState = 0;
   int i, j;
   int rc;
 
@@ -1196,6 +1198,10 @@ static int checkoutTablesInTxn(
                              &aSourceSchema, &nSourceSchema);
   if( rc!=SQLITE_OK ) goto checkout_tables_done;
 
+  rc = doltliteSaveTxnState(db, &savedState);
+  if( rc!=SQLITE_OK ) goto checkout_tables_done;
+  hasSavedState = 1;
+
   rc = doltliteSuspendForeignKeys(db, &fkeys);
   /* Virtual tables go first: they create and drop their own shadow tables,
   ** which the rebuild of a named shadow then leaves alone. */
@@ -1334,14 +1340,9 @@ static int checkoutTablesInTxn(
     }
     sqlite3_free(buf);
     if( rc==SQLITE_OK ){
-      DoltliteTxnState savedState;
       VTable **apRb = 0;
       int nRb = 0;
-      rc = doltliteSaveTxnState(db, &savedState);
-      if( rc==SQLITE_OK ){
-        rc = vtabCollectNamed(db, argv, iFirstName, nNames, &apRb, &nRb);
-        if( rc!=SQLITE_OK ) doltliteTxnStateClear(&savedState);
-      }
+      rc = vtabCollectNamed(db, argv, iFirstName, nNames, &apRb, &nRb);
       if( rc==SQLITE_OK ){
         rc = doltliteSwitchCatalog(db, &newWorkingHash);
         if( rc==SQLITE_OK && zSourceRef ){
@@ -1349,13 +1350,10 @@ static int checkoutTablesInTxn(
                                         nNames, argv+iFirstName, 0, bDropIfAbsent);
         }
         if( rc==SQLITE_OK ) rc = doltlitePersistWorkingSet(db);
-        if( rc!=SQLITE_OK ){
-          rc = doltliteRestoreTxnStateOnFailure(db, &savedState, rc);
-        }else{
+        if( rc==SQLITE_OK ){
           /* Adopted shadows replace this table's storage. Pending terms
           ** from before the swap must not be written into them. */
           vtabRollbackNamed(db, apRb, nRb);
-          doltliteTxnStateClear(&savedState);
         }
       }
       sqlite3_free(apRb);
@@ -1363,6 +1361,13 @@ static int checkoutTablesInTxn(
   }
 
 checkout_tables_done:
+  if( hasSavedState ){
+    if( rc!=SQLITE_OK ){
+      rc = doltliteRestoreTxnStateOnFailure(db, &savedState, rc);
+    }else{
+      doltliteTxnStateClear(&savedState);
+    }
+  }
   freeSchemaEntries(aHeadSchema, nHeadSchema);
   doltliteFreeCatalog(aHeadSource, nHeadSource);
   freeSchemaEntries(aSourceSchema, nSourceSchema);
