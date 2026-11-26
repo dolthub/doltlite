@@ -285,6 +285,56 @@ static void testMemory(void){
   chunkStoreClose(&cs);
 }
 
+static void testDeferredOpenGet(void){
+  const char *zPath = "test_chunk_store_deferred_get.db";
+  const char *zPayload = "deferred open chunk payload";
+  int nPayload = (int)strlen(zPayload);
+  sqlite3_vfs *pVfs = sqlite3_vfs_find(0);
+  ChunkStore writer, reader;
+  ProllyHash hash;
+  u8 *pData = 0;
+  int nData = 0;
+  int rc;
+
+  remove(zPath);
+  remove(".test_chunk_store_deferred_get.db-lock");
+  memset(&writer, 0, sizeof(writer));
+  memset(&reader, 0, sizeof(reader));
+  rc = chunkStoreOpen(&writer, pVfs, zPath,
+                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+  check("deferred get writer open", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) return;
+
+  rc = chunkStorePut(&writer, (const u8*)zPayload, nPayload, &hash);
+  check("deferred get writer put", rc==SQLITE_OK);
+  rc = chunkStoreCommit(&writer);
+  check("deferred get writer commit", rc==SQLITE_OK);
+
+  rc = sqlite3OsLock(writer.file.pFile, SQLITE_LOCK_SHARED);
+  if( rc==SQLITE_OK ) rc = sqlite3OsLock(writer.file.pFile, SQLITE_LOCK_RESERVED);
+  if( rc==SQLITE_OK ) rc = sqlite3OsLock(writer.file.pFile, SQLITE_LOCK_EXCLUSIVE);
+  check("deferred get writer exclusive lock", rc==SQLITE_OK);
+
+  rc = chunkStoreOpenDeferred(&reader, pVfs, zPath, SQLITE_OPEN_READWRITE);
+  check("deferred get reader open", rc==SQLITE_OK);
+  check("deferred get openPending with open file",
+        reader.openPending!=0 && reader.file.pFile!=0);
+
+  sqlite3OsUnlock(writer.file.pFile, SQLITE_LOCK_NONE);
+
+  rc = chunkStoreGet(&reader, &hash, &pData, &nData);
+  check("deferred get refreshes and finds chunk",
+        rc==SQLITE_OK && reader.openPending==0
+        && pData!=0 && nData==nPayload
+        && memcmp(pData, zPayload, nPayload)==0);
+
+  sqlite3_free(pData);
+  chunkStoreClose(&reader);
+  chunkStoreClose(&writer);
+  remove(zPath);
+  remove(".test_chunk_store_deferred_get.db-lock");
+}
+
 int main(void){
   sqlite3_mem_methods methods;
   if( sqlite3_config(SQLITE_CONFIG_GETMALLOC, &allocator)!=SQLITE_OK ) return 1;
@@ -295,6 +345,7 @@ int main(void){
   sqlite3_initialize();
   testFile();
   testMemory();
+  testDeferredOpenGet();
   printf("%d passed, %d failed\n", nPass, nFail);
   sqlite3_shutdown();
   return nFail ? 1 : 0;
