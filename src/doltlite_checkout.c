@@ -757,7 +757,7 @@ static int checkoutReconcileTableIndexes(
   }
 
   for(i=0; i<nDrop && rc==SQLITE_OK; i++){
-    char *zSql = sqlite3_mprintf("DROP INDEX \"%w\"", azDrop[i]);
+    char *zSql = sqlite3_mprintf("DROP INDEX main.\"%w\"", azDrop[i]);
     if( !zSql ){ rc = SQLITE_NOMEM; break; }
     rc = sqlite3_exec(db, zSql, 0, 0, 0);
     sqlite3_free(zSql);
