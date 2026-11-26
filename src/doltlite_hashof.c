@@ -1009,6 +1009,11 @@ static void hashofNamedObjectFunc(
 
   if( argc==1 ){
     if( hashofUnavailable(ctx) ) return;
+    rc = doltliteRefreshAutocommitWorkingState(db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
     rc = doltliteFlushCatalogToHash(db, &catHash);
     if( rc!=SQLITE_OK ){
       sqlite3_snprintf(sizeof(zErr), zErr, "%s: catalog flush failed", zFn);
@@ -1052,6 +1057,11 @@ static void doltliteHashofDbFunc(sqlite3_context *ctx, int argc, sqlite3_value *
 
   if( argc==0 ){
     if( hashofUnavailable(ctx) ) return;
+    rc = doltliteRefreshAutocommitWorkingState(db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
     rc = doltliteFlushCatalogToHash(db, &catHash);
     if( rc!=SQLITE_OK ){
       doltliteVcResultErrorCode(ctx, sqlite3_context_db_handle(ctx),
@@ -1090,6 +1100,11 @@ static void doltliteHashofCatalogFunc(sqlite3_context *ctx, int argc, sqlite3_va
 
   if( argc==0 ){
     if( hashofUnavailable(ctx) ) return;
+    rc = doltliteRefreshAutocommitWorkingState(db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
     rc = doltliteResolveCatalogHashForRef(db, "WORKING", &catHash);
     if( rc!=SQLITE_OK ){
       doltliteVcResultErrorCode(ctx, sqlite3_context_db_handle(ctx),
