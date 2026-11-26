@@ -688,26 +688,28 @@ static int doltlitePreserveUntrackedOnHardReset(
     rc = sqlite3_prepare_v2(db,
         "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=?",
         -1, &pStmt, 0);
-    for(j=0; rc==SQLITE_OK && j<nUntracked; j++){
-      int keep = findSchemaEntry(aTargetSchema, nTargetSchema,
-                                 azUntracked[j])==0;
-      sqlite3_bind_text(pStmt, 1, azUntracked[j], -1, SQLITE_STATIC);
-      while( keep && sqlite3_step(pStmt)==SQLITE_ROW ){
-        const char *zIdx = (const char*)sqlite3_column_text(pStmt, 0);
-        if( zIdx && findSchemaEntry(aTargetSchema, nTargetSchema, zIdx) ){
-          keep = 0;
+    if( rc==SQLITE_OK ){
+      for(j=0; j<nUntracked; j++){
+        int keep = findSchemaEntry(aTargetSchema, nTargetSchema,
+                                   azUntracked[j])==0;
+        sqlite3_bind_text(pStmt, 1, azUntracked[j], -1, SQLITE_STATIC);
+        while( keep && sqlite3_step(pStmt)==SQLITE_ROW ){
+          const char *zIdx = (const char*)sqlite3_column_text(pStmt, 0);
+          if( zIdx && findSchemaEntry(aTargetSchema, nTargetSchema, zIdx) ){
+            keep = 0;
+          }
+        }
+        sqlite3_reset(pStmt);
+        if( keep ){
+          azUntracked[nKeep++] = azUntracked[j];
+        }else{
+          sqlite3_free(azUntracked[j]);
         }
       }
-      sqlite3_reset(pStmt);
-      if( keep ){
-        azUntracked[nKeep++] = azUntracked[j];
-      }else{
-        sqlite3_free(azUntracked[j]);
-      }
+      nUntracked = nKeep;
+      sqlite3_finalize(pStmt);
+      pStmt = 0;
     }
-    nUntracked = nKeep;
-    sqlite3_finalize(pStmt);
-    pStmt = 0;
   }
 
   /* An untracked table's indexes carry their own catalog entries. */
@@ -716,8 +718,9 @@ static int doltlitePreserveUntrackedOnHardReset(
         "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=?",
         -1, &pStmt, 0);
     for(j=0; rc==SQLITE_OK && j<nUntracked; j++){
+      int stepRc;
       sqlite3_bind_text(pStmt, 1, azUntracked[j], -1, SQLITE_STATIC);
-      while( sqlite3_step(pStmt)==SQLITE_ROW ){
+      while( (stepRc = sqlite3_step(pStmt))==SQLITE_ROW ){
         const char *zIdx = (const char*)sqlite3_column_text(pStmt, 0);
         char **aNew;
         if( !zIdx ) continue;
@@ -725,8 +728,11 @@ static int doltlitePreserveUntrackedOnHardReset(
             (nUntracked+1)*(int)sizeof(char*));
         if( !aNew ){ rc = SQLITE_NOMEM; break; }
         azUntracked = aNew;
-        azUntracked[nUntracked++] = sqlite3_mprintf("%s", zIdx);
+        azUntracked[nUntracked] = sqlite3_mprintf("%s", zIdx);
+        if( !azUntracked[nUntracked] ){ rc = SQLITE_NOMEM; break; }
+        nUntracked++;
       }
+      if( rc==SQLITE_OK && stepRc!=SQLITE_DONE ) rc = stepRc;
       sqlite3_reset(pStmt);
     }
     sqlite3_finalize(pStmt);
@@ -1040,6 +1046,9 @@ static void doltliteResetFunc(
 
   rc = doltliteGetHeadCatalogHash(db, &preResetHeadCatHash);
   if( rc!=SQLITE_OK && doltliteCmdSourceResultError(context, cs, &rc) ){
+    goto reset_cleanup;
+  }else if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
+    sqlite3_result_error_code(context, rc);
     goto reset_cleanup;
   }else if( rc==SQLITE_OK ){
     havePreResetHead = 1;

@@ -1330,6 +1330,7 @@ static int checkoutTablesInTxn(
       rc = doltliteSaveTxnState(db, &savedState);
       if( rc==SQLITE_OK ){
         rc = vtabCollectNamed(db, argv, iFirstName, nNames, &apRb, &nRb);
+        if( rc!=SQLITE_OK ) doltliteTxnStateClear(&savedState);
       }
       if( rc==SQLITE_OK ){
         rc = doltliteSwitchCatalog(db, &newWorkingHash);
