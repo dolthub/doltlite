@@ -2382,13 +2382,14 @@ typedef struct RawRowIndex RawRowIndex;
 struct RawRowIndex {
   Index *pIdx;
   struct TableEntry *pTE;
+  ProllyHash workRoot;
   ProllyMutMap mm;
 };
 
 /* Allocated copy of the tree value at pKey/intKey, or NULL if absent. */
 static int readRowValue(
   BtShared *pBt,
-  struct TableEntry *pTE,
+  const ProllyHash *pRoot, u8 flags,
   const u8 *pKey, int nKey, i64 intKey,
   u8 **ppOld, int *pnOld, int *pbFound
 ){
@@ -2398,8 +2399,8 @@ static int readRowValue(
   *ppOld = 0;
   *pnOld = 0;
   if( pbFound ) *pbFound = 0;
-  prollyCursorInit(&cur, pBt->pStore, &pBt->cache, &pTE->root, pTE->flags);
-  if( pTE->flags & PROLLY_NODE_INTKEY ){
+  prollyCursorInit(&cur, pBt->pStore, &pBt->cache, pRoot, flags);
+  if( flags & PROLLY_NODE_INTKEY ){
     rc = prollyCursorSeekInt(&cur, intKey, &res);
   }else{
     rc = prollyCursorSeekBlob(&cur, pKey, nKey, &res);
@@ -2426,7 +2427,7 @@ static int readRowValue(
 static int rawRowsFlush(
   sqlite3 *db,
   BtShared *pBt,
-  struct TableEntry *pTE,
+  ProllyHash *pTableRoot, u8 tableFlags,
   ProllyMutMap *pRows,
   RawRowIndex *aIdx, int nIdx,
   int checkUnique, Index **ppUniqueViolation
@@ -2438,16 +2439,16 @@ static int rawRowsFlush(
     memset(&mut, 0, sizeof(mut));
     mut.pStore = pBt->pStore;
     mut.pCache = &pBt->cache;
-    memcpy(&mut.oldRoot, &pTE->root, sizeof(ProllyHash));
+    memcpy(&mut.oldRoot, pTableRoot, sizeof(ProllyHash));
     mut.pEdits = pRows;
-    mut.flags = pTE->flags;
+    mut.flags = tableFlags;
     rc = prollyMutateFlush(&mut);
-    if( rc==SQLITE_OK ) memcpy(&pTE->root, &mut.newRoot, sizeof(ProllyHash));
+    if( rc==SQLITE_OK ) memcpy(pTableRoot, &mut.newRoot, sizeof(ProllyHash));
     prollyMutMapClear(pRows);
   }
   for(i=0; i<nIdx && rc==SQLITE_OK; i++){
     rc = doltliteIndexFlushDelta(db, pBt->pStore, &pBt->cache,
-        &aIdx[i].pTE->root, aIdx[i].pTE->flags, aIdx[i].pIdx,
+        &aIdx[i].workRoot, aIdx[i].pTE->flags, aIdx[i].pIdx,
         &aIdx[i].mm, checkUnique);
     if( rc==SQLITE_CONSTRAINT_UNIQUE && ppUniqueViolation ){
       *ppUniqueViolation = aIdx[i].pIdx;
@@ -2468,6 +2469,7 @@ int doltliteApplyRawRowMutations(
   Btree *pBtree;
   BtShared *pBt;
   struct TableEntry *pTE = 0;
+  ProllyHash tableRoot;
   ProllyMutMap mm;
   RawRowIndex *aIdx = 0;
   int nIdx = 0;
@@ -2485,6 +2487,9 @@ int doltliteApplyRawRowMutations(
   if( !pBt ) return SQLITE_ERROR;
   rc = doltliteEnsureWriteTxnAndSavepoints(db);
   if( rc!=SQLITE_OK ) return rc;
+  rc = syncBtreeSavepoints(pBtree);
+  if( rc==SQLITE_OK ) rc = ensureStatementSavepointsCaptured(pBtree);
+  if( rc!=SQLITE_OK ) return rc;
 
   for(i=0; i<pBtree->cat.n; i++){
     if( pBtree->cat.a[i].zName
@@ -2495,7 +2500,8 @@ int doltliteApplyRawRowMutations(
   }
   if( !pTE ) return SQLITE_NOTFOUND;
 
-  rc = flushPendingForTable(pBtree, pBt, pTE, 0);
+  rc = saveAllCursors(pBtree, pBt, pTE->iTable, 0);
+  if( rc==SQLITE_OK ) rc = flushPendingForTable(pBtree, pBt, pTE, 0);
   if( rc!=SQLITE_OK ) return rc;
 
   pTab = sqlite3FindTable(db, zTable, "main");
@@ -2516,11 +2522,13 @@ int doltliteApplyRawRowMutations(
       }
     }
     if( !pIdxTE ) continue;
-    rc = flushPendingForTable(pBtree, pBt, pIdxTE, 0);
+    rc = saveAllCursors(pBtree, pBt, pIdxTE->iTable, 0);
+    if( rc==SQLITE_OK ) rc = flushPendingForTable(pBtree, pBt, pIdxTE, 0);
     if( rc==SQLITE_OK ) rc = prollyMutMapInit(&aIdx[nIdx].mm, 0);
     if( rc==SQLITE_OK ){
       aIdx[nIdx].pIdx = pIdx;
       aIdx[nIdx].pTE = pIdxTE;
+      memcpy(&aIdx[nIdx].workRoot, &pIdxTE->root, sizeof(ProllyHash));
       nIdx++;
       nIdxInit = nIdx;
     }
@@ -2534,6 +2542,8 @@ int doltliteApplyRawRowMutations(
     return rc;
   }
 
+  memcpy(&tableRoot, &pTE->root, sizeof(ProllyHash));
+
   for(r=0; r<nRow && rc==SQLITE_OK; r++){
     const DoltliteRawRow *p = &aRow[r];
     ProllyMutMapEntry *pSeen = 0;
@@ -2545,11 +2555,11 @@ int doltliteApplyRawRowMutations(
 
     rc = prollyMutMapFindRc(&mm, p->pKey, p->nKey, p->intKey, &pSeen);
     if( rc==SQLITE_OK && pSeen ){
-      rc = rawRowsFlush(db, pBt, pTE, &mm, aIdx, nIdx,
+      rc = rawRowsFlush(db, pBt, &tableRoot, pTE->flags, &mm, aIdx, nIdx,
                         checkUnique, ppUniqueViolation);
     }
     if( rc==SQLITE_OK && nIdx>0 ){
-      rc = readRowValue(pBt, pTE, p->pKey, p->nKey, p->intKey,
+      rc = readRowValue(pBt, &tableRoot, pTE->flags, p->pKey, p->nKey, p->intKey,
                         &pOldVal, &nOldVal, &oldFound);
     }
     if( rc==SQLITE_OK ){
@@ -2579,8 +2589,17 @@ int doltliteApplyRawRowMutations(
     sqlite3_free(pOldVal);
   }
   if( rc==SQLITE_OK ){
-    rc = rawRowsFlush(db, pBt, pTE, &mm, aIdx, nIdx,
+    rc = rawRowsFlush(db, pBt, &tableRoot, pTE->flags, &mm, aIdx, nIdx,
                       checkUnique, ppUniqueViolation);
+  }
+  if( rc==SQLITE_OK && nRow>0 ){
+    prollyInvalidateIncrblobCursors(pBt, pTE->iTable, 0, 1);
+    memcpy(&pTE->root, &tableRoot, sizeof(ProllyHash));
+    for(i=0; i<nIdx; i++){
+      memcpy(&aIdx[i].pTE->root, &aIdx[i].workRoot, sizeof(ProllyHash));
+    }
+    pBtree->bTxnWrote = 1;
+    doltliteBtreeDropOrderMemos(pBtree);
   }
   prollyMutMapFree(&mm);
   for(i=0; i<nIdx; i++) prollyMutMapFree(&aIdx[i].mm);
