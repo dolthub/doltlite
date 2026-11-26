@@ -9334,15 +9334,24 @@ static int vec1FindByRowid(
   Vec1Buffer buf = {0, 0, 0};
   sqlite3_stmt *pSearch = 0;      /* For looping through index entries */
   sqlite3_blob *pBlob = 0;
+  int nBucket = pTab->mod.hdr.nBucket ? (int)pTab->mod.hdr.nBucket : 1;
 
   assert( (pTab->mod.hdr.flags & VEC1_MODEL_INDEX) );
 
   memset(pOut, 0, sizeof(*pOut));
 
+  if( iBucket<0 || iBucket>=nBucket ){
+    return VEC1_CORRUPT;
+  }
+
   /* Check to see if the index entry for this vector is currently 
   ** in main memory. */
   if( pTab->pWriter ){
-    Vec1ListBuilder *pBld = &pTab->pWriter->aBld[iBucket];
+    Vec1ListBuilder *pBld;
+    if( iBucket>=pTab->pWriter->nBld ){
+      return VEC1_CORRUPT;
+    }
+    pBld = &pTab->pWriter->aBld[iBucket];
     if( (pBld->szRowid==4 && iRowid!=VEC1_TOMBSTONE_32) 
      || (pBld->szRowid==8 && iRowid!=VEC1_TOMBSTONE_64)
     ){
