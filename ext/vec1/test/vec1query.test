@@ -144,6 +144,61 @@ do_catchsql_test 1.7 {
   SELECT rowid FROM v1($v, -10)
 } {1 {vec1: K must be an integer value between 0 and 33554432}}
 
+#-------------------------------------------------------------------------
+# Test nprobe_slack when nProbe == nBucket (e.g. nprobe:1.0 or nprobe:4
+# with nbucket:4). Bucket distances must be sorted so nprobe_slack compares
+# against the nearest bucket rather than bucket 0.
+#
+do_test 2.0 {
+  db eval {
+    CREATE VIRTUAL TABLE v2 USING vec1(v);
+    INSERT INTO v2(rowid, v) VALUES
+      (1, vec1_from_json('[10, 0, 0, 0]')),
+      (2, vec1_from_json('[100, 0, 0, 0]')),
+      (3, vec1_from_json('[50, 0, 0, 0]')),
+      (4, vec1_from_json('[0, 0, 0, 0]'));
+  }
+  set T [db one {
+    WITH s(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM s WHERE i<16)
+    SELECT vec1_train(random_vector(4), '{codesize:0, nbucket:4, distance:"l2"}')
+    FROM s
+  }]
+  set aCent {
+    10.0  0.0 0.0 0.0
+    100.0 0.0 0.0 0.0
+    50.0  0.0 0.0 0.0
+    0.0   0.0 0.0 0.0
+  }
+  set T [string replace $T 24 [expr {24 + 4*4*4 - 1}] [binary format r* $aCent]]
+  db eval { INSERT INTO v2(cmd, arg) VALUES('rebuild', $T) }
+  db eval { SELECT id, vector FROM v2_base ORDER BY id }
+} {1 0 2 1 3 2 4 3}
+
+do_execsql_test 2.1 {
+  SELECT rowid FROM v2(
+    vec1_from_json('[0.1, 0, 0, 0]'),
+    '{K:1, nprobe:1.0, nprobe_slack:0.2}'
+  );
+} {4}
+
+do_execsql_test 2.2 {
+  SELECT rowid FROM v2(
+    vec1_from_json('[0.1, 0, 0, 0]'),
+    '{K:1, nprobe:4, nprobe_slack:0.2}'
+  );
+} {4}
+
+do_execsql_test 2.3 {
+  SELECT rowid FROM v2(
+    vec1_from_json('[0, 0, 0, 0]'),
+    '{K:1, nprobe:1.0, nprobe_slack:0.2}'
+  );
+} {4}
+
+do_execsql_test 2.4 {
+  PRAGMA integrity_check;
+} {ok}
+
 
 finish_test
 
