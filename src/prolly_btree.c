@@ -1612,6 +1612,9 @@ static int prollyBtreeOpenImpl(
 
   if( p->cat.iNextTable<2 ) p->cat.iNextTable = 2;
   if( !addTable(p, 1, BTREE_INTKEY) ){
+    btreeFreeCatalogTables(p);
+    sqlite3_free(p->zRebaseOrigBranch);
+    sqlite3_free(p->zRebaseReturnBranch);
     pagerShimDestroy(pBt->pPagerShim);
     prollyCacheFree(&pBt->cache);
     btreeCloseStore(pBt);

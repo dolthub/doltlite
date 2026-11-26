@@ -455,8 +455,7 @@ static int flushPendingForCount(
                                  (ProllyMutMap*)pTE->pPending);
     }
   }
-  flushIfNeeded(pCur);
-  return SQLITE_OK;
+  return flushIfNeeded(pCur);
 }
 
 int prollyBtCursorCount(sqlite3 *db, BtCursor *pCur, i64 *pnEntry){

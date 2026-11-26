@@ -3570,6 +3570,7 @@ int doltliteVacuumResetCurrentBranch(sqlite3 *db, int iDb, char **pzErrMsg){
       prollyMutMapFree(pMap);
       sqlite3_free(pMap);
       pMaster->pPending = 0;
+      refreshCursorMutMapAliases(p, p->pBt, 1, 0);
     }
     rc = sqlite3BtreeNewDb(p);
   }
@@ -3595,6 +3596,5 @@ int doltliteVacuumResetCurrentBranch(sqlite3 *db, int iDb, char **pzErrMsg){
   }
   return rc;
 }
-
 
 #endif /* DOLTLITE_PROLLY */

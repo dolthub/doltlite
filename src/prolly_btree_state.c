@@ -81,7 +81,13 @@ int btreeParseWorkingSetBlob(
       while( n < WS_REBASE_BRANCH_LEN && src[n] ) n++;
       if( n > 0 ){
         z = sqlite3_malloc(n + 1);
-        if( !z ) return SQLITE_NOMEM;
+        if( !z ){
+          if( pzRebaseOrigBranch ){
+            sqlite3_free(*pzRebaseOrigBranch);
+            *pzRebaseOrigBranch = 0;
+          }
+          return SQLITE_NOMEM;
+        }
         memcpy(z, src, n);
         z[n] = 0;
         *pzRebaseReturnBranch = z;

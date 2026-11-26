@@ -1,0 +1,91 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+
+set testprefix doltlite_prolly_btree_error_paths
+
+# 1. Reopen a database mid-rebase under OOM fault injection to exercise
+# btreeParseWorkingSetBlob (rebase branch strings) and prollyBtreeOpenImpl
+# (catalog + rebase branch cleanup on addTable OOM).
+execsql {
+  CREATE TABLE t1(id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO t1 VALUES(1, 'base');
+  SELECT dolt_commit('-Am', 'base');
+  SELECT dolt_checkout('-b', 'feat');
+  INSERT INTO t1 VALUES(2, 'feat');
+  SELECT dolt_commit('-Am', 'feat commit');
+  SELECT dolt_checkout('main');
+  INSERT INTO t1 VALUES(3, 'main');
+  SELECT dolt_commit('-Am', 'main commit');
+  SELECT dolt_checkout('feat');
+  SELECT dolt_rebase('-i', 'main');
+}
+do_execsql_test 1.0 {
+  SELECT count(*) FROM dolt_rebase;
+} {1}
+faultsim_save_and_close
+
+do_faultsim_test 1.1 -faults oom-transient -prep {
+  faultsim_restore
+} -body {
+  sqlite3 db test.db
+  execsql { SELECT count(*) FROM t1 }
+} -test {
+  faultsim_test_result {0 2} {1 {out of memory}} {1 {disk I/O error}}
+  catch { db close }
+}
+
+# 2. SELECT count(*) over uncommitted mutations under OOM fault injection
+# must propagate flushPendingForCount/flushIfNeeded errors rather than
+# returning a stale count.
+reset_db
+do_execsql_test 2.0 {
+  CREATE TABLE t2(id INTEGER PRIMARY KEY, b INT, c TEXT);
+  CREATE INDEX t2_b ON t2(b);
+  INSERT INTO t2 VALUES(1, 10, 'a'), (2, 20, 'b'), (3, 30, 'c');
+}
+faultsim_save_and_close
+
+do_faultsim_test 2.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+  db eval {
+    BEGIN;
+    INSERT INTO t2 VALUES(4, 40, 'd'), (5, 50, 'e');
+    DELETE FROM t2 WHERE id = 2;
+    UPDATE t2 SET b = 99 WHERE id = 1;
+  }
+} -body {
+  list \
+    [execsql { SELECT count(*) FROM t2 NOT INDEXED }] \
+    [execsql { SELECT count(*) FROM t2 NOT INDEXED WHERE id BETWEEN 1 AND 5 }] \
+    [execsql { SELECT count(*) FROM t2 INDEXED BY t2_b WHERE b BETWEEN 0 AND 100 }]
+} -test {
+  faultsim_test_result {0 {4 4 4}} {1 {out of memory}} {1 {disk I/O error}}
+  catchsql ROLLBACK
+  faultsim_integrity_check
+}
+
+# 3. VACUUM after schema/table changes and under OOM fault injection
+# exercises doltliteVacuumResetCurrentBranch pending master map teardown.
+reset_db
+do_execsql_test 3.0 {
+  CREATE TABLE t3(id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO t3 VALUES(1, 'one'), (2, 'two'), (3, 'three');
+  CREATE TABLE t4(k INTEGER PRIMARY KEY, x BLOB);
+  INSERT INTO t4 VALUES(1, randomblob(500));
+  DROP TABLE t4;
+}
+faultsim_save_and_close
+
+do_faultsim_test 3.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  execsql { VACUUM }
+  execsql { SELECT id, v FROM t3 ORDER BY id }
+} -test {
+  faultsim_test_result {0 {1 one 2 two 3 three}} \
+      {1 {out of memory}} {1 {disk I/O error}}
+  faultsim_integrity_check
+}
+
+finish_test
