@@ -649,7 +649,7 @@ int prollyBtCursorFirst(BtCursor *pCur, int *pRes){
     pCur->mmActive = 0;
   }
   pCur->eState = (*pRes==0) ? CURSOR_VALID : CURSOR_INVALID;
-  pCur->curFlags &= ~BTCF_AtLast;
+  pCur->curFlags &= ~(BTCF_AtLast|BTCF_DeleteKey);
   if( rc==SQLITE_OK && pCur->eState==CURSOR_VALID ){
     rc = skipDegenerateSchemaRows(pCur, 1, pRes);
   }
@@ -689,6 +689,7 @@ int prollyBtCursorLast(BtCursor *pCur, int *pRes){
   }else{
     pCur->mmActive = 0;
   }
+  pCur->curFlags &= ~BTCF_DeleteKey;
   if( *pRes==0 ){
     pCur->eState = CURSOR_VALID;
     pCur->curFlags |= BTCF_AtLast;

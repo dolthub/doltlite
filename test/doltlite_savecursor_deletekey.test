@@ -1,0 +1,198 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# Regression tests for saving cursor position after a deferred intkey delete
+# when another cursor mutates the same table (AFTER DELETE triggers and
+# self-referencing foreign keys).
+
+# Case 1: All rows uncommitted (empty prolly tree, mutmap-only).
+# After deleting the first row, the prolly tree cursor is invalid while
+# BTCF_DeleteKey holds the deleted rowid. The AFTER DELETE trigger writes
+# to the same table, triggering saveCursorPosition() on the outer cursor.
+do_execsql_test doltlite_savecursor_deletekey-1.1 {
+  CREATE TABLE t1(id INTEGER PRIMARY KEY, v TEXT);
+  CREATE TRIGGER t1_ad AFTER DELETE ON t1 WHEN OLD.id < 100 BEGIN
+    INSERT INTO t1 VALUES(100 + OLD.id, 'log-' || OLD.v);
+  END;
+
+  BEGIN;
+  INSERT INTO t1 VALUES(1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e');
+  DELETE FROM t1 WHERE id <= 5;
+  COMMIT;
+
+  SELECT id, v FROM t1 ORDER BY id;
+} {101 log-a 102 log-b 103 log-c 104 log-d 105 log-e}
+
+do_execsql_test doltlite_savecursor_deletekey-1.2 {
+  PRAGMA integrity_check;
+} {ok}
+
+# Case 1b: Same as 1.1 with UPDATE in the AFTER DELETE trigger on the same table.
+do_execsql_test doltlite_savecursor_deletekey-1.3 {
+  CREATE TABLE t1b(id INTEGER PRIMARY KEY, v TEXT, n INT);
+  CREATE TRIGGER t1b_ad AFTER DELETE ON t1b WHEN OLD.id < 100 BEGIN
+    UPDATE t1b SET n = n + 1 WHERE id = 999;
+  END;
+
+  BEGIN;
+  INSERT INTO t1b VALUES(1, 'a', 0), (2, 'b', 0), (3, 'c', 0), (4, 'd', 0), (999, 'cnt', 0);
+  DELETE FROM t1b WHERE id < 100;
+  COMMIT;
+
+  SELECT id, v, n FROM t1b ORDER BY id;
+} {999 cnt 4}
+
+# Case 2: Mixed committed and uncommitted rows where the prolly tree cursor
+# sits on a later committed key K_tree > iKey when the deferred delete runs.
+# Deleting a pending row iKey < K_tree while a trigger writes to the same table
+# must save iKey (not K_tree), so neither K_tree nor pending rows in (iKey, K_tree)
+# are skipped.
+execsql {
+  CREATE TABLE t2(id INTEGER PRIMARY KEY, v TEXT);
+  CREATE TRIGGER t2_ad AFTER DELETE ON t2 WHEN OLD.id < 1000 BEGIN
+    INSERT INTO t2 VALUES(1000 + OLD.id, 'del-' || OLD.v);
+  END;
+
+  INSERT INTO t2 VALUES(10, 'c10'), (20, 'c20'), (30, 'c30');
+  SELECT dolt_commit('-Am', 'seed t2');
+}
+
+do_execsql_test doltlite_savecursor_deletekey-2.1 {
+  BEGIN;
+  INSERT INTO t2 VALUES(5, 'p5'), (12, 'p12'), (15, 'p15'), (25, 'p25');
+  DELETE FROM t2 WHERE id <= 25;
+  COMMIT;
+
+  SELECT id, v FROM t2 ORDER BY id;
+} {30 c30 1005 del-p5 1010 del-c10 1012 del-p12 1015 del-p15 1020 del-c20 1025 del-p25}
+
+do_execsql_test doltlite_savecursor_deletekey-2.2 {
+  PRAGMA integrity_check;
+} {ok}
+
+# Case 2b: Mixed committed + pending rows with a trigger that updates a committed
+# sentinel row in the same table, tested across multiple deletes and without
+# committing until after inspection inside the same transaction.
+execsql {
+  CREATE TABLE t2b(id INTEGER PRIMARY KEY, v TEXT);
+  CREATE TRIGGER t2b_ad AFTER DELETE ON t2b WHEN OLD.id < 1000 BEGIN
+    UPDATE t2b SET v = v || ',' || OLD.id WHERE id = 1000;
+  END;
+
+  INSERT INTO t2b VALUES(10, 'c10'), (20, 'c20'), (30, 'c30'), (1000, 'seen');
+  SELECT dolt_commit('-Am', 'seed t2b');
+}
+
+do_execsql_test doltlite_savecursor_deletekey-2.3 {
+  BEGIN;
+  INSERT INTO t2b VALUES(2, 'p2'), (6, 'p6'), (14, 'p14'), (18, 'p18'), (24, 'p24');
+  DELETE FROM t2b WHERE id < 30;
+  SELECT id, v FROM t2b ORDER BY id;
+} {30 c30 1000 seen,2,6,10,14,18,20,24}
+
+do_execsql_test doltlite_savecursor_deletekey-2.4 {
+  COMMIT;
+  SELECT id, v FROM t2b ORDER BY id;
+  PRAGMA integrity_check;
+} {30 c30 1000 seen,2,6,10,14,18,20,24 ok}
+
+# Case 3: Self-referencing FK ON DELETE CASCADE on uncommitted-only rows.
+do_execsql_test doltlite_savecursor_deletekey-3.1 {
+  PRAGMA foreign_keys = ON;
+  CREATE TABLE fk_cas1(
+    id INTEGER PRIMARY KEY,
+    parent_id INTEGER REFERENCES fk_cas1(id) ON DELETE CASCADE,
+    tag TEXT
+  );
+
+  BEGIN;
+  INSERT INTO fk_cas1 VALUES
+    (1, NULL, 'drop'),
+    (2, NULL, 'drop'),
+    (3, NULL, 'drop'),
+    (11, 1, 'child'),
+    (12, 2, 'child'),
+    (13, 3, 'child'),
+    (20, NULL, 'keep'),
+    (21, 20, 'keep');
+  DELETE FROM fk_cas1 WHERE tag = 'drop';
+  COMMIT;
+
+  SELECT id, parent_id, tag FROM fk_cas1 ORDER BY id;
+} {20 {} keep 21 20 keep}
+
+# Case 3b: Self-referencing FK ON DELETE CASCADE on mixed committed + pending rows.
+execsql {
+  PRAGMA foreign_keys = ON;
+  CREATE TABLE fk_cas2(
+    id INTEGER PRIMARY KEY,
+    parent_id INTEGER REFERENCES fk_cas2(id) ON DELETE CASCADE,
+    tag TEXT
+  );
+
+  INSERT INTO fk_cas2 VALUES
+    (10, NULL, 'drop'),
+    (20, NULL, 'drop'),
+    (30, NULL, 'keep'),
+    (110, 10, 'child'),
+    (120, 20, 'child'),
+    (130, 30, 'keep');
+  SELECT dolt_commit('-Am', 'seed fk_cas2');
+}
+
+do_execsql_test doltlite_savecursor_deletekey-3.2 {
+  BEGIN;
+  INSERT INTO fk_cas2 VALUES
+    (5, NULL, 'drop'),
+    (12, NULL, 'drop'),
+    (15, NULL, 'drop'),
+    (25, NULL, 'drop'),
+    (105, 5, 'child'),
+    (112, 12, 'child'),
+    (115, 15, 'child'),
+    (125, 25, 'child');
+  DELETE FROM fk_cas2 WHERE tag = 'drop';
+  COMMIT;
+
+  SELECT id, parent_id, tag FROM fk_cas2 ORDER BY id;
+} {30 {} keep 130 30 keep}
+
+# Case 3c: Self-referencing FK ON DELETE SET NULL on mixed committed + pending rows.
+execsql {
+  PRAGMA foreign_keys = ON;
+  CREATE TABLE fk_null(
+    id INTEGER PRIMARY KEY,
+    parent_id INTEGER REFERENCES fk_null(id) ON DELETE SET NULL,
+    tag TEXT
+  );
+
+  INSERT INTO fk_null VALUES
+    (10, NULL, 'drop'),
+    (20, NULL, 'drop'),
+    (30, NULL, 'keep'),
+    (110, 10, 'child'),
+    (120, 20, 'child'),
+    (130, 30, 'child');
+  SELECT dolt_commit('-Am', 'seed fk_null');
+}
+
+do_execsql_test doltlite_savecursor_deletekey-3.3 {
+  BEGIN;
+  INSERT INTO fk_null VALUES
+    (5, NULL, 'drop'),
+    (12, NULL, 'drop'),
+    (15, NULL, 'drop'),
+    (105, 5, 'child'),
+    (112, 12, 'child'),
+    (115, 15, 'child');
+  DELETE FROM fk_null WHERE tag = 'drop';
+  COMMIT;
+
+  SELECT id, IFNULL(parent_id, -1), tag FROM fk_null ORDER BY id;
+} {30 -1 keep 105 -1 child 110 -1 child 112 -1 child 115 -1 child 120 -1 child 130 30 child}
+
+do_execsql_test doltlite_savecursor_deletekey-3.4 {
+  PRAGMA integrity_check;
+} {ok}
+
+finish_test
