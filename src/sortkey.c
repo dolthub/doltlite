@@ -1165,6 +1165,7 @@ static int recordFromNumericVarlenSortKeyBuffer(
   pData1 = pSortKey + 10;
   aLen1 = 0;
   {
+    int terminated = 0;
     const u8 *pZero = (const u8*)memchr(pData1, 0x00,
                                         (size_t)(nSortKey - 10));
     if( pZero==0 ) return SQLITE_NOTFOUND;
@@ -1172,6 +1173,7 @@ static int recordFromNumericVarlenSortKeyBuffer(
       nEnc1 = (int)(pZero - pData1);
       aLen1 = (u32)nEnc1;
       pos = nSortKey;
+      terminated = 1;
     }else{
       pos = 10;
       while( pos < nSortKey ){
@@ -1181,6 +1183,7 @@ static int recordFromNumericVarlenSortKeyBuffer(
           if( pSortKey[pos]==0x00 ){
             nEnc1 = pos - 1 - 10;
             pos++;
+            terminated = 1;
             break;
           }
           if( pSortKey[pos]!=0x01 ){
@@ -1192,9 +1195,9 @@ static int recordFromNumericVarlenSortKeyBuffer(
         aLen1++;
       }
     }
-  }
-  if( pos!=nSortKey ){
-    return SQLITE_NOTFOUND;
+    if( !terminated || pos!=nSortKey ){
+      return SQLITE_NOTFOUND;
+    }
   }
 
   decodeNumericSortKeyToRecord(pSortKey + 1, 8, &aType0, &aLen0, aBuf0);
@@ -1266,23 +1269,27 @@ static int recordFromNumericSmallBlobSortKeyBuffer(
   }
 
   pos = 10;
-  while( pos < nSortKey ){
-    u8 b = pSortKey[pos++];
-    if( b==0x00 ){
-      if( pos >= nSortKey ) return SQLITE_NOTFOUND;
-      if( pSortKey[pos]==0x00 ){
+  {
+    int terminated = 0;
+    while( pos < nSortKey ){
+      u8 b = pSortKey[pos++];
+      if( b==0x00 ){
+        if( pos >= nSortKey ) return SQLITE_NOTFOUND;
+        if( pSortKey[pos]==0x00 ){
+          pos++;
+          terminated = 1;
+          break;
+        }
+        if( pSortKey[pos]!=0x01 ) return SQLITE_NOTFOUND;
         pos++;
-        break;
+        b = 0x00;
       }
-      if( pSortKey[pos]!=0x01 ) return SQLITE_NOTFOUND;
-      pos++;
-      b = 0x00;
+      if( nBlob >= SORTKEY_SMALL_BLOB_FAST_MAX ) return SQLITE_NOTFOUND;
+      aBlob[nBlob++] = b;
     }
-    if( nBlob >= SORTKEY_SMALL_BLOB_FAST_MAX ) return SQLITE_NOTFOUND;
-    aBlob[nBlob++] = b;
-  }
-  if( pos!=nSortKey ){
-    return SQLITE_NOTFOUND;
+    if( !terminated || pos!=nSortKey ){
+      return SQLITE_NOTFOUND;
+    }
   }
 
   decodeNumericSortKeyToRecord(pSortKey + 1, 8, &aType0, &aLen0, aBuf0);
@@ -1453,6 +1460,7 @@ int recordFromSortKeyBuffer(
 
       int start = pos;
       int dataLen = 0;
+      int terminated = 0;
       while( pos < nSortKey ){
         const u8 *p0 = pSortKey + pos;
         const u8 *pZero = (const u8*)memchr(p0, 0x00, (size_t)(nSortKey - pos));
@@ -1471,6 +1479,7 @@ int recordFromSortKeyBuffer(
         }
         if( pSortKey[pos+1] == 0x00 ){
           pos += 2;
+          terminated = 1;
           break;
         }else if( pSortKey[pos+1] == 0x01 ){
           dataLen++;
@@ -1479,6 +1488,10 @@ int recordFromSortKeyBuffer(
           rc = SQLITE_CORRUPT;
           goto record_from_sortkey_done;
         }
+      }
+      if( !terminated ){
+        rc = SQLITE_CORRUPT;
+        goto record_from_sortkey_done;
       }
       if( tag == SORTKEY_TEXT ){
         aType[nFields] = (u32)dataLen * 2 + 13;
@@ -1636,6 +1649,7 @@ int recordFromSortKeyBufferColl(
       }
       pos += nNum;
     }else if( tag==SORTKEY_TEXT || tag==SORTKEY_BLOB ){
+      int terminated = 0;
       pos++;
       while( pos<nSortKey ){
         u8 b = desc ? (u8)~pSortKey[pos] : pSortKey[pos];
@@ -1648,12 +1662,19 @@ int recordFromSortKeyBufferColl(
           }
           b2 = desc ? (u8)~pSortKey[pos] : pSortKey[pos];
           pNorm[pos++] = b2;
-          if( b2==0x00 ) break;
+          if( b2==0x00 ){
+            terminated = 1;
+            break;
+          }
           if( b2!=0x01 ){
             sqlite3_free(pNorm);
             return SQLITE_CORRUPT;
           }
         }
+      }
+      if( !terminated ){
+        sqlite3_free(pNorm);
+        return SQLITE_CORRUPT;
       }
     }else{
       sqlite3_free(pNorm);

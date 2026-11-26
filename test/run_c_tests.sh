@@ -41,6 +41,7 @@ COVERAGE_TESTS=(
   fetch_download_lock_test
   push_tracking_precondition_test
   record_info_stack_test
+  sortkey_test
   prolly_cache_budget_test
   prolly_hashset_test
   prolly_chunker_boundary_test
