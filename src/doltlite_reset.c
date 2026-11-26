@@ -632,7 +632,7 @@ static int doltlitePreserveUntrackedOnHardReset(
     rc = sqlite3_prepare_v2(db,
         "SELECT m.name, m.type FROM sqlite_master AS m "
         "WHERE m.type IN ('table','view','trigger') "
-        "AND (m.name NOT LIKE 'sqlite_%' OR m.name='sqlite_sequence')",
+        "AND (substr(lower(m.name),1,7)!='sqlite_' OR m.name='sqlite_sequence')",
         -1, &pStmt, 0);
   }
   if( rc==SQLITE_OK ){

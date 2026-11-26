@@ -455,8 +455,8 @@ int doltliteHasUncommittedChanges(sqlite3 *db, int *pDirty){
     rc = sqlite3_prepare_v2(db,
       "SELECT 1 FROM sqlite_master "
       "WHERE type='table' "
-      "AND name NOT LIKE 'sqlite_%' "
-      "AND name NOT LIKE 'dolt_%' "
+      "AND substr(lower(name),1,7)!='sqlite_' "
+      "AND substr(lower(name),1,5)!='dolt_' "
       "LIMIT 1",
       -1, &pStmt, 0);
     if( rc!=SQLITE_OK ) return rc;
@@ -1358,19 +1358,46 @@ int doltliteDetectConstraintViolationsInTxn(
   return vrc;
 }
 
-/* A user table that keeps a rowid but declares a primary key holds that
-** key in a separate unique index. */
-static int schemaHasRowidPrimaryKey(sqlite3 *db){
+static int schemaNeedsConstraintDetection(sqlite3 *db, int *pNeeds){
   HashElem *e;
-  if( !db || db->nDb<1 || !db->aDb[0].pSchema ) return 0;
+  *pNeeds = 0;
+  if( !db || db->nDb<1 ) return SQLITE_OK;
+  if( !DbHasProperty(db, 0, DB_SchemaLoaded) ){
+    char *zInitErr = 0;
+    int rc;
+    sqlite3BtreeEnterAll(db);
+    rc = sqlite3Init(db, &zInitErr);
+    sqlite3BtreeLeaveAll(db);
+    sqlite3DbFree(db, zInitErr);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  if( !db->aDb[0].pSchema ) return SQLITE_OK;
   for(e=sqliteHashFirst(&db->aDb[0].pSchema->tblHash); e; e=sqliteHashNext(e)){
     Table *p = (Table*)sqliteHashData(e);
-    if( !IsOrdinaryTable(p) || !HasRowid(p) ) continue;
+    Index *pIdx;
+    int i;
+    if( !IsOrdinaryTable(p) ) continue;
     if( sqlite3_strnicmp(p->zName, "sqlite_", 7)==0
      || sqlite3_strnicmp(p->zName, "dolt_", 5)==0 ) continue;
-    if( sqlite3PrimaryKeyIndex(p) ) return 1;
+    if( p->u.tab.pFKey || p->pCheck || (p->tabFlags & TF_Strict)!=0 ){
+      *pNeeds = 1;
+      return SQLITE_OK;
+    }
+    for(i=0; i<p->nCol; i++){
+      if( p->aCol[i].notNull ){
+        *pNeeds = 1;
+        return SQLITE_OK;
+      }
+    }
+    for(pIdx=p->pIndex; pIdx; pIdx=pIdx->pNext){
+      if( IsUniqueIndex(pIdx)
+       && (HasRowid(p) || !IsPrimaryKeyIndex(pIdx)) ){
+        *pNeeds = 1;
+        return SQLITE_OK;
+      }
+    }
   }
-  return 0;
+  return SQLITE_OK;
 }
 
 int doltliteDetectConstraintViolationsFiltered(
@@ -1398,15 +1425,13 @@ int doltliteDetectConstraintViolationsFiltered(
   rc = sqlite3_prepare_v2(db,
       "SELECT 1 "
       "FROM main.sqlite_master "
-      "WHERE (type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'dolt_%' "
+      "WHERE (type='table' AND substr(lower(name),1,7)!='sqlite_' "
+      "       AND substr(lower(name),1,5)!='dolt_' "
       "       AND sql IS NOT NULL "
       "       AND (instr(upper(sql), 'REFERENCES')>0 "
       "            OR instr(upper(sql), 'CHECK')>0 "
       "            OR instr(upper(sql), 'UNIQUE')>0 "
-      /* NOT NULL has a detector too; without this term a NOT-NULL-only table
-      ** is invisible to dolt_verify_constraints. */
       "            OR instr(upper(sql), 'NOT NULL')>0 "
-      /* STRICT tables have a type detector; the keyword is at the tail of CREATE. */
       "            OR instr(upper(sql), 'STRICT')>0)) "
       "   OR (type='index' AND sql IS NOT NULL "
       "       AND instr(upper(sql), 'CREATE UNIQUE INDEX')>0) "
@@ -1425,7 +1450,10 @@ int doltliteDetectConstraintViolationsFiltered(
     if( rc==SQLITE_OK ) rc = finalizeRc;
   }
   if( rc!=SQLITE_OK ) return rc;
-  if( !needsDetection ) needsDetection = schemaHasRowidPrimaryKey(db);
+  if( !needsDetection ){
+    rc = schemaNeedsConstraintDetection(db, &needsDetection);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   if( !needsDetection ){
     if( pnViolations ) *pnViolations = 0;
     return SQLITE_OK;

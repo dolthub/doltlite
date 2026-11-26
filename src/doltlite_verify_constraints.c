@@ -64,7 +64,8 @@ static int collectChangedTables(
 
   rc = sqlite3_prepare_v2(db,
       "SELECT name FROM main.sqlite_master WHERE type='table' "
-      "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'dolt_%'",
+      "AND substr(lower(name),1,7)!='sqlite_' "
+      "AND substr(lower(name),1,5)!='dolt_'",
       -1, &pTbls, 0);
   if( rc!=SQLITE_OK ){
     doltliteFreeCatalog(aAnc, nAnc);
@@ -138,7 +139,8 @@ static int appendFkChildren(sqlite3 *db, char ***paz, int *pn){
 
   rc = sqlite3_prepare_v2(db,
       "SELECT name FROM main.sqlite_master WHERE type='table' "
-      "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'dolt_%'",
+      "AND substr(lower(name),1,7)!='sqlite_' "
+      "AND substr(lower(name),1,5)!='dolt_'",
       -1, &pTbls, 0);
   if( rc!=SQLITE_OK ) return rc;
 

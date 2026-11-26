@@ -1,0 +1,154 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# 1. NOT NULL with newline / extra whitespace in CREATE TABLE
+foreach {label nnSql} {
+  newline "NOT\nNULL"
+  spaces  "NOT   NULL"
+  tab     "NOT\tNULL"
+} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+    INSERT INTO t VALUES(1, 10);
+    SELECT dolt_commit('-Am', 'base');
+    SELECT dolt_checkout('-b', 'side');
+    INSERT INTO t VALUES(2, NULL);
+    SELECT dolt_commit('-Am', 'side');
+    SELECT dolt_checkout('main');
+  }
+  execsql "CREATE TABLE t2(id INTEGER PRIMARY KEY, v INT $nnSql)"
+  execsql {
+    INSERT INTO t2 SELECT * FROM t;
+    DROP TABLE t;
+    ALTER TABLE t2 RENAME TO t;
+    SELECT dolt_commit('-Am', 'main');
+    BEGIN;
+  }
+  do_test constraint-detect-notnull-$label-merge {
+    set res [catchsql {SELECT dolt_merge('side')}]
+    list [lindex $res 0] [string match {*constraint violations*} [lindex $res 1]]
+  } {1 1}
+  do_execsql_test constraint-detect-notnull-$label-verify {
+    SELECT id, violation_type FROM dolt_constraint_violations_t ORDER BY id;
+    DELETE FROM dolt_constraint_violations_t;
+    SELECT dolt_verify_constraints('--all');
+    SELECT id, violation_type FROM dolt_constraint_violations_t ORDER BY id;
+    DELETE FROM dolt_constraint_violations_t;
+    SELECT dolt_verify_constraints();
+    SELECT id, violation_type FROM dolt_constraint_violations_t ORDER BY id;
+  } {2 {not null} 1 2 {not null} 1 2 {not null}}
+  execsql ROLLBACK
+}
+
+# 2. CREATE UNIQUE INDEX with extra whitespace / newline
+foreach {label idxSql} {
+  spaces  "CREATE  UNIQUE INDEX iu ON t(v)"
+  newline "CREATE\nUNIQUE\tINDEX iu ON t(v)"
+} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+    INSERT INTO t VALUES(1, 1), (2, 2);
+  }
+  execsql $idxSql
+  execsql {
+    SELECT dolt_commit('-Am', 'base');
+    SELECT dolt_checkout('-b', 'side');
+    UPDATE t SET v=9 WHERE id=2;
+    SELECT dolt_commit('-Am', 'side');
+    SELECT dolt_checkout('main');
+    UPDATE t SET v=9 WHERE id=1;
+    SELECT dolt_commit('-Am', 'main');
+    BEGIN;
+  }
+  do_test constraint-detect-unique-$label-merge {
+    set res [catchsql {SELECT dolt_merge('side')}]
+    list [lindex $res 0] [string match {*constraint violations*} [lindex $res 1]]
+  } {1 1}
+  do_execsql_test constraint-detect-unique-$label-verify {
+    SELECT id, violation_type FROM dolt_constraint_violations_t ORDER BY id;
+    DELETE FROM dolt_constraint_violations_t;
+    SELECT dolt_verify_constraints('--all');
+    SELECT id, violation_type FROM dolt_constraint_violations_t ORDER BY id;
+    DELETE FROM dolt_constraint_violations_t;
+    SELECT dolt_verify_constraints();
+    SELECT id, violation_type FROM dolt_constraint_violations_t ORDER BY id;
+  } {1 {unique index} 2 {unique index} 1 1 {unique index} 2 {unique index} 1 1 {unique index} 2 {unique index}}
+  execsql ROLLBACK
+}
+
+# 3. User tables named dolt1 and sqlite1 in constraint detection and verify
+foreach tbl {dolt1 sqlite1} {
+  reset_db
+  execsql "CREATE TABLE $tbl (id INTEGER PRIMARY KEY, v INT)"
+  execsql "INSERT INTO $tbl VALUES(1, 10)"
+  execsql {
+    SELECT dolt_commit('-Am', 'base');
+    SELECT dolt_checkout('-b', 'side');
+  }
+  execsql "INSERT INTO $tbl VALUES(2, NULL)"
+  execsql {
+    SELECT dolt_commit('-Am', 'side');
+    SELECT dolt_checkout('main');
+  }
+  execsql "CREATE TABLE tmp_t(id INTEGER PRIMARY KEY, v INT NOT NULL)"
+  execsql "INSERT INTO tmp_t SELECT * FROM $tbl"
+  execsql "DROP TABLE $tbl"
+  execsql "ALTER TABLE tmp_t RENAME TO $tbl"
+  execsql {
+    SELECT dolt_commit('-Am', 'main');
+    BEGIN;
+  }
+  do_test constraint-detect-name-$tbl-merge {
+    set res [catchsql {SELECT dolt_merge('side')}]
+    list [lindex $res 0] [string match {*constraint violations*} [lindex $res 1]]
+  } {1 1}
+  do_execsql_test constraint-detect-name-$tbl-verify [subst {
+    SELECT id, violation_type FROM dolt_constraint_violations_$tbl ORDER BY id;
+    DELETE FROM dolt_constraint_violations_$tbl;
+    SELECT dolt_verify_constraints('--all');
+    SELECT id, violation_type FROM dolt_constraint_violations_$tbl ORDER BY id;
+    DELETE FROM dolt_constraint_violations_$tbl;
+    SELECT dolt_verify_constraints();
+    SELECT id, violation_type FROM dolt_constraint_violations_$tbl ORDER BY id;
+  }] {2 {not null} 1 2 {not null} 1 2 {not null}}
+  execsql ROLLBACK
+}
+
+# 4. User tables named dolt1 and sqlite1 in unborn repo (doltliteHasUncommittedChanges)
+foreach tbl {dolt1 sqlite1} {
+  reset_db
+  execsql "BEGIN; CREATE TABLE $tbl (id INTEGER PRIMARY KEY, v INT); INSERT INTO $tbl VALUES(1, 10);"
+  do_execsql_test unborn-dirty-$tbl {
+    SELECT to_table_name FROM dolt_diff_summary('HEAD', 'WORKING');
+  } [list $tbl]
+  execsql COMMIT
+}
+
+# 5. User tables named sqlite1 and dolt1 preserved as untracked on dolt_reset('--hard')
+foreach tbl {sqlite1 dolt1} {
+  reset_db
+  execsql {
+    CREATE TABLE tracked(id INTEGER PRIMARY KEY, v INT);
+    INSERT INTO tracked VALUES(1, 10);
+    SELECT dolt_commit('-Am', 'c1');
+    UPDATE tracked SET v=99 WHERE id=1;
+  }
+  execsql "CREATE TABLE $tbl (id INTEGER PRIMARY KEY, v TEXT); INSERT INTO $tbl VALUES(1, 'keep');"
+  do_execsql_test reset-hard-untracked-$tbl [subst {
+    SELECT dolt_reset('--hard');
+    SELECT v FROM tracked WHERE id=1;
+    SELECT count(*) FROM sqlite_master WHERE type='table' AND name='$tbl';
+    SELECT id, v FROM $tbl;
+  }] {0 10 1 1 keep}
+  db close
+  sqlite3 db [file normalize test.db]
+  do_execsql_test reset-hard-untracked-$tbl-reopen [subst {
+    SELECT count(*) FROM sqlite_master WHERE type='table' AND name='$tbl';
+    SELECT id, v FROM $tbl;
+    PRAGMA integrity_check;
+  }] {1 1 keep ok}
+}
+
+finish_test
