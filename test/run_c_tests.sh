@@ -47,6 +47,7 @@ COVERAGE_TESTS=(
   prolly_chunker_boundary_test
   prolly_node_search_test
   prolly_mutmap_order_test
+  prolly_btree_saveposition_test
   scoped_refs_push_test
   remote_chunk_integrity_test
   remote_partial_push_test

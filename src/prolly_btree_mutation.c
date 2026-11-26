@@ -1519,9 +1519,12 @@ static int btCursorInsertImpl(
               pCur->mergeSrc = MERGE_SRC_BOTH;
             }
           }
+          pCur->deferredTreeSeek = (pCur->mergeSrc == MERGE_SRC_MUT);
+          pCur->curFlags &= ~BTCF_AtLast;
           pCur->eState = CURSOR_VALID;
         }else{
           pCur->mmActive = 0;
+          pCur->deferredTreeSeek = 0;
           pCur->eState = pCur->pCur.eState==PROLLY_CURSOR_VALID
                        ? CURSOR_SKIPNEXT : CURSOR_INVALID;
           pCur->skipNext = pCur->eState==CURSOR_SKIPNEXT ? 1 : 0;
