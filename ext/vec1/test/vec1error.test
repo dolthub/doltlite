@@ -79,7 +79,33 @@ do_execsql_test 3.4 {
   SELECT rowid FROM v1
 } {1 2}
 
+#-------------------------------------------------------------------------
+# Test that an error in the vec1_train() "profile" callback propagates
+# cleanly without leaking memory.
+#
+reset_db
+vec1_load db
 
+do_execsql_test 4.0 {
+  CREATE VIRTUAL TABLE v1 USING vec1(a);
+  WITH s(i) AS (
+    VALUES(1) UNION ALL SELECT i+1 FROM s WHERE i<64
+  )
+  INSERT INTO v1(rowid, a) SELECT i, random_vector(8) FROM s;
+}
+
+do_catchsql_test 4.1 {
+  SELECT vec1_train(a, '{nbucket:4, profile:"no_such_profile_func"}') FROM v1;
+} {1 {no such function: no_such_profile_func}}
+
+proc failing_profile {x} {
+  error "profile callback boom"
+}
+db func failing_profile failing_profile
+
+do_catchsql_test 4.2 {
+  SELECT vec1_train(a, '{nbucket:4, profile:"failing_profile"}') FROM v1;
+} {1 {profile callback boom}}
 
 finish_test
 
