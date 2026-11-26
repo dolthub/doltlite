@@ -586,6 +586,7 @@ static int restoreTablesFromSavepoint(
           if( pSrc->zName ){
             pDst->zName = sqlite3_mprintf("%s", pSrc->zName);
             if( !pDst->zName ){
+              pBtree->cat.n = k;
               btreeFreeCatalogTables(pBtree);
               initDefaultMeta(pBtree);
               return SQLITE_NOMEM;
