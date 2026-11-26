@@ -226,26 +226,48 @@ int csSyncFile(ChunkStore *cs){
                        cs->fullFsync ? SQLITE_SYNC_FULL : SQLITE_SYNC_NORMAL);
 }
 
+int csClampedSectorSize(sqlite3_file *pFile){
+  int sz = pFile ? sqlite3OsSectorSize(pFile) : CS_MIN_SECTOR_SIZE;
+  if( sz < CS_MIN_SECTOR_SIZE ) sz = CS_MIN_SECTOR_SIZE;
+  if( sz > CS_MAX_SECTOR_SIZE ) sz = CS_MAX_SECTOR_SIZE;
+  return sz;
+}
+
+int csZeroTailProbeSize(sqlite3_file *pFile){
+  int sz = csClampedSectorSize(pFile);
+  return sz < CS_ZERO_TAIL_PROBE ? CS_ZERO_TAIL_PROBE : sz;
+}
+
 /* Every record starts with a nonzero tag at the logical end, or at the next
 ** sector boundary for a writer that pads its batches. Zeros through that
 ** boundary mean nothing was appended and the rest is an unused tail. */
 int csTailHasRecordAt(ChunkStore *cs, i64 iOff, i64 physSize, int *pHas){
-  u8 a[CS_ZERO_TAIL_PROBE+1];
-  i64 iEnd = iOff + (CS_ZERO_TAIL_PROBE-1);
-  int i, n, rc;
-  iEnd = iEnd - (iEnd % CS_ZERO_TAIL_PROBE) + 1;
+  u8 a[CS_ZERO_TAIL_PROBE];
+  int probe = csZeroTailProbeSize(cs->file.pFile);
+  i64 iEnd = iOff + (probe - 1);
+  i64 iCur = iOff;
+  iEnd = iEnd - (iEnd % probe) + 1;
   *pHas = 0;
   if( physSize<=iOff ) return SQLITE_OK;
   if( iEnd>physSize ) iEnd = physSize;
-  n = (int)(iEnd - iOff);
-  rc = sqlite3OsRead(cs->file.pFile, a, n, iOff);
-  if( rc==SQLITE_IOERR_SHORT_READ ) rc = SQLITE_OK;
-  if( rc!=SQLITE_OK ) return rc;
-  for(i=0; i<n; i++){
-    if( a[i] ){
-      *pHas = 1;
-      break;
+  while( iCur<iEnd ){
+    int n = (int)MIN(iEnd - iCur, (i64)sizeof(a));
+    int shortRead = 0;
+    int i, rc;
+    rc = sqlite3OsRead(cs->file.pFile, a, n, iCur);
+    if( rc==SQLITE_IOERR_SHORT_READ ){
+      shortRead = 1;
+      rc = SQLITE_OK;
     }
+    if( rc!=SQLITE_OK ) return rc;
+    for(i=0; i<n; i++){
+      if( a[i] ){
+        *pHas = 1;
+        return SQLITE_OK;
+      }
+    }
+    if( shortRead ) break;
+    iCur += n;
   }
   return SQLITE_OK;
 }
@@ -1097,9 +1119,7 @@ static void csWriteCleanCloseMarker(ChunkStore *cs){
 
   if( (sqlite3OsDeviceCharacteristics(cs->file.pFile)
        & (SQLITE_IOCAP_POWERSAFE_OVERWRITE|SQLITE_IOCAP_ATOMIC))==0 ){
-    sectorSize = sqlite3OsSectorSize(cs->file.pFile);
-    if( sectorSize < 512 ) sectorSize = 512;
-    if( sectorSize > 65536 ) sectorSize = 65536;
+    sectorSize = csClampedSectorSize(cs->file.pFile);
   }
 
   if( csWalCheckpointDue(cs) ){

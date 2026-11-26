@@ -313,9 +313,7 @@ static int csCommitResolveAppendPoint(
   /* Without powersafe overwrite, start each batch on a fresh sector. */
   if( (sqlite3OsDeviceCharacteristics(cs->file.pFile)
        & (SQLITE_IOCAP_POWERSAFE_OVERWRITE|SQLITE_IOCAP_ATOMIC))==0 ){
-    sectorSize = sqlite3OsSectorSize(cs->file.pFile);
-    if( sectorSize < 512 ) sectorSize = 512;
-    if( sectorSize > 65536 ) sectorSize = 65536;
+    sectorSize = csClampedSectorSize(cs->file.pFile);
   }
   *pFileSize = fileSize;
   *pOrigFileSize = fileSize;
