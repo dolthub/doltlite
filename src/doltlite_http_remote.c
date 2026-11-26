@@ -19,6 +19,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#ifndef _WIN32
+#include <errno.h>
+#endif
 
 #ifdef DOLTLITE_HAVE_AUTH
 typedef DoltliteConn HttpConn;
@@ -338,6 +341,14 @@ static int httpConnSetTimeout(HttpConn *pConn, int timeoutMs, int initialMs){
   return httpConnApplyDeadline(pConn);
 }
 
+static int httpSocketInterrupted(void){
+#ifdef _WIN32
+  return WSAGetLastError()==WSAEINTR;
+#else
+  return errno==EINTR;
+#endif
+}
+
 static int httpConnWriteAll(HttpConn *pConn, const void *pBuf, int nBuf){
   const char *z = (const char*)pBuf;
   int nSent = 0;
@@ -349,6 +360,7 @@ static int httpConnWriteAll(HttpConn *pConn, const void *pBuf, int nBuf){
     int n;
     if( httpConnApplyDeadline(pConn)!=0 ) return 1;
     n = send(pConn->fd, z+nSent, nBuf-nSent, flags);
+    if( n<0 && httpSocketInterrupted() ) continue;
     if( n<=0 ){
       pConn->timedOut = n<0 && doltliteSocketTimedOut();
       return 1;
@@ -361,11 +373,14 @@ static int httpConnWriteAll(HttpConn *pConn, const void *pBuf, int nBuf){
 
 static int httpConnRead(HttpConn *pConn, void *pBuf, int nBuf){
   int n;
-  if( httpConnApplyDeadline(pConn)!=0 ) return -1;
-  n = recv(pConn->fd, (char*)pBuf, nBuf, 0);
-  if( n>0 && pConn->timeoutMs ) pConn->deadlineMs = doltliteMonotonicMs() + pConn->timeoutMs;
-  else if( n<0 ) pConn->timedOut = doltliteSocketTimedOut();
-  return n;
+  for(;;){
+    if( httpConnApplyDeadline(pConn)!=0 ) return -1;
+    n = recv(pConn->fd, (char*)pBuf, nBuf, 0);
+    if( n<0 && httpSocketInterrupted() ) continue;
+    if( n>0 && pConn->timeoutMs ) pConn->deadlineMs = doltliteMonotonicMs() + pConn->timeoutMs;
+    else if( n<0 ) pConn->timedOut = doltliteSocketTimedOut();
+    return n;
+  }
 }
 
 static int httpConnTimeoutRemaining(HttpConn *pConn){
