@@ -1352,8 +1352,7 @@ int chunkStoreGet(
     return chunkStoreVerifyChunk(hash, ppData, pnData, cs->pStats);
   }
 
-  if( !cs->isMemory && cs->file.pFile == 0 && cs->openPending
-   && !cs->snapshotPinned ){
+  if( !cs->isMemory && cs->openPending && !cs->snapshotPinned ){
     int changed = 0;
     rc = chunkStoreRefreshIfChanged(cs, &changed);
     if( rc!=SQLITE_OK ) return rc;
