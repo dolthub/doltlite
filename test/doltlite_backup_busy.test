@@ -245,6 +245,126 @@ foreach dest_uri {:memory: {file:backup_qo_mem?mode=memory&cache=shared}} {
   src close
   db close
 }
+
+# Backup into memdb destinations (deserialized buffer and file:/name?vfs=memdb).
+forcedelete backup-source.db
+sqlite3 src backup-source.db
+src eval {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+  CREATE INDEX tv ON t(v);
+  INSERT INTO t VALUES(1, 'a'), (2, 'b'), (3, 'c');
+  SELECT dolt_commit('-Am', 'from-src');
+}
+set src_img [src serialize main]
+
+sqlite3 seed :memory:
+seed eval {
+  CREATE TABLE oldt(x INTEGER PRIMARY KEY);
+  INSERT INTO oldt VALUES(99);
+  SELECT dolt_commit('-Am', 'old-dest');
+}
+set old_img [seed serialize main]
+seed close
+
+foreach mode {nonempty empty} {
+  set prefix backup-memdb-deserialize-$mode
+  sqlite3 db :memory:
+  if {$mode eq "nonempty"} {
+    db deserialize main $old_img
+  } else {
+    db deserialize main ""
+  }
+  sqlite3_backup B db main src main
+  do_test $prefix.step {B step -1} SQLITE_DONE
+  do_test $prefix.finish {list [B finish] [sqlite3_errcode db]} {SQLITE_OK SQLITE_OK}
+  do_test $prefix.rows {
+    db eval {SELECT id, v FROM t INDEXED BY tv ORDER BY id}
+  } {1 a 2 b 3 c}
+  do_test $prefix.log {
+    db one {SELECT message FROM dolt_log LIMIT 1}
+  } {from-src}
+  do_test $prefix.integrity {db one {PRAGMA integrity_check}} ok
+  do_test $prefix.serialize-roundtrip {
+    set out_img [db serialize main]
+    sqlite3 chk :memory:
+    chk deserialize main $out_img
+    set res [list [chk eval {SELECT id, v FROM t ORDER BY id}] [chk one {PRAGMA integrity_check}]]
+    chk close
+    set res
+  } {{1 a 2 b 3 c} ok}
+  do_test $prefix.query-only-gate {
+    db eval {PRAGMA query_only = ON;}
+    set r1 [catchsql {SELECT dolt_branch('b2')}]
+    db eval {PRAGMA query_only = OFF;}
+    sqlite3_db_status db CACHE_WRITE 1
+    set r2 [catchsql {SELECT dolt_branch('b2')}]
+    set cw [lindex [sqlite3_db_status db CACHE_WRITE 0] 1]
+    list $r1 $r2 [expr {$cw > 0}]
+  } {{1 {attempt to write a readonly database}} {0 0} 1}
+  db close
+}
+
+# Backup from one deserialized buffer into another deserialized buffer.
+do_test backup-memdb-buffer-to-buffer {
+  sqlite3 sbuf :memory:
+  sbuf deserialize main $src_img
+  sqlite3 dbuf :memory:
+  dbuf deserialize main $old_img
+  sqlite3_backup B dbuf main sbuf main
+  set st [B step -1]
+  set fn [B finish]
+  set rows [dbuf eval {SELECT id, v FROM t INDEXED BY tv ORDER BY id}]
+  set ic [dbuf one {PRAGMA integrity_check}]
+  set out_img [dbuf serialize main]
+  sqlite3 chk :memory:
+  chk deserialize main $out_img
+  set chk_rows [chk eval {SELECT id, v FROM t ORDER BY id}]
+  chk close
+  dbuf close
+  sbuf close
+  list $st $fn $rows $ic $chk_rows
+} {SQLITE_DONE SQLITE_OK {1 a 2 b 3 c} ok {1 a 2 b 3 c}}
+
+# Backup into a read-only deserialized buffer must fail with SQLITE_READONLY.
+do_test backup-memdb-deserialize-readonly {
+  sqlite3 db :memory:
+  db deserialize -readonly 1 main $old_img
+  set rc [catch {sqlite3_backup B db main src main} msg]
+  set err [sqlite3_errcode db]
+  set kept [db eval {SELECT x FROM oldt}]
+  db close
+  list $rc $err $kept
+} {1 SQLITE_READONLY 99}
+
+# Backup into file:/name?vfs=memdb (empty and non-empty).
+foreach mode {empty nonempty} {
+  set prefix backup-memdb-vfs-$mode
+  sqlite3 db "file:/backup_memdb_${mode}?vfs=memdb" -uri 1
+  if {$mode eq "nonempty"} {
+    db eval {
+      CREATE TABLE oldt(x INTEGER PRIMARY KEY);
+      INSERT INTO oldt VALUES(42);
+    }
+  }
+  sqlite3_backup B db main src main
+  do_test $prefix.step {B step -1} SQLITE_DONE
+  do_test $prefix.finish {list [B finish] [sqlite3_errcode db]} {SQLITE_OK SQLITE_OK}
+  do_test $prefix.rows {
+    db eval {SELECT id, v FROM t INDEXED BY tv ORDER BY id}
+  } {1 a 2 b 3 c}
+  do_test $prefix.integrity {db one {PRAGMA integrity_check}} ok
+  do_test $prefix.serialize-roundtrip {
+    set out_img [db serialize main]
+    sqlite3 chk :memory:
+    chk deserialize main $out_img
+    set res [list [chk eval {SELECT id, v FROM t ORDER BY id}] [chk one {PRAGMA integrity_check}]]
+    chk close
+    set res
+  } {{1 a 2 b 3 c} ok}
+  db close
+}
+src close
+
 sqlite3 db test.db
 
 finish_test

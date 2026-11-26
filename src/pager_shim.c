@@ -946,6 +946,9 @@ static int doltliteBackupSameFile(
   int same = strcmp(zSrcFile, zDestFile)==0;
 
   *pRc = SQLITE_OK;
+  if( sqlite3IsDoltliteMemdb(pSrcVfs) || sqlite3IsDoltliteMemdb(pDestVfs) ){
+    return pSrcVfs==pDestVfs;
+  }
   if( pSrcVfs!=pDestVfs ) return same;
   nSrc = pSrcVfs->mxPathname + 1;
   nDest = pDestVfs->mxPathname + 1;
@@ -1376,6 +1379,48 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
       doltliteInvalidateBtreeWorkingState(pDestBt);
       goto backup_step_done;
     }
+    if( rc==SQLITE_OK ) rc = chunkStoreCopyIntoEmpty(srcCs, destCs);
+    memoryAdopted = 1;
+    if( rc==SQLITE_OK ){
+      doltliteBtreeInstallBackupBranch(pDestBt, zPreparedBranch);
+      zPreparedBranch = 0;
+    }
+    doltliteInvalidateBtreeWorkingState(pDestBt);
+    goto backup_step_done;
+  }
+
+  if( destCs->isBuffer ){
+    sqlite3_file *pHold = 0;
+    char *zName = 0;
+    ChunkStore old = *destCs;
+    sqlite3_vfs *pOwnedVfs = destCs->pOwnedVfs;
+    openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+              | SQLITE_OPEN_MAIN_DB;
+    rc = chunkStoreDupFilenameDoubleNul(
+        chunkFileGetFilename(&destCs->file), &zName);
+    if( rc==SQLITE_OK ){
+      rc = sqlite3OsOpenMalloc(pDestVfs, zName, &pHold, openFlags, 0);
+    }
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zName);
+      goto backup_step_done;
+    }
+    chunkStoreUnlock(destCs);
+    destLocked = 0;
+    destCs->pOwnedVfs = 0;
+    chunkStoreClose(destCs);
+    rc = sqlite3OsTruncate(pHold, 0);
+    if( rc==SQLITE_OK ){
+      rc = chunkStoreOpen(destCs, pDestVfs, zName, openFlags);
+    }
+    sqlite3OsCloseFree(pHold);
+    sqlite3_free(zName);
+    destCs->pOwnedVfs = pOwnedVfs;
+    destCs->xWriteGate = old.xWriteGate;
+    destCs->pWriteGateArg = old.pWriteGateArg;
+    destCs->xDefaultBusy = old.xDefaultBusy;
+    destCs->pDefaultBusyArg = old.pDefaultBusyArg;
+    destCs->pStats = old.pStats;
     if( rc==SQLITE_OK ) rc = chunkStoreCopyIntoEmpty(srcCs, destCs);
     memoryAdopted = 1;
     if( rc==SQLITE_OK ){

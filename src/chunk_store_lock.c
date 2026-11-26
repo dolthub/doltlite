@@ -387,6 +387,10 @@ void csFileUnlock(CsFileLock pLock, char **pzName){
 
 int chunkStoreReplaceLockedFile(ChunkStore *cs, const char *zTmp, int *pRetainTmp){
 #if defined(SQLITE_WASM) || defined(__EMSCRIPTEN__)
+  if( cs->isMemory || cs->isBuffer || !CS_GRAPH_LOCK(cs) ){
+    if( pRetainTmp ) *pRetainTmp = 0;
+    return SQLITE_MISUSE;
+  }
   return csWasmReplaceLockedFile(cs, zTmp, pRetainTmp);
 #else
   int rc;
@@ -394,11 +398,20 @@ int chunkStoreReplaceLockedFile(ChunkStore *cs, const char *zTmp, int *pRetainTm
   sqlite3_file *pGuard = 0;
   char *zGuard = 0;
   CsFileLock pLock = CS_GRAPH_LOCK(cs);
+  if( cs->isMemory || cs->isBuffer || !pLock ){
+    if( pRetainTmp ) *pRetainTmp = 0;
+    return SQLITE_MISUSE;
+  }
   PROLLY_ASSERT_STORE_GRAPH_LOCKED(cs);
   *pRetainTmp = 0;
   /* Both inodes stay locked across rename, even if the sidecar is unlinked. */
   rc = csGuardOpen(cs->file.pVfs, zTmp, 0, &pGuard, &zGuard);
   if( rc!=SQLITE_OK ) return rc;
+#else
+  if( cs->isMemory || cs->isBuffer || !CS_GRAPH_LOCK(cs) ){
+    if( pRetainTmp ) *pRetainTmp = 0;
+    return SQLITE_MISUSE;
+  }
 #endif
   rc = sqlite3OsReplaceFile(cs->file.pVfs, zTmp, cs->file.zFilename, pRetainTmp);
 #if SQLITE_OS_UNIX
