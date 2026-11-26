@@ -94,30 +94,32 @@ int doltliteSyntheticRowidFromSortKey(const u8 *pSortKey, int nSortKey,
   return rc;
 }
 
-static u32 doltliteSerialTypeOf(const DoltliteSerialValue *pVal, u32 *pLen){
-  if( pVal->eType == SQLITE_NULL ){ *pLen = 0; return 0; }
+static int doltliteSerialTypeOf(const DoltliteSerialValue *pVal, u32 *pType, u32 *pLen){
+  if( pVal->eType == SQLITE_NULL ){ *pType = 0; *pLen = 0; return 1; }
   if( pVal->eType == SQLITE_INTEGER ){
     i64 v = pVal->i;
-    if( v==0 ){ *pLen = 0; return 8; }
-    if( v==1 ){ *pLen = 0; return 9; }
-    if( v>=-128 && v<=127 ){ *pLen = 1; return 1; }
-    if( v>=-32768 && v<=32767 ){ *pLen = 2; return 2; }
-    if( v>=-8388608 && v<=8388607 ){ *pLen = 3; return 3; }
-    if( v>=-2147483648LL && v<=2147483647LL ){ *pLen = 4; return 4; }
-    if( v>=-140737488355328LL && v<=140737488355327LL ){ *pLen = 6; return 5; }
-    *pLen = 8; return 6;
+    if( v==0 ){ *pType = 8; *pLen = 0; return 1; }
+    if( v==1 ){ *pType = 9; *pLen = 0; return 1; }
+    if( v>=-128 && v<=127 ){ *pType = 1; *pLen = 1; return 1; }
+    if( v>=-32768 && v<=32767 ){ *pType = 2; *pLen = 2; return 1; }
+    if( v>=-8388608 && v<=8388607 ){ *pType = 3; *pLen = 3; return 1; }
+    if( v>=-2147483648LL && v<=2147483647LL ){ *pType = 4; *pLen = 4; return 1; }
+    if( v>=-140737488355328LL && v<=140737488355327LL ){ *pType = 5; *pLen = 6; return 1; }
+    *pType = 6; *pLen = 8; return 1;
   }
-  if( pVal->eType == SQLITE_FLOAT ){ *pLen = 8; return 7; }
-  if( pVal->eType == SQLITE_TEXT ){
+  if( pVal->eType == SQLITE_FLOAT ){ *pType = 7; *pLen = 8; return 1; }
+  if( pVal->eType == SQLITE_TEXT || pVal->eType == SQLITE_BLOB ){
+    u64 st;
+    if( pVal->n < 0 ) return 0;
+    st = (u64)pVal->n * 2 + (pVal->eType == SQLITE_TEXT ? 13 : 12);
+    if( st > (u64)0x7fffffff ) return 0;
+    *pType = (u32)st;
     *pLen = (u32)pVal->n;
-    return (u32)(pVal->n * 2 + 13);
+    return 1;
   }
-  if( pVal->eType == SQLITE_BLOB ){
-    *pLen = (u32)pVal->n;
-    return (u32)(pVal->n * 2 + 12);
-  }
+  *pType = 0;
   *pLen = 0;
-  return 0;
+  return 1;
 }
 
 static void doltliteSerialPut(u8 *pOut, const DoltliteSerialValue *pVal, u32 serialType){
@@ -1085,13 +1087,14 @@ void doltliteResultSideCol(
 u8 *doltliteBuildRecord(const DoltliteSerialValue *aMem, int nField, int *pnOut){
   u32 *aType, *aLen;
   u8 *pOut, *pHdr, *pBody;
-  int i, hdrSize = 0, bodySize = 0, pos;
+  int i, pos;
+  u64 hdrSize = 0, bodySize = 0, totalSize;
 
   *pnOut = 0;
-  if( nField<=0 ) return 0;
+  if( nField<=0 || !aMem ) return 0;
 
-  aType = sqlite3_malloc64((sqlite3_int64)nField * sizeof(u32));
-  aLen = sqlite3_malloc64((sqlite3_int64)nField * sizeof(u32));
+  aType = sqlite3_malloc64((sqlite3_uint64)nField * sizeof(u32));
+  aLen = sqlite3_malloc64((sqlite3_uint64)nField * sizeof(u32));
   if( !aType || !aLen ){
     sqlite3_free(aType);
     sqlite3_free(aLen);
@@ -1099,19 +1102,29 @@ u8 *doltliteBuildRecord(const DoltliteSerialValue *aMem, int nField, int *pnOut)
   }
 
   for(i=0; i<nField; i++){
-    aType[i] = doltliteSerialTypeOf(&aMem[i], &aLen[i]);
-    hdrSize += sqlite3VarintLen(aType[i]);
-    bodySize += (int)aLen[i];
+    if( !doltliteSerialTypeOf(&aMem[i], &aType[i], &aLen[i]) ){
+      sqlite3_free(aType);
+      sqlite3_free(aLen);
+      return 0;
+    }
+    hdrSize += (u64)sqlite3VarintLen(aType[i]);
+    bodySize += (u64)aLen[i];
   }
   /* Adding the header-size varint can cross a width: 127 one-byte type codes
   ** need a two-byte size. Stock sqlite3VdbeMakeRecord does the same. */
   {
     int nVarint = sqlite3VarintLen(hdrSize);
-    hdrSize += nVarint;
+    hdrSize += (u64)nVarint;
     if( nVarint < sqlite3VarintLen(hdrSize) ) hdrSize++;
   }
+  if( hdrSize > (u64)0x7fffffff || bodySize > (u64)0x7fffffff - hdrSize ){
+    sqlite3_free(aType);
+    sqlite3_free(aLen);
+    return 0;
+  }
+  totalSize = hdrSize + bodySize;
 
-  pOut = sqlite3_malloc(hdrSize + bodySize);
+  pOut = sqlite3_malloc64(totalSize);
   if( !pOut ){
     sqlite3_free(aType);
     sqlite3_free(aLen);
@@ -1128,7 +1141,7 @@ u8 *doltliteBuildRecord(const DoltliteSerialValue *aMem, int nField, int *pnOut)
       pBody += aLen[i];
     }
   }
-  *pnOut = hdrSize + bodySize;
+  *pnOut = (int)totalSize;
   sqlite3_free(aType);
   sqlite3_free(aLen);
   return pOut;
