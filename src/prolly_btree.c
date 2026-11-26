@@ -2149,7 +2149,8 @@ int prollyBtreeCreateTable(Btree *p, Pgno *piTable, int flags){
   PROLLY_ASSERT_GRAPH_LOCKED(p->pBt);
 
   {
-    int rc = ensureStatementSavepointsCaptured(p);
+    int rc = syncBtreeSavepoints(p);
+    if( rc==SQLITE_OK ) rc = ensureStatementSavepointsCaptured(p);
     if( rc!=SQLITE_OK ) return rc;
   }
 
@@ -2182,7 +2183,8 @@ int prollyBtreeDropTable(Btree *p, int iTable, int *piMoved){
   p->bTxnWrote = 1;
 
   {
-    int rc = ensureStatementSavepointsCaptured(p);
+    int rc = syncBtreeSavepoints(p);
+    if( rc==SQLITE_OK ) rc = ensureStatementSavepointsCaptured(p);
     if( rc!=SQLITE_OK ) return rc;
   }
 
@@ -2198,10 +2200,6 @@ int prollyBtreeDropTable(Btree *p, int iTable, int *piMoved){
   invalidateCursors(pBt, (Pgno)iTable, SQLITE_ABORT);
 
   /* Snapshot pending edits so ROLLBACK TO can restore a same-txn create/drop. */
-  {
-    int rc = syncBtreeSavepoints(p);
-    if( rc!=SQLITE_OK ) return rc;
-  }
   {
     struct TableEntry *pTE = findTable(p, (Pgno)iTable);
     if( pTE && pTE->pPending ){
@@ -2235,7 +2233,8 @@ int prollyBtreeClearTable(Btree *p, int iTable, i64 *pnChange){
   p->bTxnWrote = 1;
 
   {
-    int rc = ensureStatementSavepointsCaptured(p);
+    int rc = syncBtreeSavepoints(p);
+    if( rc==SQLITE_OK ) rc = ensureStatementSavepointsCaptured(p);
     if( rc!=SQLITE_OK ) return rc;
   }
 
@@ -2256,10 +2255,6 @@ int prollyBtreeClearTable(Btree *p, int iTable, i64 *pnChange){
     if( rc!=SQLITE_OK ) return rc;
   }
   prollyInvalidateIncrblobCursors(pBt, (Pgno)iTable, 0, 1);
-  {
-    int rc = syncBtreeSavepoints(p);
-    if( rc!=SQLITE_OK ) return rc;
-  }
 
   if( pnChange ){
     int rc = flushPendingForTable(p, pBt, pTE, 1);
