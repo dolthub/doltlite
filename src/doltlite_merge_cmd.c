@@ -1861,6 +1861,7 @@ int doltliteMergeRef(
   struct TableEntry *aLocal = 0;
   int nLocal = 0;
   u8 activeMerge = 0;
+  u8 isRebasing = 0;
   DoltliteTxnState savedState;
   int nMergeConflicts = 0;
   ProllyHash *aBases = 0;
@@ -1913,6 +1914,25 @@ int doltliteMergeRef(
         "no commits on current branch", rc);
   }
 
+  doltliteGetSessionMergeState(db, &activeMerge, 0, 0);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, 0, 0);
+  if( doltliteSessionHasPendingReplayCommit(db) ){
+    return mergeRefAbortAfterWriteTxn(db, context,
+      "a replay is already in progress", rc);
+  }
+  if( doltliteSessionHasUnresolvedConflicts(db) ){
+    return mergeRefAbortAfterWriteTxn(db, context,
+      "cannot merge with unresolved conflicts", rc);
+  }
+  if( activeMerge ){
+    return mergeRefAbortAfterWriteTxn(db, context,
+      "cannot merge while a merge is in progress", rc);
+  }
+  if( isRebasing ){
+    return mergeRefAbortAfterWriteTxn(db, context,
+      "cannot merge while a rebase is in progress", rc);
+  }
+
   rc = doltliteResolveRef(db, zBranch, &theirHead);
   if( rc!=SQLITE_OK || prollyHashIsEmpty(&theirHead) ){
     return mergeRefAbortAfterWriteTxn(db, context,
@@ -1927,17 +1947,8 @@ int doltliteMergeRef(
   }
 
   doltliteGetSessionWorkingSetBasis(db, &cleanWorkingSet);
-  doltliteGetSessionMergeState(db, &activeMerge, 0, 0);
   rc = doltliteHasUncommittedChanges(db, &dirty);
   if( rc!=SQLITE_OK ) return mergeRefAbortAfterWriteTxn(db, context, 0, rc);
-  if( dirty && activeMerge ){
-    return mergeRefAbortAfterWriteTxn(db, context,
-      "uncommitted changes \xe2\x80\x94 commit or reset before merging", rc);
-  }
-  if( doltliteSessionHasUnresolvedConflicts(db) ){
-    return mergeRefAbortAfterWriteTxn(db, context,
-      "cannot merge with unresolved conflicts", rc);
-  }
   if( dirty ){
     ProllyHash headCatHash, trackedHash;
     DoltliteCommit source;

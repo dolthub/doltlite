@@ -756,7 +756,7 @@ run_test "threeway_nocommit_status" \
   "t|1|modified" "$DB49"
 run_test "threeway_nocommit_merging" "SELECT is_merging FROM dolt_merge_status;" "1" "$DB49"
 run_test_error_match "threeway_nocommit_blocks_second" \
-  "SELECT dolt_merge('f');" "uncommitted" "$DB49"
+  "SELECT dolt_merge('f');" "cannot merge while a merge is in progress" "$DB49"
 run_test_match "threeway_nocommit_finish" \
   "SELECT dolt_commit('-m','finished merge');" "^[0-9a-f]{40}$" "$DB49"
 run_test "threeway_nocommit_after_log" \
@@ -875,7 +875,7 @@ SELECT dolt_merge('feat');
 SELECT dolt_commit('-m','after-fail');
 EOF
 )
-if echo "$REFUSE_OUT" | grep -q "uncommitted changes"; then
+if echo "$REFUSE_OUT" | grep -q "cannot merge while a merge is in progress"; then
   PASS=$((PASS+1))
 else
   FAIL=$((FAIL+1))
