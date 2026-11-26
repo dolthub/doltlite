@@ -92,6 +92,7 @@ static int statsConnect(sqlite3 *db, void *pAux, int argc,
 static int statsBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   int i;
   (void)pVtab;
+  if( !doltliteVtabArgUsable(pInfo, 2) ) return SQLITE_CONSTRAINT;
   pInfo->estimatedCost = 1.0;
   pInfo->estimatedRows = ENGINE_STAT_N;
   for(i=0; i<pInfo->nConstraint; i++){
