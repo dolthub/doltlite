@@ -58,4 +58,25 @@ foreach {name schema base ours theirs native touch} {
   } {0 ok}
 }
 
+# Cell-level merge with a 5-byte serial type varint (BLOB >= 134,217,722 bytes).
+do_test canonical-large-blob-serial-type {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b BLOB, c INT);
+    INSERT INTO t VALUES(1, 1, X'01', 10);
+    SELECT dolt_commit('-Am', 'base');
+    SELECT dolt_checkout('-b', 'br');
+    UPDATE t SET b = zeroblob(134217722) WHERE id = 1;
+    SELECT dolt_commit('-Am', 'theirs');
+    SELECT dolt_checkout('main');
+    UPDATE t SET a = 2 WHERE id = 1;
+    SELECT dolt_commit('-Am', 'ours');
+    SELECT dolt_merge('br');
+  }
+  execsql {
+    SELECT id, a, typeof(b), length(b), c FROM t;
+    PRAGMA integrity_check;
+  }
+} {1 2 blob 134217722 10 ok}
+
 finish_test
