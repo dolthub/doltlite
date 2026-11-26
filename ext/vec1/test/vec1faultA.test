@@ -58,4 +58,46 @@ foreach {tn model} {
   }
 }
 
+# OOM while expanding compact metadata (1BYTEINT / 4BYTEINT / REAL) to
+# GENERIC format during INSERT.
+foreach {tn expr} {
+  4 { i % 200 }
+  5 { 1000 + i }
+  6 { i + 0.5 }
+} {
+  reset_db
+  vec1_load db
+
+  do_execsql_test $tn.0 "
+    CREATE VIRTUAL TABLE t1 USING vec1(v, b);
+    WITH s(i) AS ( SELECT 1 UNION ALL SELECT i+1 FROM s WHERE i<100 )
+    INSERT INTO t1(rowid, v, b) SELECT i, rvec(16, i), $expr FROM s;
+    INSERT INTO t1(cmd, arg) VALUES('rebuild', '{index:\"flat\"}');
+  "
+
+  faultsim_save_and_close
+
+  do_faultsim_test $tn -faults oom-transient -prep {
+    faultsim_restore_and_reopen
+    vec1_load db
+  } -body {
+    execsql {
+      INSERT INTO t1(rowid, v, b) VALUES(101, rvec(16, 101), 'generic_val');
+    }
+  } -test {
+    faultsim_test_result {0 {}} {1 {out of memory}}
+    set ic [db one { PRAGMA integrity_check }]
+    if {$ic!="ok"} {
+      error "integrity-check failed: $ic"
+    }
+    if {$testrc==0} {
+      set n [db one { SELECT count(*) FROM t1(rvec(16, 101), '{K:200}') WHERE b='generic_val' }]
+      if {$n!=1} { error "missing inserted generic meta row: $n" }
+    } else {
+      set n [db one { SELECT count(*) FROM t1(rvec(16, 1), '{K:200}') WHERE b IS NOT NULL }]
+      if {$n!=100} { error "prior metadata lost after OOM: $n" }
+    }
+  }
+}
+
 finish_test
