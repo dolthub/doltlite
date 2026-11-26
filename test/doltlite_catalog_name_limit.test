@@ -1,0 +1,59 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite-catalog-name-limit
+
+do_execsql_test setup {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+  INSERT INTO t VALUES(1, 42);
+  SELECT length(dolt_commit('-Am', 'base'));
+} {40}
+
+do_test table-name-65536-rejected {
+  set longname [string repeat "a" 65536]
+  catchsql "CREATE TABLE \"$longname\"(x INT)"
+} {1 {string or blob too big}}
+
+do_test db-intact-after-table-reject {
+  db close
+  sqlite3 db test.db
+  db eval {
+    SELECT id, v FROM t;
+    PRAGMA integrity_check;
+  }
+} {1 42 ok}
+
+do_test index-name-65536-rejected {
+  set longidx [string repeat "b" 65536]
+  catchsql "CREATE INDEX \"$longidx\" ON t(v)"
+} {1 {string or blob too big}}
+
+do_test db-intact-after-index-reject {
+  db close
+  sqlite3 db test.db
+  db eval {
+    SELECT id, v FROM t;
+    PRAGMA integrity_check;
+  }
+} {1 42 ok}
+
+do_test table-name-65535-succeeds {
+  set maxname [string repeat "c" 65535]
+  db eval "CREATE TABLE \"$maxname\"(x INT)"
+  db eval "INSERT INTO \"$maxname\" VALUES(99)"
+  db close
+  sqlite3 db test.db
+  list [db eval "SELECT x FROM \"$maxname\""] \
+       [db eval {PRAGMA integrity_check}] \
+       [db eval {SELECT length(dolt_commit('-Am', 'max-table-name'))}]
+} {99 ok 40}
+
+do_test index-name-65535-succeeds {
+  set maxidx [string repeat "d" 65535]
+  db eval "CREATE INDEX \"$maxidx\" ON t(v)"
+  db close
+  sqlite3 db test.db
+  list [db eval {SELECT id, v FROM t WHERE v=42}] \
+       [db eval {PRAGMA integrity_check}]
+} {{1 42} ok}
+
+finish_test
