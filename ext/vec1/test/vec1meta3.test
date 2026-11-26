@@ -336,5 +336,81 @@ foreach {mode rebuild_sql} {
   }
 }
 
+#-------------------------------------------------------------------------
+# Float RHS filters on 1-byte and 4-byte integer metadata columns.
+reset_db
+vec1_load db
+
+do_execsql_test 10.0 {
+  CREATE VIRTUAL TABLE v_i4 USING vec1(v, a);
+  CREATE VIRTUAL TABLE v_i1 USING vec1(v, a);
+  CREATE TABLE ref_i4(id INTEGER PRIMARY KEY, a);
+  CREATE TABLE ref_i1(id INTEGER PRIMARY KEY, a);
+
+  INSERT INTO ref_i4(id, a) VALUES
+    (1, -2147483648),
+    (2, -3),
+    (3, -2),
+    (4, -1),
+    (5, 0),
+    (6, 1),
+    (7, 2),
+    (8, 3),
+    (9, 2147483646),
+    (10, NULL),
+    (11, -100),
+    (12, 100);
+  INSERT INTO v_i4(rowid, v, a)
+    SELECT id, vec1_from_json('['||id||',0,0,0]'), a FROM ref_i4;
+  INSERT INTO v_i4(cmd, arg) VALUES('rebuild', '{index:"flat"}');
+
+  INSERT INTO ref_i1(id, a) VALUES
+    (1, 0),
+    (2, 1),
+    (3, 2),
+    (4, 3),
+    (5, 254),
+    (6, NULL);
+  WITH RECURSIVE r(i) AS (SELECT 7 UNION ALL SELECT i+1 FROM r WHERE i<40)
+  INSERT INTO ref_i1(id, a) SELECT i, i%5 FROM r;
+  INSERT INTO v_i1(rowid, v, a)
+    SELECT id, vec1_from_json('['||id||',0,0,0]'), a FROM ref_i1;
+  INSERT INTO v_i1(cmd, arg) VALUES('rebuild', '{index:"flat"}');
+}
+
+set float_vals {
+  -1.5 -0.5 0.5 1.5 -1.0 -0.0 0.0 1.0
+  -1e30 1e30
+  -9223372036854775808.0 9223372036854775808.0
+  -2147483648.5 -2147483648.0 -2147483647.5
+  2147483645.5 2147483646.0 2147483646.5 2147483647.0
+  254.5 255.0
+}
+
+foreach {tab ref} {v_i4 ref_i4 v_i1 ref_i1} {
+  set idx 0
+  foreach op {< <= > >= = != IS {IS NOT}} {
+    foreach fv $float_vals {
+      incr idx
+      set expected [execsql "SELECT id FROM $ref WHERE a $op $fv ORDER BY 1"]
+      do_execsql_test 10.$tab.$idx "
+        SELECT rowid
+          FROM ${tab}(vec1_from_json('\[1,0,0,0\]'), 100)
+          WHERE a $op $fv
+          ORDER BY 1
+      " $expected
+    }
+  }
+
+  set in_list "-1.5, -1.0, -0.5, 0.5, 1.0, 1.5, -1e30, 1e30, -9223372036854775808.0, 9223372036854775808.0"
+  set expected [execsql "SELECT id FROM $ref WHERE a IN ($in_list) ORDER BY 1"]
+  do_execsql_test 10.$tab.in "
+    SELECT rowid
+      FROM ${tab}(vec1_from_json('\[1,0,0,0\]'), 100)
+      WHERE a IN ($in_list)
+      ORDER BY 1
+  " $expected
+}
+
 finish_test
 
