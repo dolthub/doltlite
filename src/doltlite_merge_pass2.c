@@ -616,6 +616,7 @@ int mergeCatalogPass2(
         if( newEntry.iTable >= *piNextMerged ) *piNextMerged = newEntry.iTable + 1;
 
         newEntry.zName = sqlite3_mprintf("%s", zName);
+        if( !newEntry.zName ) return SQLITE_NOMEM;
         aMerged[(*pnMerged)++] = newEntry;
       }else{
 

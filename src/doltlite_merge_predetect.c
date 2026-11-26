@@ -977,7 +977,7 @@ static int mergeRenameApplyOrder(
       if( rc!=SQLITE_OK ){ sqlite3_free(zTmp); goto apply_done; }
       azOut[nOut] = sqlite3_mprintf("%s", azOld[0]);
       azOut[nOut+1] = zTmp;
-      if( !azOut[nOut] || !azOut[nOut+1] ){ rc = SQLITE_NOMEM; goto apply_done; }
+      if( !azOut[nOut] ){ sqlite3_free(zTmp); rc = SQLITE_NOMEM; goto apply_done; }
       nOut += 2;
       azOld[0] = zTmp;
       continue;
@@ -986,7 +986,12 @@ static int mergeRenameApplyOrder(
     if( rc!=SQLITE_OK ) goto apply_done;
     azOut[nOut] = sqlite3_mprintf("%s", azOld[picked]);
     azOut[nOut+1] = sqlite3_mprintf("%s", azNew[picked]);
-    if( !azOut[nOut] || !azOut[nOut+1] ){ rc = SQLITE_NOMEM; goto apply_done; }
+    if( !azOut[nOut] || !azOut[nOut+1] ){
+      sqlite3_free(azOut[nOut]);
+      sqlite3_free(azOut[nOut+1]);
+      rc = SQLITE_NOMEM;
+      goto apply_done;
+    }
     nOut += 2;
     azOld[picked] = azOld[n-1];
     azNew[picked] = azNew[n-1];
@@ -1016,6 +1021,8 @@ static int mergeRecordTableRename(
   aNew[*pnActions].zTableName = sqlite3_mprintf("%s", zOld);
   aNew[*pnActions].zRenameTable = sqlite3_mprintf("%s", zNew);
   if( !aNew[*pnActions].zTableName || !aNew[*pnActions].zRenameTable ){
+    sqlite3_free(aNew[*pnActions].zTableName);
+    sqlite3_free(aNew[*pnActions].zRenameTable);
     return SQLITE_NOMEM;
   }
   (*pnActions)++;

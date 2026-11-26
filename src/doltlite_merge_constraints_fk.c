@@ -862,6 +862,8 @@ static int fkWalkTable(
     azFrom[nCol] = sqlite3_mprintf("%s", zFromRaw ? zFromRaw : "");
     azTo[nCol] = zToRaw ? sqlite3_mprintf("%s", zToRaw) : 0;
     if( !azFrom[nCol] || (zToRaw && !azTo[nCol]) ){
+      sqlite3_free(azFrom[nCol]);
+      sqlite3_free(azTo[nCol]);
       rc = SQLITE_NOMEM;
       break;
     }

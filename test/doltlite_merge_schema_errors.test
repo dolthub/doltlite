@@ -207,4 +207,101 @@ do_faultsim_test merge-schema-errors-oom-dual-col -faults oom-transient -prep {
   }
 }
 
+reset_db
+do_execsql_test merge-schema-errors-oom-rename-setup {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b TEXT, c INT);
+  INSERT INTO t VALUES(1, 10, 'hello', 30);
+  CREATE TABLE u(id INTEGER PRIMARY KEY, x INT);
+  INSERT INTO u VALUES(1, 100);
+  SELECT length(dolt_commit('-Am', 'base'));
+  SELECT dolt_branch('side');
+  SELECT dolt_checkout('side');
+  ALTER TABLE t RENAME COLUMN a TO tmp_a;
+  ALTER TABLE t RENAME COLUMN b TO a;
+  ALTER TABLE t RENAME COLUMN tmp_a TO b;
+  ALTER TABLE u RENAME TO u_renamed;
+  SELECT length(dolt_commit('-Am', 'side renames'));
+  SELECT dolt_checkout('main');
+  UPDATE u SET x = 200 WHERE id = 1;
+  SELECT length(dolt_commit('-am', 'main edit'));
+} {40 0 0 40 0 40}
+
+faultsim_save_and_close
+
+do_faultsim_test merge-schema-errors-oom-rename -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db one {SELECT length(dolt_merge('side'))}
+} -test {
+  if {$testnfail==0 && ($testrc!=0 || $testresult ne "40")} {
+    error "nfail=0 rc=$testrc result=$testresult"
+  }
+  if {$testrc==0 && $testresult ne "40"} {
+    error "rc=0 result=$testresult"
+  }
+}
+
+reset_db
+do_execsql_test merge-schema-errors-oom-new-table-setup {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+  INSERT INTO t VALUES(1, 10);
+  SELECT length(dolt_commit('-Am', 'base'));
+  SELECT dolt_branch('side');
+  SELECT dolt_checkout('side');
+  CREATE TABLE s_new(id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO s_new VALUES(1, 'from_side');
+  SELECT length(dolt_commit('-Am', 'side new table'));
+  SELECT dolt_checkout('main');
+  INSERT INTO t VALUES(2, 20);
+  SELECT length(dolt_commit('-am', 'main row'));
+} {40 0 0 40 0 40}
+
+faultsim_save_and_close
+
+do_faultsim_test merge-schema-errors-oom-new-table -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db one {SELECT length(dolt_merge('side'))}
+} -test {
+  if {$testnfail==0 && ($testrc!=0 || $testresult ne "40")} {
+    error "nfail=0 rc=$testrc result=$testresult"
+  }
+  if {$testrc==0 && $testresult ne "40"} {
+    error "rc=0 result=$testresult"
+  }
+}
+
+reset_db
+do_execsql_test merge-schema-errors-oom-fk-setup {
+  CREATE TABLE p(id INTEGER PRIMARY KEY, v INT);
+  CREATE TABLE c(id INTEGER PRIMARY KEY, pid INT REFERENCES p(id), note TEXT);
+  INSERT INTO p VALUES(1, 10);
+  INSERT INTO c VALUES(1, 1, 'base');
+  SELECT length(dolt_commit('-Am', 'base'));
+  SELECT dolt_branch('side');
+  SELECT dolt_checkout('side');
+  INSERT INTO p VALUES(3, 30);
+  INSERT INTO c VALUES(3, 3, 'side');
+  SELECT length(dolt_commit('-am', 'side fk rows'));
+  SELECT dolt_checkout('main');
+  INSERT INTO p VALUES(2, 20);
+  INSERT INTO c VALUES(2, 2, 'main');
+  SELECT length(dolt_commit('-am', 'main fk rows'));
+} {40 0 0 40 0 40}
+
+faultsim_save_and_close
+
+do_faultsim_test merge-schema-errors-oom-fk -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db one {SELECT length(dolt_merge('side'))}
+} -test {
+  if {$testnfail==0 && ($testrc!=0 || $testresult ne "40")} {
+    error "nfail=0 rc=$testrc result=$testresult"
+  }
+  if {$testrc==0 && $testresult ne "40"} {
+    error "rc=0 result=$testresult"
+  }
+}
+
 finish_test
