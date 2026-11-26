@@ -560,6 +560,7 @@ static int sortKeyEncodeMemArray(
     const u8 *pField;
     int coll;
     int rc = sortKeyMemSerialType(pMem, &serialType, &fieldLen);
+    if( rc==SQLITE_NOMEM ) return -4;
     if( rc==SQLITE_NOTFOUND ) return -3;
     if( rc==SQLITE_TOOBIG ) return -2;
     if( rc!=SQLITE_OK ) return -1;
@@ -693,6 +694,7 @@ int sortKeyFromMemPrefixCollBuffer(
   u8 **ppBuf, int *pnAlloc, int *pnOut
 ){
   int nSize;
+  int nWritten;
   int nAlloc;
   int rc;
 
@@ -704,6 +706,7 @@ int sortKeyFromMemPrefixCollBuffer(
   if( rc!=SQLITE_NOTFOUND ) return rc;
 
   nSize = sortKeyEncodeMemArray(aMem, nMem, nKeyField, pKeyInfo, 0);
+  if( nSize == -4 ) return SQLITE_NOMEM;
   if( nSize == -3 ) return SQLITE_NOTFOUND;
   if( nSize == -2 ) return SQLITE_TOOBIG;
   if( nSize < 0 ) return SQLITE_CORRUPT;
@@ -716,7 +719,9 @@ int sortKeyFromMemPrefixCollBuffer(
     *pnAlloc = nAlloc;
   }
 
-  if( nSize != sortKeyEncodeMemArray(aMem, nMem, nKeyField, pKeyInfo, *ppBuf) ){
+  nWritten = sortKeyEncodeMemArray(aMem, nMem, nKeyField, pKeyInfo, *ppBuf);
+  if( nWritten == -4 ) return SQLITE_NOMEM;
+  if( nWritten != nSize ){
     return SQLITE_CORRUPT;
   }
   *pnOut = nSize;

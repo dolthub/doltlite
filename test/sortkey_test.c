@@ -8,6 +8,40 @@
 static int nPass = 0;
 static int nFail = 0;
 
+static sqlite3_mem_methods gRealMem;
+static int gOomFailNext = 0;
+static int gOomTriggered = 0;
+
+static void *oomMalloc(int n){
+  if( gOomFailNext ){
+    gOomTriggered = 1;
+    return 0;
+  }
+  return gRealMem.xMalloc(n);
+}
+
+static void oomFree(void *p){
+  if( p==0 ) return;
+  gRealMem.xFree(p);
+}
+
+static void *oomRealloc(void *p, int n){
+  if( gOomFailNext ){
+    gOomTriggered = 1;
+    return 0;
+  }
+  return gRealMem.xRealloc(p, n);
+}
+
+static int oomSize(void *p){ return gRealMem.xSize(p); }
+static int oomRoundup(int n){ return gRealMem.xRoundup(n); }
+static int oomInit(void *p){ return gRealMem.xInit ? gRealMem.xInit(p) : SQLITE_OK; }
+static void oomShutdown(void *p){ if( gRealMem.xShutdown ) gRealMem.xShutdown(p); }
+
+static sqlite3_mem_methods gOomMem = {
+  oomMalloc, oomFree, oomRealloc, oomSize, oomRoundup, oomInit, oomShutdown, 0
+};
+
 static void check(const char *zName, int ok){
   if( ok ){
     nPass++;
@@ -393,13 +427,95 @@ static void testMemSerialTypeOverflow(void){
   sqlite3_free(pDesc);
 }
 
+static void testMemZeroOom(void){
+  static char aPrefix[4] = { 'a', 'b', 'c', 'd' };
+  u8 aFlagDesc[1] = { KEYINFO_ORDER_DESC };
+  KeyInfo *pDesc = allocKeyInfo(1, aFlagDesc);
+  u8 *pBuf = 0;
+  int nAlloc = 0;
+  int nOut = -1;
+  Mem aMem[2];
+  int rc;
+
+  check("alloc_keyinfo_zero_oom", pDesc!=0);
+  if( !pDesc ) return;
+
+  /* Pure zeroblob under OOM must return SQLITE_NOMEM, not SQLITE_CORRUPT. */
+  memset(aMem, 0, sizeof(aMem));
+  aMem[0].flags = MEM_Blob | MEM_Zero;
+  aMem[0].n = 0;
+  aMem[0].u.nZero = 64;
+  gOomTriggered = 0;
+  gOomFailNext = 1;
+  rc = sortKeyFromMemPrefixCollBuffer(&aMem[0], 1, 0, 0, &pBuf, &nAlloc, &nOut);
+  gOomFailNext = 0;
+  check("mem_zero_oom_single", rc==SQLITE_NOMEM && nOut==0 && gOomTriggered);
+  sqlite3VdbeMemRelease(&aMem[0]);
+
+  /* Static prefix + zeroblob tail under OOM. */
+  memset(aMem, 0, sizeof(aMem));
+  aMem[0].flags = MEM_Blob | MEM_Zero | MEM_Static;
+  aMem[0].z = aPrefix;
+  aMem[0].n = 4;
+  aMem[0].u.nZero = 64;
+  gOomTriggered = 0;
+  gOomFailNext = 1;
+  rc = sortKeyFromMemPrefixCollBuffer(&aMem[0], 1, 0, 0, &pBuf, &nAlloc, &nOut);
+  gOomFailNext = 0;
+  check("mem_zero_oom_prefix", rc==SQLITE_NOMEM && nOut==0 && gOomTriggered);
+  sqlite3VdbeMemRelease(&aMem[0]);
+
+  /* Multi-field [INT, zeroblob] under OOM. */
+  memset(aMem, 0, sizeof(aMem));
+  aMem[0].flags = MEM_Int;
+  aMem[0].u.i = 7;
+  aMem[1].flags = MEM_Blob | MEM_Zero;
+  aMem[1].n = 0;
+  aMem[1].u.nZero = 64;
+  gOomTriggered = 0;
+  gOomFailNext = 1;
+  rc = sortKeyFromMemPrefixCollBuffer(aMem, 2, 0, 0, &pBuf, &nAlloc, &nOut);
+  gOomFailNext = 0;
+  check("mem_zero_oom_multi", rc==SQLITE_NOMEM && nOut==0 && gOomTriggered);
+  sqlite3VdbeMemRelease(&aMem[1]);
+
+  /* DESC single-field zeroblob under OOM. */
+  memset(aMem, 0, sizeof(aMem));
+  aMem[0].flags = MEM_Blob | MEM_Zero;
+  aMem[0].n = 0;
+  aMem[0].u.nZero = 64;
+  gOomTriggered = 0;
+  gOomFailNext = 1;
+  rc = sortKeyFromMemPrefixCollBuffer(&aMem[0], 1, 0, pDesc, &pBuf, &nAlloc, &nOut);
+  gOomFailNext = 0;
+  check("mem_zero_oom_desc", rc==SQLITE_NOMEM && nOut==0 && gOomTriggered);
+  sqlite3VdbeMemRelease(&aMem[0]);
+
+  /* Without OOM, the same zeroblob encodes normally. */
+  memset(aMem, 0, sizeof(aMem));
+  aMem[0].flags = MEM_Blob | MEM_Zero;
+  aMem[0].n = 0;
+  aMem[0].u.nZero = 16;
+  rc = sortKeyFromMemPrefixCollBuffer(&aMem[0], 1, 0, 0, &pBuf, &nAlloc, &nOut);
+  check("mem_zero_ok", rc==SQLITE_OK && nOut>0);
+  sqlite3VdbeMemRelease(&aMem[0]);
+
+  sqlite3_free(pBuf);
+  sqlite3_free(pDesc);
+}
+
 int main(void){
+  check("install_oom_getmalloc",
+        sqlite3_config(SQLITE_CONFIG_GETMALLOC, &gRealMem)==SQLITE_OK);
+  check("install_oom_malloc",
+        sqlite3_config(SQLITE_CONFIG_MALLOC, &gOomMem)==SQLITE_OK);
   testUnterminatedAsc();
   testUnterminatedNumericFastPath();
   testUnterminatedDesc();
   testValidRoundTrips();
   testSerialTypeOverflowHelper();
   testMemSerialTypeOverflow();
+  testMemZeroOom();
   printf("sortkey_test: %d passed, %d failed\n", nPass, nFail);
   return nFail ? 1 : 0;
 }
