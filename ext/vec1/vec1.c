@@ -5003,10 +5003,10 @@ static void vec1TrainLogTimes(Vec1TrainCtx *p){
         if( rc!=SQLITE_OK ){
           sqlite3_result_error(p->pCtx, zErrmsg, -1);
           sqlite3_result_error_code(p->pCtx, rc);
-          break;
         }
         sqlite3_free(zErrmsg);
         sqlite3_free(zSql);
+        if( rc!=SQLITE_OK ) break;
       }
     }
   }
@@ -9650,7 +9650,7 @@ static void vec1DistanceStats(sqlite3_context *ctx, Vec1Csr *pCsr){
       /* Find bucket and coarse error if applicable. */
       if( pMod->hdr.nBucket>1 ){
         iBucket = vec1BestMatchSimple(
-            pMod->aCentroid, pMod->hdr.nBucket, aVec, nElem, &fCoarseError
+            pMod->aCentroid, pMod->hdr.nBucket, aTransform, nElem, &fCoarseError
         );
         if( aTransform!=pTab->aTmpVec ){
           memcpy(pTab->aTmpVec, aTransform, nElem*sizeof_f32);

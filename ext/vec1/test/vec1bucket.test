@@ -191,4 +191,106 @@ do_execsql_test 3.3 {
   PRAGMA integrity_check;
 } [list [expr {$nVec/2}] ok]
 
+#-------------------------------------------------------------------------
+# Verify vec1DistanceStats (SELECT distance FROM v) reports the transformed
+# bucket and coarse_error for cosine and OPQ models, matching the actual
+# bucket stored in %_base / %_idx.
+#
+do_test 4.0 {
+  db eval {
+    CREATE VIRTUAL TABLE v4 USING vec1(v);
+    WITH s(i) AS (
+      VALUES(1) UNION ALL SELECT i+1 FROM s WHERE i<600
+    )
+    INSERT INTO v4(rowid, v)
+      SELECT i, random_vector(16, CASE WHEN i%2=0 THEN 100.0 ELSE 0.01 END)
+      FROM s;
+    INSERT INTO v4(cmd, arg) VALUES('rebuild', (
+      SELECT vec1_train(v, '{nbucket:8, distance:"cos"}') FROM v4
+    ));
+  }
+  model2tbl v4_centroids v4
+
+  set nMismatch 0
+  set nErrBad 0
+  db eval {
+    SELECT v4.rowid AS rid, v4.v AS vec, v4.distance AS dist,
+           v4_base.vector AS actual_bucket
+    FROM v4 JOIN v4_base ON v4.rowid = v4_base.id
+  } {
+    set rep_bucket [db one {SELECT json_extract($dist, '$.bucket')}]
+    set rep_err    [db one {SELECT json_extract($dist, '$.coarse_error')}]
+    if {$rep_bucket != $actual_bucket} {
+      incr nMismatch
+    }
+    binary scan $vec f* vals
+    set norm2 0.0
+    foreach x $vals { set norm2 [expr {$norm2 + $x*$x}] }
+    set norm [expr {sqrt($norm2)}]
+    set nvals [lmap x $vals {expr {$x / $norm}}]
+    set cent [db one {SELECT coarse FROM v4_centroids WHERE ibucket=$actual_bucket}]
+    binary scan $cent f* cvals
+    set d2 0.0
+    foreach a $nvals b $cvals { set d2 [expr {$d2 + ($a-$b)*($a-$b)}] }
+    set exp_err [expr {sqrt($d2)}]
+    if {abs($rep_err - $exp_err) > 1e-4} {
+      incr nErrBad
+    }
+  }
+  list $nMismatch $nErrBad
+} {0 0}
+
+do_test 4.1 {
+  set T_opq [db one {
+    SELECT vec1_train(v, '{nbucket:8, codesize:8, opq:true, distance:"cos"}')
+    FROM v4
+  }]
+  db eval {
+    CREATE VIRTUAL TABLE v5 USING vec1(v);
+    INSERT INTO v5(cmd, arg) VALUES('rebuild', $T_opq);
+  }
+  set nMismatch 0
+  for {set i 1} {$i<=20} {incr i} {
+    set scale [expr {($i % 2 == 0) ? 50.0 : 0.05}]
+    db eval {
+      INSERT INTO v5(rowid, v) VALUES($i, random_vector(16, $scale));
+    }
+    set actual_bucket [db one {SELECT bucket FROM v5_idx}]
+    set rep_bucket [db one {
+      SELECT json_extract(distance, '$.bucket') FROM v5 WHERE rowid=$i
+    }]
+    if {$rep_bucket != $actual_bucket} {
+      incr nMismatch
+    }
+    db eval { DELETE FROM v5 WHERE rowid=$i }
+  }
+  set nMismatch
+} 0
+
+do_test 4.2 {
+  set T_opq_l2 [db one {
+    SELECT vec1_train(v, '{nbucket:8, codesize:8, opq:true}')
+    FROM v4
+  }]
+  db eval {
+    CREATE VIRTUAL TABLE v6 USING vec1(v);
+    INSERT INTO v6(cmd, arg) VALUES('rebuild', $T_opq_l2);
+  }
+  set nMismatch 0
+  for {set i 1} {$i<=20} {incr i} {
+    db eval {
+      INSERT INTO v6(rowid, v) VALUES($i, random_vector(16, 10.0));
+    }
+    set actual_bucket [db one {SELECT bucket FROM v6_idx}]
+    set rep_bucket [db one {
+      SELECT json_extract(distance, '$.bucket') FROM v6 WHERE rowid=$i
+    }]
+    if {$rep_bucket != $actual_bucket} {
+      incr nMismatch
+    }
+    db eval { DELETE FROM v6 WHERE rowid=$i }
+  }
+  set nMismatch
+} 0
+
 finish_test
