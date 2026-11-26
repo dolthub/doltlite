@@ -635,6 +635,17 @@ int saveCursorPosition(BtCursor *pCur){
     return SQLITE_OK;
   }
 
+  if( pCur->curIntKey && (pCur->curFlags & BTCF_DeleteKey) ){
+    pCur->nKey = pCur->cachedIntKey;
+    pCur->pKey = 0;
+    prollyCursorReleaseAll(&pCur->pCur);
+    pCur->deferredTreeSeek = 0;
+    pCur->curFlags &= ~BTCF_DeleteKey;
+    pCur->eState = CURSOR_REQUIRESEEK;
+    assert( pCur->pCur.eState!=PROLLY_CURSOR_VALID );
+    return SQLITE_OK;
+  }
+
   /* Mut-map rows may have no tree position (all rows still pending). */
   if( !prollyCursorIsValid(&pCur->pCur)
    && !(pCur->mmActive

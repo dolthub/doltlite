@@ -328,3 +328,4 @@ doltlite_prolly_btree_error_paths
 doltlite_merge_cv_oom
 doltlite_constraint_violation_json
 doltlite_vc_oom
+doltlite_savecursor_deletekey

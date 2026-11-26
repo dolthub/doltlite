@@ -69,6 +69,7 @@ int prollyBtCursorTableMoveto(
   CLEAR_CACHED_PAYLOAD(pCur);
   CLEAR_CACHED_SEEK_KEY(pCur);
   CLEAR_CACHED_COMPARE_KEY(pCur);
+  pCur->curFlags &= ~BTCF_DeleteKey;
 
   pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
   if( pTE && pTE->pPending && pCur->pMutMap!=(ProllyMutMap*)pTE->pPending ){

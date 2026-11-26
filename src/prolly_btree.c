@@ -2769,7 +2769,7 @@ void prollyBtCursorClearCursor(BtCursor *pCur){
   }
   CLEAR_CACHED_PAYLOAD(pCur);
   clearMergeCursorState(pCur);
-  pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_AtLast);
+  pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_AtLast|BTCF_DeleteKey);
   if( pCur->eState==CURSOR_FAULT && pCur->bCatalogGone ) return;
   pCur->eState = CURSOR_INVALID;
   pCur->skipNext = 0;
