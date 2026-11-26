@@ -21,6 +21,7 @@
 typedef struct RebaseFinalizeRefsCtx RebaseFinalizeRefsCtx;
 struct RebaseFinalizeRefsCtx {
   const char *zOrigBranch;
+  const char *zReturnBranch;
   const char *zWorkingBranch;
   const ProllyHash *pExpectedOrigHead;
   const ProllyHash *pExpectedOrigCat;
@@ -43,11 +44,13 @@ struct RebaseCreateRefsCtx {
 typedef struct RebaseAbortRefsCtx RebaseAbortRefsCtx;
 struct RebaseAbortRefsCtx {
   const char *zOrigBranch;
+  const char *zReturnBranch;
   const char *zWorkingBranch;
 };
 
 static char *rebaseBuildWorkingBranchName(const char *zOrigBranch);
 static int rebaseRestoreBranchState(sqlite3 *db, const char *zBranch);
+static int rebaseRestoreReturnBranchWorkingState(sqlite3 *db, const char *zBranch);
 static int rebaseFinalizeContinueRefs(sqlite3*, ChunkStore*, void*);
 static int rebaseFinalizeLinearRefs(sqlite3*, ChunkStore*, void*);
 static int rebaseDeleteWorkingBranchRefs(sqlite3*, ChunkStore*, void*);
@@ -124,6 +127,11 @@ static int rebaseAbortLinearRefs(
   int rc;
   rc = doltliteClearBranchRebaseMetadata(db, p->zOrigBranch);
   if( rc!=SQLITE_OK ) return rc;
+  if( p->zReturnBranch && p->zReturnBranch[0]
+   && sqlite3_stricmp(p->zReturnBranch, p->zOrigBranch)!=0 ){
+    rc = rebaseRestoreReturnBranchWorkingState(db, p->zReturnBranch);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   rc = chunkStoreDeleteBranch(cs, p->zWorkingBranch);
   return rc==SQLITE_NOTFOUND ? SQLITE_OK : rc;
 }
@@ -1749,6 +1757,11 @@ static int rebaseFinalizeLinearRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   int rc;
   rc = rebaseFinalizeContinueRefs(db, cs, pArg);
   if( rc!=SQLITE_OK ) return rc;
+  if( p->zReturnBranch && p->zReturnBranch[0]
+   && sqlite3_stricmp(p->zReturnBranch, p->zOrigBranch)!=0 ){
+    rc = rebaseRestoreReturnBranchWorkingState(db, p->zReturnBranch);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   rc = chunkStoreDeleteBranch(cs, p->zWorkingBranch);
   return rc==SQLITE_NOTFOUND ? SQLITE_OK : rc;
 }
@@ -2391,7 +2404,9 @@ static int rebaseHasUnstagedResolution(sqlite3 *db, int *pUnstaged){
 ** return the session to the pre-rebase branch. */
 static int rebaseAbortPausedSession(sqlite3 *db){
   const char *zOrigConst = 0;
+  const char *zReturnConst = 0;
   char *zOrig = 0;
+  char *zReturn = 0;
   char *zWorking = 0;
   ProllyHash head;
   ProllyHash empty;
@@ -2402,12 +2417,20 @@ static int rebaseAbortPausedSession(sqlite3 *db){
   memset(&head, 0, sizeof(head));
   memset(&empty, 0, sizeof(empty));
   memset(&c, 0, sizeof(c));
-  doltliteGetSessionRebaseState(db, 0, 0, 0, &zOrigConst, 0);
+  doltliteGetSessionRebaseState(db, 0, 0, 0, &zOrigConst, &zReturnConst);
   if( !zOrigConst || !zOrigConst[0] ) return SQLITE_ERROR;
   zOrig = sqlite3_mprintf("%s", zOrigConst);
+  if( zReturnConst && zReturnConst[0] ){
+    zReturn = sqlite3_mprintf("%s", zReturnConst);
+    if( !zReturn ){
+      sqlite3_free(zOrig);
+      return SQLITE_NOMEM;
+    }
+  }
   zWorking = rebaseBuildWorkingBranchName(zOrig);
   if( !zOrig || !zWorking ){
     sqlite3_free(zOrig);
+    sqlite3_free(zReturn);
     sqlite3_free(zWorking);
     return SQLITE_NOMEM;
   }
@@ -2426,11 +2449,13 @@ static int rebaseAbortPausedSession(sqlite3 *db){
   if( rc==SQLITE_OK ){
     memset(&abortCtx, 0, sizeof(abortCtx));
     abortCtx.zOrigBranch = zOrig;
+    abortCtx.zReturnBranch = zReturn;
     abortCtx.zWorkingBranch = zWorking;
     rc = doltliteMutateRefs(db, rebaseAbortLinearRefs, &abortCtx);
   }
   if( rc==SQLITE_OK ) rc = rebaseRestoreBranchState(db, zOrig);
   sqlite3_free(zOrig);
+  sqlite3_free(zReturn);
   sqlite3_free(zWorking);
   return rc;
 }
@@ -2707,6 +2732,7 @@ static int rebaseReplayPausedTail(
 static int rebaseFinishPaused(
   sqlite3 *db,
   const char *zOrig,
+  const char *zReturn,
   const char *zWorking
 ){
   ProllyHash expectedOrig;
@@ -2731,6 +2757,7 @@ static int rebaseFinishPaused(
 
   memset(&refsCtx, 0, sizeof(refsCtx));
   refsCtx.zOrigBranch = zOrig;
+  refsCtx.zReturnBranch = zReturn;
   refsCtx.zWorkingBranch = zWorking;
   refsCtx.pExpectedOrigHead = &expectedOrig;
   refsCtx.pExpectedOrigCat = &expectedOrigCat;
@@ -2932,7 +2959,7 @@ static void doltliteRebasePausedContinue(
     return;
   }
 
-  rc = rebaseFinishPaused(db, zOrig, zWorking);
+  rc = rebaseFinishPaused(db, zOrig, zPauseReturn, zWorking);
   rebaseFreePlan(aPlan, nPlan);
   if( rc!=SQLITE_OK ){
     sqlite3_free(zOrig);

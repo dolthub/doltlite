@@ -96,4 +96,99 @@ foreach operation {merge cherry_pick revert} {
 }
 
 forcedelete rebase-conflict-check.tcl
+
+# Verify conflict-paused rebase of a non-default branch onto main does not
+# leave mirrored rebase flags on main after --continue or --abort.
+foreach end_mode {continue abort_immediate abort_after_step} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INT PRIMARY KEY, v INT);
+    INSERT INTO t VALUES(1, 1), (2, 10);
+    SELECT dolt_commit('-Am', 'base');
+    SELECT dolt_branch('extra');
+    SELECT dolt_checkout('extra');
+    INSERT INTO t VALUES(3, 30);
+    SELECT dolt_commit('-am', 'extra commit');
+    SELECT dolt_checkout('main');
+    SELECT dolt_checkout('-b', 'feat');
+    UPDATE t SET v = 2 WHERE id = 1;
+    SELECT dolt_commit('-am', 'feat 1');
+    UPDATE t SET v = 20 WHERE id = 2;
+    SELECT dolt_commit('-am', 'feat 2');
+    SELECT dolt_checkout('main');
+    UPDATE t SET v = 9 WHERE id = 1;
+    UPDATE t SET v = 90 WHERE id = 2;
+    SELECT dolt_commit('-am', 'main diverge');
+    SELECT dolt_checkout('feat');
+    BEGIN;
+  }
+
+  set prefix rebase-paused-return-$end_mode
+  do_test $prefix-pause {
+    set res [catchsql {SELECT dolt_rebase('main')}]
+    list [lindex $res 0] [db one {SELECT count(*) FROM dolt_conflicts}]
+  } {1 1}
+
+  if {$end_mode eq "continue"} {
+    do_test $prefix-resolve-1 {
+      execsql {
+        SELECT dolt_conflicts_resolve('--theirs', 't');
+        SELECT dolt_add('.');
+      }
+      set res [catchsql {SELECT dolt_rebase('--continue')}]
+      list [lindex $res 0] [db one {SELECT count(*) FROM dolt_conflicts}]
+    } {1 1}
+    do_test $prefix-resolve-2 {
+      execsql {
+        SELECT dolt_conflicts_resolve('--theirs', 't');
+        SELECT dolt_add('.');
+      }
+      set res [catchsql {SELECT dolt_rebase('--continue')}]
+      list [lindex $res 0] [string match {*Successfully rebased*} [lindex $res 1]]
+    } {0 1}
+    execsql {COMMIT}
+  } elseif {$end_mode eq "abort_immediate"} {
+    do_test $prefix-abort {
+      set res [catchsql {SELECT dolt_rebase('--abort')}]
+      list [lindex $res 0] [string match {*aborted*} [lindex $res 1]]
+    } {0 1}
+    execsql {COMMIT}
+  } else {
+    do_test $prefix-resolve-1 {
+      execsql {
+        SELECT dolt_conflicts_resolve('--theirs', 't');
+        SELECT dolt_add('.');
+      }
+      set res [catchsql {SELECT dolt_rebase('--continue')}]
+      list [lindex $res 0] [db one {SELECT count(*) FROM dolt_conflicts}]
+    } {1 1}
+    do_test $prefix-abort-after-step {
+      set res [catchsql {SELECT dolt_rebase('--abort')}]
+      list [lindex $res 0] [string match {*aborted*} [lindex $res 1]]
+    } {0 1}
+    execsql {COMMIT}
+  }
+
+  # Switch to main and verify no phantom rebase state remains.
+  do_test $prefix-switch-main {
+    execsql {SELECT dolt_checkout('main')}
+    list [db one {SELECT active_branch()}] \
+         [db one {SELECT count(*) FROM dolt_branches WHERE name = 'dolt_rebase_feat'}] \
+         [lindex [catchsql {SELECT dolt_commit('--amend', '-m', 'main amend 1')}] 0]
+  } {main 0 0}
+
+  # Reopen DB (lands on default branch main) and verify all branch-mutating ops work.
+  db close
+  sqlite3 db test.db
+  do_test $prefix-reopen-main-ops {
+    set b [db one {SELECT active_branch()}]
+    set amend_rc [lindex [catchsql {SELECT dolt_commit('--amend', '-m', 'main amend 2')}] 0]
+    set cp_rc [lindex [catchsql {SELECT dolt_cherry_pick('extra')}] 0]
+    set head_before_rev [db one {SELECT dolt_hashof('HEAD')}]
+    set rev_rc [lindex [catchsql "SELECT dolt_revert('$head_before_rev')"] 0]
+    set reb_rc [lindex [catchsql {SELECT dolt_rebase('extra')}] 0]
+    list $b $amend_rc $cp_rc $rev_rc $reb_rc [db one {PRAGMA integrity_check}]
+  } {main 0 0 0 0 ok}
+}
+
 finish_test
