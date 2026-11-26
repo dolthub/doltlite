@@ -714,4 +714,65 @@ NULL|2|10|old2
 NULL|3|NULL|old3" "$DBCPK"
 rm -f "$DBCPK"
 
+DBPKE=/tmp/test_at_pk_pushdown_ref_err_$$.db; rm -f "$DBPKE"
+$DOLTLITE "$DBPKE" > /dev/null 2>&1 <<'SQL'
+CREATE TABLE u(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am', 'c0');
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'a'), (2, 'b');
+CREATE TABLE w(k INT PRIMARY KEY, v TEXT) WITHOUT ROWID;
+INSERT INTO w VALUES (1, 'a'), (2, 'b');
+CREATE TABLE wc(a INT, b INT, v TEXT, PRIMARY KEY(a, b)) WITHOUT ROWID;
+INSERT INTO wc VALUES (1, 2, 'a');
+SELECT dolt_commit('-Am', 'c1');
+SQL
+
+run_test_error_match "at_rowid_bad_ref_empty_pk_range" \
+  "SELECT * FROM dolt_at_t('no_such_ref') WHERE id > 10 AND id < 5;" \
+  "ref not found: no_such_ref" "$DBPKE"
+run_test_error_match "at_rowid_null_ref_empty_pk_range" \
+  "SELECT * FROM dolt_at_t(NULL) WHERE id > 10 AND id < 5;" \
+  "invalid argument: NULL" "$DBPKE"
+run_test_error_match "at_rowid_bad_ref_null_pk_eq" \
+  "SELECT * FROM dolt_at_t('no_such_ref') WHERE id = NULL;" \
+  "ref not found: no_such_ref" "$DBPKE"
+run_test_error_match "at_rowid_null_ref_null_pk_eq" \
+  "SELECT * FROM dolt_at_t(NULL) WHERE id = NULL;" \
+  "invalid argument: NULL" "$DBPKE"
+run_test_error_match "at_rowid_bad_ref_null_pk_gt" \
+  "SELECT * FROM dolt_at_t('no_such_ref') WHERE id > NULL;" \
+  "ref not found: no_such_ref" "$DBPKE"
+run_test_error_match "at_rowid_bad_ref_type_mismatch_pk" \
+  "SELECT * FROM dolt_at_t('no_such_ref') WHERE id = 'bad';" \
+  "ref not found: no_such_ref" "$DBPKE"
+run_test_error_match "at_rowid_missing_table_null_pk" \
+  "SELECT * FROM dolt_at_t('HEAD~1') WHERE id = NULL;" \
+  "table not found: t at HEAD~1" "$DBPKE"
+run_test_error_match "at_rowid_missing_table_empty_range" \
+  "SELECT * FROM dolt_at_t('HEAD~1') WHERE id > 10 AND id < 5;" \
+  "table not found: t at HEAD~1" "$DBPKE"
+
+run_test_error_match "at_wor_bad_ref_null_pk" \
+  "SELECT * FROM dolt_at_w('no_such_ref') WHERE k = NULL;" \
+  "ref not found: no_such_ref" "$DBPKE"
+run_test_error_match "at_wor_null_ref_null_pk" \
+  "SELECT * FROM dolt_at_w(NULL) WHERE k = NULL;" \
+  "invalid argument: NULL" "$DBPKE"
+run_test_error_match "at_wor_bad_ref_empty_range" \
+  "SELECT * FROM dolt_at_w('no_such_ref') WHERE k > 10 AND k < 5;" \
+  "ref not found: no_such_ref" "$DBPKE"
+run_test_error_match "at_wor_null_ref_empty_range" \
+  "SELECT * FROM dolt_at_w(NULL) WHERE k > 10 AND k < 5;" \
+  "invalid argument: NULL" "$DBPKE"
+run_test_error_match "at_wor_composite_bad_ref_null_pk" \
+  "SELECT * FROM dolt_at_wc('no_such_ref') WHERE a = 1 AND b = NULL;" \
+  "ref not found: no_such_ref" "$DBPKE"
+run_test_error_match "at_wor_composite_null_ref_null_pk" \
+  "SELECT * FROM dolt_at_wc(NULL) WHERE a = 1 AND b = NULL;" \
+  "invalid argument: NULL" "$DBPKE"
+run_test_error_match "at_wor_missing_table_null_pk" \
+  "SELECT * FROM dolt_at_w('HEAD~1') WHERE k = NULL;" \
+  "table not found: w at HEAD~1" "$DBPKE"
+rm -f "$DBPKE"
+
 dltest_finish

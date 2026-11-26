@@ -356,6 +356,7 @@ static int htFilter(sqlite3_vtab_cursor *cur,
   ChunkStore *cs;
   int rc;
   int iArg = 0;
+  int emptyPk = 0;
   int invalidCommit = 0;
   (void)idxStr;
 
@@ -366,20 +367,23 @@ static int htFilter(sqlite3_vtab_cursor *cur,
   c->idxNum = idxNum;
   if( (idxNum & HIST_IDX_PK_EQ) && v->cols.iPkCol<0 && v->cols.nPk>0 ){
     int iPk;
-    for(iPk=0; iPk<v->cols.nPk && iPk<argc; iPk++){
-      if( sqlite3_value_type(argv[iPk])==SQLITE_NULL ) return SQLITE_OK;
+    if( argc<v->cols.nPk ){
+      emptyPk = 1;
+    }else{
+      for(iPk=0; iPk<v->cols.nPk; iPk++){
+        if( sqlite3_value_type(argv[iPk])==SQLITE_NULL ){
+          emptyPk = 1;
+          break;
+        }
+      }
     }
-    rc = doltliteSortKeyFromPkValues(v->db, v->zTableName,
-                                     v->cols.nPk, argv,
-                                     &c->pPkBlob, &c->nPkBlob);
-    if( rc!=SQLITE_OK ) return rc;
     iArg = v->cols.nPk;
   }else{
     doltlitePkRangeFromArgs(idxNum,
         HIST_IDX_PK_EQ, HIST_IDX_PK_GE, HIST_IDX_PK_LE,
         HIST_IDX_PK_GT, HIST_IDX_PK_LT,
         argc, argv, &c->pkRange);
-    if( c->pkRange.isEmpty ) return SQLITE_OK;
+    if( c->pkRange.isEmpty ) emptyPk = 1;
     if( idxNum & HIST_IDX_PK_EQ ){
       iArg = 1;
     }else{
@@ -434,13 +438,20 @@ static int htFilter(sqlite3_vtab_cursor *cur,
     if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
   }
 
-  if( invalidCommit ) return SQLITE_OK;
+  if( emptyPk || invalidCommit ) return SQLITE_OK;
   if( c->singleCommit ){
     int reachable = 0;
     rc = doltliteCommitIsReachable(v->db, &head, &startHash, &reachable);
     if( rc!=SQLITE_OK ) return rc;
     if( !reachable ) return SQLITE_OK;
     head = startHash;
+  }
+
+  if( (idxNum & HIST_IDX_PK_EQ) && v->cols.iPkCol<0 && v->cols.nPk>0 ){
+    rc = doltliteSortKeyFromPkValues(v->db, v->zTableName,
+                                     v->cols.nPk, argv,
+                                     &c->pPkBlob, &c->nPkBlob);
+    if( rc!=SQLITE_OK ) return rc;
   }
 
   rc = doltliteCommitQueueInit(&c->queue, &head);
