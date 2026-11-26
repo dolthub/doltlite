@@ -191,4 +191,75 @@ foreach end_mode {continue abort_immediate abort_after_step} {
   } {main 0 0 0 0 ok}
 }
 
+# Verify dolt_rebase (linear and interactive) is rejected when a cherry-pick
+# or revert has had its conflicts resolved via --ours but has not yet been
+# continued or aborted, and that the pending replay can still finish cleanly.
+foreach {operation expected_err} {
+  cherry_pick {*unable to start rebase while a cherry-pick is in progress*}
+  revert      {*unable to start rebase while a revert is in progress*}
+} {
+  foreach {mode rebase} {
+    linear      {SELECT dolt_rebase('f')}
+    interactive {SELECT dolt_rebase('-i','f')}
+  } {
+    foreach finish {continue abort} {
+      reset_db
+      execsql {
+        CREATE TABLE t(id INT PRIMARY KEY, v INT);
+        INSERT INTO t VALUES(1, 1), (2, 10);
+        SELECT dolt_commit('-Am', 'base');
+        SELECT dolt_branch('f');
+        SELECT dolt_checkout('-b', 'g');
+        UPDATE t SET v = 7 WHERE id = 1;
+        UPDATE t SET v = 70 WHERE id = 2;
+        SELECT dolt_commit('-am', 'other');
+        SELECT dolt_checkout('main');
+        UPDATE t SET v = 5 WHERE id = 1;
+        SELECT dolt_commit('-am', 'main');
+        BEGIN;
+      }
+      set prefix rebase-pending-replay-$operation-$mode-$finish
+      do_test $prefix-conflict {
+        set res [catchsql "SELECT dolt_${operation}('g')"]
+        list [lindex $res 0] [db one {SELECT count(*) FROM dolt_conflicts}]
+      } {1 1}
+      do_test $prefix-resolve-ours {
+        execsql {SELECT dolt_conflicts_resolve('--ours', 't')}
+        db one {SELECT count(*) FROM dolt_conflicts}
+      } {0}
+      set head [execsql {SELECT dolt_hashof('HEAD')}]
+      set staged [execsql {SELECT dolt_hashof_db('STAGED')}]
+      set rows [execsql {SELECT * FROM t ORDER BY id}]
+      set branches [execsql {SELECT name, hash FROM dolt_branches ORDER BY name}]
+      do_test $prefix-refused {
+        set res [catchsql $rebase]
+        list [lindex $res 0] \
+             [string match $expected_err [lindex $res 1]] \
+             [db one {SELECT count(*) FROM dolt_branches WHERE name LIKE 'dolt_rebase_%'}]
+      } {1 1 0}
+      do_test $prefix-preserved {
+        list [sqlite3_get_autocommit db] \
+             [db one {SELECT active_branch()}] \
+             [expr {$head eq [execsql {SELECT dolt_hashof('HEAD')}]}] \
+             [expr {$staged eq [execsql {SELECT dolt_hashof_db('STAGED')}]}] \
+             [expr {$rows eq [execsql {SELECT * FROM t ORDER BY id}]}] \
+             [expr {$branches eq [execsql {
+               SELECT name, hash FROM dolt_branches ORDER BY name
+             }]}]
+      } {0 main 1 1 1 1}
+      do_test $prefix-finish {
+        if {$finish eq "continue"} {
+          execsql {SELECT dolt_add('.')}
+        }
+        set res [catchsql "SELECT dolt_${operation}('--${finish}')"]
+        execsql {COMMIT}
+        list [lindex $res 0] \
+             [db one {PRAGMA integrity_check}] \
+             [db one {SELECT count(*) FROM dolt_conflicts}] \
+             [db one {SELECT count(*) FROM dolt_status}]
+      } {0 ok 0 0}
+    }
+  }
+}
+
 finish_test
