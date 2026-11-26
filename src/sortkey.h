@@ -10,6 +10,15 @@
 #define SORTKEY_TEXT    0x35
 #define SORTKEY_BLOB    0x45
 
+/* Largest BLOB/TEXT byte length whose SQLite serial type fits in u32. */
+#define SORTKEY_MAX_VARLEN ((u32)((0xffffffffu - 13u) / 2u))
+
+static inline int sortKeyVarlenSerialType(u32 nLen, int isText, u32 *pSerialType){
+  if( nLen > SORTKEY_MAX_VARLEN ) return SQLITE_TOOBIG;
+  *pSerialType = nLen * 2u + (isText ? 13u : 12u);
+  return SQLITE_OK;
+}
+
 /* DESC 9-byte numeric terminator so it is not a prefix of the 18-byte form. */
 #define SORTKEY_NUM_DESC_END 0x00
 
