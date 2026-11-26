@@ -1046,6 +1046,7 @@ int csMergeIndex(
 ){
   i64 nTotal64 = (i64)cs->index.nIndex + (i64)cs->staging.nPending;
   int nTotal;
+  int nPending = cs->staging.nPending;
   ChunkIndexEntry *aMerged;
   int idxPos, pendPos, outPos;
 
@@ -1060,15 +1061,30 @@ int csMergeIndex(
   );
   if( aMerged == 0 ) return SQLITE_NOMEM;
 
-  if( cs->staging.nPending > 1 ){
-    qsort(cs->staging.aPending, cs->staging.nPending, sizeof(ChunkIndexEntry),
+  if( nPending > 1 ){
+    int i, nUnique = 1;
+    qsort(cs->staging.aPending, nPending, sizeof(ChunkIndexEntry),
           csIndexEntryCmp);
+    for( i = 1; i < nPending; i++ ){
+      if( prollyHashCompare(&cs->staging.aPending[i].hash,
+                            &cs->staging.aPending[nUnique - 1].hash) == 0 ){
+        if( cs->staging.aPending[i].offset > cs->staging.aPending[nUnique - 1].offset ){
+          cs->staging.aPending[nUnique - 1] = cs->staging.aPending[i];
+        }
+      }else{
+        if( nUnique != i ){
+          cs->staging.aPending[nUnique] = cs->staging.aPending[i];
+        }
+        nUnique++;
+      }
+    }
+    nPending = nUnique;
   }
 
-  if( cs->staging.nPending > 0 && cs->staging.nPending <= 32 ){
+  if( nPending > 0 && nPending <= 32 ){
     idxPos = 0;
     outPos = 0;
-    for( pendPos = 0; pendPos < cs->staging.nPending; pendPos++ ){
+    for( pendPos = 0; pendPos < nPending; pendPos++ ){
       ChunkIndexEntry *pPending = &cs->staging.aPending[pendPos];
       int found;
       int nCopy;
@@ -1099,7 +1115,7 @@ int csMergeIndex(
   idxPos = 0;
   pendPos = 0;
   outPos = 0;
-  while( idxPos < cs->index.nIndex && pendPos < cs->staging.nPending ){
+  while( idxPos < cs->index.nIndex && pendPos < nPending ){
     int cmp = prollyHashCompare(&cs->index.aIndex[idxPos].hash, &cs->staging.aPending[pendPos].hash);
     if( cmp < 0 ){
       aMerged[outPos++] = cs->index.aIndex[idxPos++];
@@ -1112,7 +1128,7 @@ int csMergeIndex(
     }
   }
   while( idxPos < cs->index.nIndex ) aMerged[outPos++] = cs->index.aIndex[idxPos++];
-  while( pendPos < cs->staging.nPending ) aMerged[outPos++] = cs->staging.aPending[pendPos++];
+  while( pendPos < nPending ) aMerged[outPos++] = cs->staging.aPending[pendPos++];
 
   *ppMerged = aMerged;
   *pnMerged = outPos;

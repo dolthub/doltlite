@@ -2,6 +2,8 @@
 
 #include "sqlite3.h"
 #include "chunk_store.h"
+#include "chunk_index.h"
+#include "chunk_refs.h"
 #include "doltlite_internal.h"
 #include "lib/test_tmpdir.h"
 #include <stdio.h>
@@ -22,8 +24,12 @@ static void check(const char *name, int cond){
 
 static sqlite3_mem_methods gReal;
 static int gFailReallocAtLeast;
+static int gFailMallocCountdown;
 
-static void *wrapMalloc(int n){ return gReal.xMalloc(n); }
+static void *wrapMalloc(int n){
+  if( gFailMallocCountdown>0 && --gFailMallocCountdown==0 ) return 0;
+  return gReal.xMalloc(n);
+}
 static void wrapFree(void *p){ if( p ) gReal.xFree(p); }
 static void *wrapRealloc(void *p, int n){
   if( gFailReallocAtLeast>0 && n>=gFailReallocAtLeast ) return 0;
@@ -449,6 +455,169 @@ static void testZeroByteChunkGet(void){
   remove(zLock);
 }
 
+static ProllyHash makeOrderedHash(int v){
+  ProllyHash h;
+  memset(&h, 0, sizeof(h));
+  h.data[0] = (u8)((v >> 8) & 0xff);
+  h.data[1] = (u8)(v & 0xff);
+  return h;
+}
+
+static void testMergeIndexDedupPending(void){
+  ChunkStore cs;
+  ChunkIndexEntry aIndex[2];
+  ChunkIndexEntry aSmallPend[6];
+  ChunkIndexEntry aLargePend[44];
+  ChunkIndexEntry *aMerged = 0;
+  int nMerged = 0;
+  int rc;
+  int i;
+
+  memset(&cs, 0, sizeof(cs));
+  aIndex[0].hash = makeOrderedHash(10); aIndex[0].offset = 100; aIndex[0].size = 10;
+  aIndex[1].hash = makeOrderedHash(30); aIndex[1].offset = 300; aIndex[1].size = 10;
+  cs.index.aIndex = aIndex;
+  cs.index.nIndex = 2;
+
+  aSmallPend[0].hash = makeOrderedHash(20); aSmallPend[0].offset = 200; aSmallPend[0].size = 11;
+  aSmallPend[1].hash = makeOrderedHash(20); aSmallPend[1].offset = 500; aSmallPend[1].size = 12;
+  aSmallPend[2].hash = makeOrderedHash(20); aSmallPend[2].offset = 350; aSmallPend[2].size = 13;
+  aSmallPend[3].hash = makeOrderedHash(10); aSmallPend[3].offset = 150; aSmallPend[3].size = 14;
+  aSmallPend[4].hash = makeOrderedHash(10); aSmallPend[4].offset = 600; aSmallPend[4].size = 15;
+  aSmallPend[5].hash = makeOrderedHash(40); aSmallPend[5].offset = 400; aSmallPend[5].size = 16;
+  cs.staging.aPending = aSmallPend;
+  cs.staging.nPending = 6;
+
+  rc = csMergeIndex(&cs, &aMerged, &nMerged);
+  check("merge_dedup_small_rc", rc==SQLITE_OK);
+  check("merge_dedup_small_count", nMerged==4);
+  if( rc==SQLITE_OK && nMerged==4 ){
+    check("merge_dedup_small_h0", prollyHashCompare(&aMerged[0].hash, &aIndex[0].hash)==0
+          && aMerged[0].offset==600);
+    check("merge_dedup_small_h1", aMerged[1].hash.data[1]==20 && aMerged[1].offset==500);
+    check("merge_dedup_small_h2", prollyHashCompare(&aMerged[2].hash, &aIndex[1].hash)==0
+          && aMerged[2].offset==300);
+    check("merge_dedup_small_h3", aMerged[3].hash.data[1]==40 && aMerged[3].offset==400);
+  }
+  sqlite3_free(aMerged);
+  aMerged = 0;
+
+  for(i=0; i<40; i++){
+    aLargePend[i].hash = makeOrderedHash(100 + i);
+    aLargePend[i].offset = 1000 + i;
+    aLargePend[i].size = 8;
+  }
+  aLargePend[40].hash = makeOrderedHash(105); aLargePend[40].offset = 9005; aLargePend[40].size = 8;
+  aLargePend[41].hash = makeOrderedHash(105); aLargePend[41].offset = 2005; aLargePend[41].size = 8;
+  aLargePend[42].hash = makeOrderedHash(120); aLargePend[42].offset = 9020; aLargePend[42].size = 8;
+  aLargePend[43].hash = makeOrderedHash(10);  aLargePend[43].offset = 9010; aLargePend[43].size = 8;
+  cs.staging.aPending = aLargePend;
+  cs.staging.nPending = 44;
+
+  rc = csMergeIndex(&cs, &aMerged, &nMerged);
+  check("merge_dedup_large_rc", rc==SQLITE_OK);
+  check("merge_dedup_large_count", nMerged==42);
+  if( rc==SQLITE_OK && nMerged==42 ){
+    int strictlySorted = 1;
+    i64 off10 = -1, off105 = -1, off120 = -1;
+    for(i=0; i<nMerged; i++){
+      if( i>0 && prollyHashCompare(&aMerged[i-1].hash, &aMerged[i].hash)>=0 ){
+        strictlySorted = 0;
+      }
+      if( aMerged[i].hash.data[0]==0 && aMerged[i].hash.data[1]==10 ) off10 = aMerged[i].offset;
+      if( aMerged[i].hash.data[0]==0 && aMerged[i].hash.data[1]==105 ) off105 = aMerged[i].offset;
+      if( aMerged[i].hash.data[0]==0 && aMerged[i].hash.data[1]==120 ) off120 = aMerged[i].offset;
+    }
+    check("merge_dedup_large_sorted", strictlySorted);
+    check("merge_dedup_large_offsets", off10==9010 && off105==9005 && off120==9020);
+  }
+  sqlite3_free(aMerged);
+}
+
+static void testRefsMergeCategoryOomNoLeak(void){
+  int k;
+  for(k=1; k<=5; k++){
+    ChunkStore cs;
+    RefsTable base;
+    SavedRefsState local;
+    TagRef tag;
+    RemoteRef remote;
+    TrackingBranch track;
+    sqlite3_int64 memBefore;
+    int rc;
+
+    memBefore = sqlite3_memory_used();
+    memset(&cs, 0, sizeof(cs));
+    memset(&base, 0, sizeof(base));
+    memset(&local, 0, sizeof(local));
+    memset(&tag, 0, sizeof(tag));
+    memset(&remote, 0, sizeof(remote));
+    memset(&track, 0, sizeof(track));
+
+    rc = chunkStoreOpen(&cs, 0, ":memory:", SQLITE_OPEN_CREATE);
+    if( rc!=SQLITE_OK ){
+      check("refs_oom_open", 0);
+      return;
+    }
+
+    tag.zName = "v1.0";
+    tag.zTagger = "Alice";
+    tag.zEmail = "alice@example.com";
+    tag.zMessage = "release";
+    local.aTags = &tag;
+    local.nTags = 1;
+
+    gFailMallocCountdown = k;
+    rc = csMergeSavedRefsOntoDisk(&cs, &local, &base);
+    gFailMallocCountdown = 0;
+    check("refs_oom_tag_nomem", rc==SQLITE_NOMEM && cs.refs.nTags==0);
+    chunkStoreClose(&cs);
+    check("refs_oom_tag_noleak", sqlite3_memory_used()==memBefore);
+
+    if( k<=3 ){
+      memBefore = sqlite3_memory_used();
+      memset(&cs, 0, sizeof(cs));
+      rc = chunkStoreOpen(&cs, 0, ":memory:", SQLITE_OPEN_CREATE);
+      if( rc!=SQLITE_OK ){
+        check("refs_oom_open_remote", 0);
+        return;
+      }
+      memset(&local, 0, sizeof(local));
+      remote.zName = "origin";
+      remote.zUrl = "https://example.com/repo";
+      local.aRemotes = &remote;
+      local.nRemotes = 1;
+
+      gFailMallocCountdown = k;
+      rc = csMergeSavedRefsOntoDisk(&cs, &local, &base);
+      gFailMallocCountdown = 0;
+      check("refs_oom_remote_nomem", rc==SQLITE_NOMEM && cs.refs.nRemotes==0);
+      chunkStoreClose(&cs);
+      check("refs_oom_remote_noleak", sqlite3_memory_used()==memBefore);
+
+      memBefore = sqlite3_memory_used();
+      memset(&cs, 0, sizeof(cs));
+      rc = chunkStoreOpen(&cs, 0, ":memory:", SQLITE_OPEN_CREATE);
+      if( rc!=SQLITE_OK ){
+        check("refs_oom_open_track", 0);
+        return;
+      }
+      memset(&local, 0, sizeof(local));
+      track.zRemote = "origin";
+      track.zBranch = "main";
+      local.aTracking = &track;
+      local.nTracking = 1;
+
+      gFailMallocCountdown = k;
+      rc = csMergeSavedRefsOntoDisk(&cs, &local, &base);
+      gFailMallocCountdown = 0;
+      check("refs_oom_track_nomem", rc==SQLITE_NOMEM && cs.refs.nTracking==0);
+      chunkStoreClose(&cs);
+      check("refs_oom_track_noleak", sqlite3_memory_used()==memBefore);
+    }
+  }
+}
+
 int main(void){
   int rc;
 
@@ -475,6 +644,8 @@ int main(void){
   testCheckedPut();
   testPendingHtResetAfterSweep();
   testZeroByteChunkGet();
+  testMergeIndexDedupPending();
+  testRefsMergeCategoryOomNoLeak();
 
   printf("%d passed, %d failed\n", nPass, nFail);
   sqlite3_shutdown();

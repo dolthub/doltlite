@@ -858,6 +858,7 @@ static int gcWriteCompactedTo(
     kept++;
     nDataBytes += 4+(i64)e.size;
   }
+  if( kept > INT_MAX / CHUNK_INDEX_ENTRY_SIZE ) return SQLITE_TOOBIG;
   indexSize = (i64)kept * CHUNK_INDEX_ENTRY_SIZE;
   finalSize = CHUNK_MANIFEST_SIZE + nDataBytes + indexSize;
 
