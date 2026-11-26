@@ -7611,23 +7611,35 @@ static int vec1FilterToIntOp(
       /* All text and blob values are greater than all 1-byte ints */
       iVal = iMax+10;
     }else if( pFilter->eType==SQLITE_FLOAT ){
-      iVal = (i64)pFilter->fVal;
-      if( (double)iVal!=pFilter->fVal ){
-        if( pFilter->vop==VEC1_OP_EQ || pFilter->vop==VEC1_OP_IS ){
-          iVal = iMin-10;
-        }else if( pFilter->vop==VEC1_OP_LT || pFilter->vop==VEC1_OP_GE ){
-          iVal = iVal+1;
+      double fVal = pFilter->fVal;
+      if( fVal!=fVal ){
+        res = 0;
+      }else if( fVal<(double)iMin ){
+        iVal = iMin-10;
+      }else if( fVal>(double)iMax ){
+        iVal = iMax+10;
+      }else{
+        double fFloor = floor(fVal);
+        iVal = (i64)fFloor;
+        if( fFloor!=fVal ){
+          if( pFilter->vop==VEC1_OP_EQ || pFilter->vop==VEC1_OP_IS ){
+            iVal = iMin-10;
+          }else if( pFilter->vop==VEC1_OP_LT || pFilter->vop==VEC1_OP_GE ){
+            iVal = iVal+1;
+          }
         }
       }
     }
 
-    if( iVal<iMin ){
-      res = (pFilter->vop==VEC1_OP_GT || pFilter->vop==VEC1_OP_GE);
-    }else if( iVal>iMax ){
-      res = (pFilter->vop==VEC1_OP_LT || pFilter->vop==VEC1_OP_LE);
-    }else{
-      rval = (int)iVal;
-      op = (pFilter->vop==VEC1_OP_IS ? VEC1_OP_EQ : pFilter->vop);
+    if( res<0 ){
+      if( iVal<iMin ){
+        res = (pFilter->vop==VEC1_OP_GT || pFilter->vop==VEC1_OP_GE);
+      }else if( iVal>iMax ){
+        res = (pFilter->vop==VEC1_OP_LT || pFilter->vop==VEC1_OP_LE);
+      }else{
+        rval = (int)iVal;
+        op = (pFilter->vop==VEC1_OP_IS ? VEC1_OP_EQ : pFilter->vop);
+      }
     }
   }
 
