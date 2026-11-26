@@ -5922,6 +5922,7 @@ struct Vec1Query {
   float *aVector;                 /* Vector to query NN of */
   float *aTransform;              /* Vector to query NN of */
   u8 *aBit;                       /* Space for bitwise encode of 1 vector */
+  float fResidualNorm2;           /* Cached ||aEncode||^2 for BQ */
 
   /* Used by streaming queries only */
   int nBucket;                    /* Size of aBucket array */ 
@@ -8484,7 +8485,6 @@ static int vec1DoKANNBucket(
   sqlite3_stmt *pScanIdx = 0;
   int rc = SQLITE_OK;
   float *aDist = 0;
-  float fResidualNorm2 = 0.0;
 
   if( iBucket<0 ){
     rc = vec1GetSql(pTab, VEC1_SQL_SCAN_IDX, &pScanIdx);
@@ -8520,7 +8520,7 @@ static int vec1DoKANNBucket(
         vec1PQLUTBuild(pTab, aEncode, aDist);
       }else{
         vec1BinaryQuantLUTBuild(pTab, aEncode, aDist);
-        fResidualNorm2 = (float)vec1VectorNorm2(aEncode, pTab->cfg.nElem);
+        pQuery->fResidualNorm2 = (float)vec1VectorNorm2(aEncode, nElem);
         vec1EncodeVectorBit(&pTab->mod, aEncode, pQuery->aBit);
       }
       VEC1_QINSTR_STOP(pTab, VEC1_QINSTR_LUT);
@@ -8567,7 +8567,7 @@ static int vec1DoKANNBucket(
     if( aDist ){
       vec1ScanBlocked(
           pHeap, pBitmask->a, aDist, nCodebook, aBlob, nBlob, szRowid, 
-          nEntry, (bUseBQ ? sizeof_f32 : 0), fResidualNorm2
+          nEntry, (bUseBQ ? sizeof_f32 : 0), pQuery->fResidualNorm2
       );
     }else{
       const int szVec = sizeof_f32*nElem;
