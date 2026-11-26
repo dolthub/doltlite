@@ -326,5 +326,41 @@ do_catchsql_test 9.5 {
   SELECT length( vec1_train(v, '{nbucket: 4, test_chunk_size: 64, profile: "train_prof"}') ) FROM data;
 } {1 {string or blob too big}}
 
+#-------------------------------------------------------------------------
+# Training allocation arithmetic must not overflow 32-bit signed integers
+# when total remaining bytes or vector counts exceed 2 GiB.
+#
+reset_db
+vec1_load db
+
+do_execsql_test 10.1 {
+  SELECT
+    vec1_test_codebook_alloc(536870912, 0, 8388608, 4),
+    vec1_test_codebook_alloc(600000000, 0, 1048576, 32),
+    vec1_test_codebook_alloc(600000000, 572, 1048576, 32),
+    vec1_test_codebook_alloc(2147483647, 255, 8388608, 4);
+} {33554432 33554432 6864896 33554428}
+
+do_execsql_test 10.2 {
+  SELECT
+    vec1_test_kmeans_alloc(1, 536870912, 0) > 0,
+    vec1_test_kmeans_alloc(1, 536870912, 0) - vec1_test_kmeans_alloc(1, 0, 0),
+    vec1_test_kmeans_alloc(1, 536870912, 1) > 0,
+    vec1_test_kmeans_alloc(1, 536870912, 1) - vec1_test_kmeans_alloc(1, 0, 0),
+    vec1_test_kmeans_alloc(4, 2147483647, 1) > 0,
+    vec1_test_kmeans_alloc(4, 2147483647, 1) - vec1_test_kmeans_alloc(4, 0, 0);
+} {1 2147483648 1 4294967296 1 17179869176}
+
+do_execsql_test 10.3 {
+  WITH data(i, v) AS (
+    SELECT 1, random_vector(18)
+      UNION ALL
+    SELECT i+1, random_vector(18) FROM data WHERE i<600
+  )
+  SELECT length(
+    vec1_train(v, '{quantizer: "pq", codesize: 4, nbucket: 4, test_chunk_size: 256}')
+  ) > 0 FROM data;
+} {1}
+
 finish_test
 

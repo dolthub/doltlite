@@ -2227,6 +2227,12 @@ static void vec1KMeansInitWork(void *pCtx){
   assert( pJob->iEof<=(pV)->nVec );                                         \
   assert( (iJob==nJob-1)==(pJob->iEof==(pV)->nVec) );
 
+static i64 vec1KMeansInitAllocBytes(int nJob, int nVec, int bHist){
+  return ((i64)sizeof(KMeansInitJob) * nJob)
+       + ((i64)nVec * sizeof_f32)
+       + (bHist ? (i64)nVec * sizeof_u32 : 0);
+}
+
 /*
 ** 
 */
@@ -2246,7 +2252,7 @@ static int vec1KMeansInitOne(
 
   Vec1Random rnd;
 
-  int nByte;                      /* Bytes of space to allocate */
+  i64 nByte;                      /* Bytes of space to allocate */
   KMeansInitJob *aJob = 0;
   float *aMin = 0;
   int *aBest = 0;
@@ -2258,10 +2264,7 @@ static int vec1KMeansInitOne(
 
   vec1RandomInit(&rnd, vec1Rand31(), 0);
 
-  nByte = 
-    (sizeof(KMeansInitJob) * nJob) +
-    (pVec->nVec * sizeof_f32) +
-    (aHist ? pVec->nVec * sizeof_u32 : 0);
+  nByte = vec1KMeansInitAllocBytes(nJob, pVec->nVec, aHist!=0);
   aJob = vec1MallocZero(nByte);
   if( aJob==0 ){
     return SQLITE_NOMEM;
@@ -3617,6 +3620,16 @@ struct Vec1CodebookJob {
   int rc;
 };
 
+static int vec1CodebookChunkAlloc(
+  int nVec,
+  int iChunk,
+  int nVecPerChunk,
+  int nBytePerVec
+){
+  i64 nRem = ((i64)nVec - (i64)iChunk * nVecPerChunk) * nBytePerVec;
+  return (int)MIN((i64)VEC1_TRAINING_SZCHUNK, nRem);
+}
+
 static void vec1CodebookWork(void *pCtx){
   Vec1CodebookJob *pJob = (Vec1CodebookJob*)pCtx;
   Vec1TrainCtx *p = pJob->p;
@@ -3633,7 +3646,8 @@ static void vec1CodebookWork(void *pCtx){
     pVec->nElem = p->nCodeElem;
     pVec->nVec = pJob->pTrain->nVec;
     pVec->nVecPerChunk = (VEC1_TRAINING_SZCHUNK / nBytePerVec);
-    pVec->nChunk = (pVec->nVec+pVec->nVecPerChunk-1) / pVec->nVecPerChunk;
+    pVec->nChunk = (int)(((i64)pVec->nVec + pVec->nVecPerChunk - 1)
+                         / pVec->nVecPerChunk);
 
     /* If the training vector size is not an integer multiple of the 
     ** sub-vector size and this is the rightmost sub-vector (the one that
@@ -3647,8 +3661,8 @@ static void vec1CodebookWork(void *pCtx){
     for(ii=0; ii<pVec->nChunk; ii++){
       /* Allocate space for this chunk. Either VEC1_TRAINING_SZCHUNK or
       ** enough space for all remaining sub-vectors, whichever is smaller. */
-      int nAlloc = MIN(VEC1_TRAINING_SZCHUNK, 
-          (pVec->nVec - (ii * pVec->nVecPerChunk)) * nBytePerVec
+      int nAlloc = vec1CodebookChunkAlloc(
+          pVec->nVec, ii, pVec->nVecPerChunk, nBytePerVec
       );
       pVec->aChunk[ii] = (float*)sqlite3_malloc(nAlloc);
 
@@ -13068,6 +13082,35 @@ static int vec1ShadowName(const char *zName){
   return 0;
 }
 
+#ifdef SQLITE_TEST
+static void vec1TestCodebookAllocFunc(
+  sqlite3_context *pCtx,
+  int nArg,
+  sqlite3_value **aArg
+){
+  int nVec = sqlite3_value_int(aArg[0]);
+  int iChunk = sqlite3_value_int(aArg[1]);
+  int nVecPerChunk = sqlite3_value_int(aArg[2]);
+  int nBytePerVec = sqlite3_value_int(aArg[3]);
+  UNUSED_PARAMETER(nArg);
+  sqlite3_result_int(
+      pCtx, vec1CodebookChunkAlloc(nVec, iChunk, nVecPerChunk, nBytePerVec)
+  );
+}
+
+static void vec1TestKMeansAllocFunc(
+  sqlite3_context *pCtx,
+  int nArg,
+  sqlite3_value **aArg
+){
+  int nJob = sqlite3_value_int(aArg[0]);
+  int nVec = sqlite3_value_int(aArg[1]);
+  int bHist = sqlite3_value_int(aArg[2]);
+  UNUSED_PARAMETER(nArg);
+  sqlite3_result_int64(pCtx, vec1KMeansInitAllocBytes(nJob, nVec, bHist));
+}
+#endif
+
 static int initExtension(
   sqlite3 *db, 
   char **pzErr,
@@ -13148,6 +13191,10 @@ static int initExtension(
     ** datatypes other than 32-bit float are supported for vectors */
     { "vec1_to_json_f",   1,      vec1ToJsonFFunc  },
     { "vec1_to_json_i",   1,      vec1ToJsonIFunc  },
+#ifdef SQLITE_TEST
+    { "vec1_test_codebook_alloc", 4, vec1TestCodebookAllocFunc },
+    { "vec1_test_kmeans_alloc",   3, vec1TestKMeansAllocFunc   },
+#endif
   };
 
   static struct AggFunc {
