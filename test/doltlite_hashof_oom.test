@@ -1,0 +1,62 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+
+set testprefix doltlite_hashof_oom
+
+do_execsql_test 1.0 {
+  CREATE TABLE t1(id INTEGER PRIMARY KEY, a INT, b TEXT, c INT);
+  CREATE INDEX idx_a ON t1(a);
+  CREATE INDEX idx_b ON t1(b);
+  CREATE UNIQUE INDEX idx_bc ON t1(b, c) WHERE c IS NOT NULL;
+  INSERT INTO t1 VALUES(1, 10, 'alpha', 100);
+  INSERT INTO t1 VALUES(2, 20, 'beta', 200);
+  INSERT INTO t1 VALUES(3, 30, 'gamma', NULL);
+  SELECT length(dolt_commit('-Am', 'seed'));
+} {40}
+
+set expected_table_hash [db one {SELECT dolt_hashof_table('t1')}]
+set expected_table_head [db one {SELECT dolt_hashof_table('t1', 'HEAD')}]
+set expected_index_hash [db one {SELECT dolt_hashof_index('idx_bc')}]
+set expected_ref_hash   [db one {SELECT dolt_hashof('HEAD')}]
+
+faultsim_save_and_close
+
+do_faultsim_test 1.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db one {SELECT dolt_hashof_table('t1')}
+} -test {
+  faultsim_test_result [list 0 $::expected_table_hash] \
+      {1 {out of memory}} {1 {disk I/O error}}
+}
+
+do_faultsim_test 1.2 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db one {SELECT dolt_hashof_table('t1', 'HEAD')}
+} -test {
+  faultsim_test_result [list 0 $::expected_table_head] \
+      {1 {out of memory}} {1 {disk I/O error}} \
+      {1 {dolt_hashof_table: commit load failed}}
+}
+
+do_faultsim_test 1.3 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db one {SELECT dolt_hashof_index('idx_bc')}
+} -test {
+  faultsim_test_result [list 0 $::expected_index_hash] \
+      {1 {out of memory}} {1 {disk I/O error}}
+}
+
+do_faultsim_test 1.4 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db one {SELECT dolt_hashof('HEAD')}
+} -test {
+  faultsim_test_result [list 0 $::expected_ref_hash] \
+      {1 {out of memory}} {1 {disk I/O error}}
+}
+
+finish_test

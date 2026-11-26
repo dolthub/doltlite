@@ -190,8 +190,11 @@ static int hashofIndexRootByName(
     zSql = aSchema[i].zSql ? sqlite3_mprintf("%s", aSchema[i].zSql) : 0;
     zCanonicalIndex = sqlite3_mprintf("%s", aSchema[i].zName);
     zTable = aSchema[i].zTblName ? sqlite3_mprintf("%s", aSchema[i].zTblName) : 0;
-    if( !zCanonicalIndex ){
+    if( !zCanonicalIndex
+     || (aSchema[i].zSql && !zSql)
+     || (aSchema[i].zTblName && !zTable) ){
       sqlite3_free(zSql);
+      sqlite3_free(zCanonicalIndex);
       sqlite3_free(zTable);
       freeSchemaEntries(aSchema, nSchema);
       return SQLITE_NOMEM;
@@ -220,19 +223,24 @@ static int hashofIndexRootByName(
     }
   }
   doltliteFreeCatalog(aTables, nTables);
-  if( zSql ){
-    char *zCanon = doltliteCanonicalizeSchemaSql(zSql, zCanonicalIndex);
-    if( zCanon ){
-      prollyHashCompute(zCanon, (int)strlen(zCanon), pSchemaHash);
-      sqlite3_free(zCanon);
-    }
-    sqlite3_free(zSql);
-  }
-  sqlite3_free(zCanonicalIndex);
   if( !found ){
+    sqlite3_free(zSql);
+    sqlite3_free(zCanonicalIndex);
     sqlite3_free(zTable);
     return SQLITE_NOTFOUND;
   }
+  if( zSql ){
+    char *zCanon = doltliteCanonicalizeSchemaSql(zSql, zCanonicalIndex);
+    sqlite3_free(zSql);
+    if( !zCanon ){
+      sqlite3_free(zCanonicalIndex);
+      sqlite3_free(zTable);
+      return SQLITE_NOMEM;
+    }
+    prollyHashCompute(zCanon, (int)strlen(zCanon), pSchemaHash);
+    sqlite3_free(zCanon);
+  }
+  sqlite3_free(zCanonicalIndex);
   if( pzTable ){
     *pzTable = zTable;
   }else{
@@ -278,14 +286,18 @@ static int hashofFoldTableIndexes(
   rc = loadSchemaFromCatalog(db, cs, cache, pCatHash, &aSchema, &nSchema);
   if( rc!=SQLITE_OK ) return rc;
   for(i=0; i<nSchema; i++){
+    char **azNew;
     if( !aSchema[i].zName || !aSchema[i].zType || !aSchema[i].zTblName ) continue;
     if( sqlite3_stricmp(aSchema[i].zType, "index")!=0 ) continue;
     if( sqlite3_stricmp(aSchema[i].zTblName, zTable)!=0 ) continue;
-    azIndex = sqlite3_realloc64(azIndex, (sqlite3_uint64)(nIndex+1) * sizeof(char*));
-    if( !azIndex ){
+    azNew = sqlite3_realloc64(azIndex, (sqlite3_uint64)(nIndex+1) * sizeof(char*));
+    if( !azNew ){
       freeSchemaEntries(aSchema, nSchema);
+      for(j=0; j<nIndex; j++) sqlite3_free(azIndex[j]);
+      sqlite3_free(azIndex);
       return SQLITE_NOMEM;
     }
+    azIndex = azNew;
     azIndex[nIndex] = sqlite3_mprintf("%s", aSchema[i].zName);
     if( !azIndex[nIndex] ){
       freeSchemaEntries(aSchema, nSchema);
@@ -313,6 +325,10 @@ static int hashofFoldTableIndexes(
     }
     if( rc!=SQLITE_OK ) break;
     sqlite3_str_appendf(pStr, "|%s=%s", azIndex[i], zIdxHex);
+    if( sqlite3_str_errcode(pStr)!=SQLITE_OK ){
+      rc = sqlite3_str_errcode(pStr);
+      break;
+    }
   }
   for(i=0; i<nIndex; i++) sqlite3_free(azIndex[i]);
   sqlite3_free(azIndex);
@@ -926,7 +942,7 @@ static int hashofResolveRefCatalog(
                                           pCatHash);
     if( rc!=SQLITE_OK ){
       sqlite3_snprintf(sizeof(zErr), zErr, "%s: invalid ref spec", zFn);
-      sqlite3_result_error(ctx, zErr, -1);
+      doltliteLookupResultError(ctx, rc, zErr);
       return 1;
     }
     return 0;
@@ -980,7 +996,11 @@ static void hashofNamedObjectFunc(
     return;
   }
   zName = (const char*)sqlite3_value_text(argv[0]);
-  if( !zName || !*zName || doltliteValueHasNul(argv[0]) ){
+  if( !zName ){
+    sqlite3_result_error_nomem(ctx);
+    return;
+  }
+  if( !*zName || doltliteValueHasNul(argv[0]) ){
     sqlite3_snprintf(sizeof(zErr), zErr, "%s: %s not found", zFn, zKind);
     sqlite3_result_error(ctx, zErr, -1);
     return;
@@ -992,7 +1012,7 @@ static void hashofNamedObjectFunc(
     rc = doltliteFlushCatalogToHash(db, &catHash);
     if( rc!=SQLITE_OK ){
       sqlite3_snprintf(sizeof(zErr), zErr, "%s: catalog flush failed", zFn);
-      sqlite3_result_error(ctx, zErr, -1);
+      doltliteLookupResultError(ctx, rc, zErr);
       return;
     }
   }else{
@@ -1007,7 +1027,7 @@ static void hashofNamedObjectFunc(
   }
   if( rc!=SQLITE_OK ){
     sqlite3_snprintf(sizeof(zErr), zErr, "%s: %s not found in catalog", zFn, zKind);
-    sqlite3_result_error(ctx, zErr, -1);
+    doltliteLookupResultError(ctx, rc, zErr);
     return;
   }
   sqlite3_result_text(ctx, hex, PROLLY_HASH_SIZE*2, SQLITE_TRANSIENT);
