@@ -416,4 +416,92 @@ run_test "at_numeric_text_equality_matches" \
 
 rm -f "$DB6"
 
+DB7=/tmp/test_pushdown_ancestors_reachability_$$.db
+rm -f "$DB7"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-A','-m','c1');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+C1_HASH=$(echo "SELECT dolt_hashof('HEAD');" | $DOLTLITE "$DB7")
+
+echo "INSERT INTO t VALUES(2,'reset_orphan');
+SELECT dolt_commit('-A','-m','c2_reset');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+RESET_ORPHAN=$(echo "SELECT dolt_hashof('HEAD');" | $DOLTLITE "$DB7")
+echo "SELECT dolt_reset('--hard','HEAD~1');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+
+echo "SELECT dolt_checkout('-b','delbr');
+INSERT INTO t VALUES(3,'branch_orphan');
+SELECT dolt_commit('-A','-m','c3_delbr');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+DELBR_ORPHAN=$(echo "SELECT dolt_hashof('delbr');" | $DOLTLITE "$DB7")
+echo "SELECT dolt_checkout('main');
+SELECT dolt_branch('-D','delbr');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+
+echo "SELECT dolt_checkout('-b','other');
+INSERT INTO t VALUES(4,'other_br');
+SELECT dolt_commit('-A','-m','c4_other');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+OTHER_HASH=$(echo "SELECT dolt_hashof('other');" | $DOLTLITE "$DB7")
+
+echo "SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b','tagbr');
+INSERT INTO t VALUES(5,'tag_only');
+SELECT dolt_commit('-A','-m','c5_tag');
+SELECT dolt_tag('v_tag');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+TAG_HASH=$(echo "SELECT dolt_hashof('v_tag');" | $DOLTLITE "$DB7")
+echo "SELECT dolt_checkout('main');
+SELECT dolt_branch('-D','tagbr');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+
+echo "INSERT INTO t VALUES(6,'main_tip');
+SELECT dolt_commit('-A','-m','c6_main');
+SELECT dolt_merge('other','-m','merge_other');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+MERGE_HASH=$(echo "SELECT dolt_hashof('HEAD');" | $DOLTLITE "$DB7")
+
+run_test_match "ancestors_commit_eq_uses_index" \
+  "EXPLAIN QUERY PLAN SELECT * FROM dolt_commit_ancestors WHERE commit_hash='$MERGE_HASH';" \
+  "VIRTUAL TABLE INDEX 1" "$DB7"
+run_test "ancestors_reset_orphan_pushdown_empty" \
+  "SELECT count(*) FROM dolt_commit_ancestors WHERE commit_hash='$RESET_ORPHAN';" \
+  "0" "$DB7"
+run_test "ancestors_reset_orphan_unfiltered_empty" \
+  "SELECT count(*) FROM dolt_commit_ancestors WHERE commit_hash || ''='$RESET_ORPHAN';" \
+  "0" "$DB7"
+run_test "ancestors_deleted_branch_orphan_pushdown_empty" \
+  "SELECT count(*) FROM dolt_commit_ancestors WHERE commit_hash='$DELBR_ORPHAN';" \
+  "0" "$DB7"
+run_test "ancestors_deleted_branch_orphan_unfiltered_empty" \
+  "SELECT count(*) FROM dolt_commit_ancestors WHERE commit_hash || ''='$DELBR_ORPHAN';" \
+  "0" "$DB7"
+run_test "ancestors_nonexistent_hash_pushdown_empty" \
+  "SELECT count(*) FROM dolt_commit_ancestors WHERE commit_hash='0102030405060708090a0b0c0d0e0f1011121314';" \
+  "0" "$DB7"
+
+C1_UNFILTERED=$(echo "SELECT parent_index || ':' || coalesce(parent_hash,'NULL') FROM dolt_commit_ancestors WHERE commit_hash || ''='$C1_HASH' ORDER BY parent_index;" | $DOLTLITE "$DB7")
+run_test "ancestors_reachable_ancestor_pushdown_matches_unfiltered" \
+  "SELECT parent_index || ':' || coalesce(parent_hash,'NULL') FROM dolt_commit_ancestors WHERE commit_hash='$C1_HASH' ORDER BY parent_index;" \
+  "$C1_UNFILTERED" "$DB7"
+
+OTHER_UNFILTERED=$(echo "SELECT parent_index || ':' || coalesce(parent_hash,'NULL') FROM dolt_commit_ancestors WHERE commit_hash || ''='$OTHER_HASH' ORDER BY parent_index;" | $DOLTLITE "$DB7")
+run_test "ancestors_reachable_other_branch_pushdown_matches_unfiltered" \
+  "SELECT parent_index || ':' || coalesce(parent_hash,'NULL') FROM dolt_commit_ancestors WHERE commit_hash='$OTHER_HASH' ORDER BY parent_index;" \
+  "$OTHER_UNFILTERED" "$DB7"
+run_test "ancestors_reachable_other_branch_parent" \
+  "SELECT parent_hash FROM dolt_commit_ancestors WHERE commit_hash='$OTHER_HASH';" \
+  "$C1_HASH" "$DB7"
+
+TAG_UNFILTERED=$(echo "SELECT parent_index || ':' || coalesce(parent_hash,'NULL') FROM dolt_commit_ancestors WHERE commit_hash || ''='$TAG_HASH' ORDER BY parent_index;" | $DOLTLITE "$DB7")
+run_test "ancestors_reachable_tag_only_pushdown_matches_unfiltered" \
+  "SELECT parent_index || ':' || coalesce(parent_hash,'NULL') FROM dolt_commit_ancestors WHERE commit_hash='$TAG_HASH' ORDER BY parent_index;" \
+  "$TAG_UNFILTERED" "$DB7"
+run_test "ancestors_reachable_tag_only_parent" \
+  "SELECT parent_hash FROM dolt_commit_ancestors WHERE commit_hash='$TAG_HASH';" \
+  "$C1_HASH" "$DB7"
+
+MERGE_UNFILTERED=$(echo "SELECT group_concat(parent_index || ':' || parent_hash, ',') FROM (SELECT parent_index, parent_hash FROM dolt_commit_ancestors WHERE commit_hash || ''='$MERGE_HASH' ORDER BY parent_index);" | $DOLTLITE "$DB7")
+run_test "ancestors_reachable_merge_head_count" \
+  "SELECT count(*) FROM dolt_commit_ancestors WHERE commit_hash='$MERGE_HASH';" \
+  "2" "$DB7"
+run_test "ancestors_reachable_merge_head_pushdown_matches_unfiltered" \
+  "SELECT group_concat(parent_index || ':' || parent_hash, ',') FROM (SELECT parent_index, parent_hash FROM dolt_commit_ancestors WHERE commit_hash='$MERGE_HASH' ORDER BY parent_index);" \
+  "$MERGE_UNFILTERED" "$DB7"
+
+rm -f "$DB7"
+
 dltest_finish

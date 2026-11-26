@@ -155,6 +155,74 @@ static int caEnqueue(CommitAncestorsCursor *pCur, const ProllyHash *p){
   return SQLITE_OK;
 }
 
+static int caCommitIsReachable(
+  sqlite3 *db,
+  ChunkStore *cs,
+  const ProllyHash *pTarget,
+  int *pReachable
+){
+  DoltliteCommitQueue queue;
+  ProllyHash head;
+  const BranchRef *aBr;
+  const TagRef *aTg;
+  int nBr, nTg, i, rc;
+
+  *pReachable = 0;
+  memset(&head, 0, sizeof(head));
+  doltliteGetSessionHead(db, &head);
+  if( !prollyHashIsEmpty(&head) && prollyHashCompare(&head, pTarget)==0 ){
+    *pReachable = 1;
+    return SQLITE_OK;
+  }
+
+  refsTableGetBranches(&cs->refs, &nBr, &aBr);
+  for(i=0; i<nBr; i++){
+    if( !prollyHashIsEmpty(&aBr[i].commitHash)
+     && prollyHashCompare(&aBr[i].commitHash, pTarget)==0 ){
+      *pReachable = 1;
+      return SQLITE_OK;
+    }
+  }
+
+  refsTableGetTags(&cs->refs, &nTg, &aTg);
+  for(i=0; i<nTg; i++){
+    if( !prollyHashIsEmpty(&aTg[i].commitHash)
+     && prollyHashCompare(&aTg[i].commitHash, pTarget)==0 ){
+      *pReachable = 1;
+      return SQLITE_OK;
+    }
+  }
+
+  memset(&queue, 0, sizeof(queue));
+  rc = doltliteCommitQueueInit(&queue, &head);
+  for(i=0; i<nBr && rc==SQLITE_OK; i++){
+    rc = doltliteCommitQueueEnqueue(&queue, &aBr[i].commitHash);
+  }
+  for(i=0; i<nTg && rc==SQLITE_OK; i++){
+    rc = doltliteCommitQueueEnqueue(&queue, &aTg[i].commitHash);
+  }
+
+  while( rc==SQLITE_OK ){
+    ProllyHash hash;
+    DoltliteCommit commit;
+    int hasHash = 0;
+    rc = doltliteCommitQueueNext(&queue, &hash, &hasHash);
+    if( rc!=SQLITE_OK || !hasHash ) break;
+    if( prollyHashCompare(&hash, pTarget)==0 ){
+      *pReachable = 1;
+      break;
+    }
+    memset(&commit, 0, sizeof(commit));
+    rc = doltliteLoadCommit(db, &hash, &commit);
+    if( rc==SQLITE_OK ){
+      rc = doltliteCommitQueueEnqueueParents(&queue, &commit);
+    }
+    doltliteCommitClear(&commit);
+  }
+  doltliteCommitQueueClear(&queue);
+  return rc;
+}
+
 static int caFilter(
   sqlite3_vtab_cursor *pCursor,
   int idxNum, const char *idxStr,
@@ -184,6 +252,16 @@ static int caFilter(
 
   cs = doltliteGetChunkStore(pVtab->db);
   if( !cs ) return SQLITE_OK;
+
+  if( pCur->singleCommit ){
+    int reachable = 0;
+    rc = caCommitIsReachable(pVtab->db, cs, &head, &reachable);
+    if( rc!=SQLITE_OK ){
+      return doltliteVtabMapChunkSourceError(pCur->base.pVtab, pVtab->db,
+                                             rc, rc);
+    }
+    if( !reachable ) return SQLITE_OK;
+  }
 
   rc = prollyHashSetInit(&pCur->visited, 64);
   if( rc!=SQLITE_OK ) return rc;

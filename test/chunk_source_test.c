@@ -2244,11 +2244,27 @@ static void testCommitAncestorsSourceMiss(
 ){
   static const char zMissing[] =
       "0102030405060708090a0b0c0d0e0f1011121314";
+  const BranchRef *aBr = 0;
+  int nBr = 0, i;
+  char zFeature[41];
   sqlite3 *db = 0;
   char zPath[192];
   char *zSql = 0;
   char *zErr = 0;
+  sqlite3_int64 nMissing = -1;
   int rc;
+
+  zFeature[0] = 0;
+  refsTableGetBranches(&pCtx->store.refs, &nBr, &aBr);
+  for(i=0; i<nBr; i++){
+    if( aBr[i].zName && strcmp(aBr[i].zName, "feature")==0 ){
+      hashHex(aBr[i].commitHash.data, zFeature);
+      break;
+    }
+  }
+  check("resolve feature tip for commit-ancestors source-miss",
+        strlen(zFeature)==40);
+  if( strlen(zFeature)!=40 ) goto commit_ancestors_done;
 
   snprintf(zPath, sizeof(zPath), "%s_commit_ancestors.db", zPrefix);
   check("create commit-ancestors source-miss store",
@@ -2260,15 +2276,30 @@ static void testCommitAncestorsSourceMiss(
   rc = doltlite_set_chunk_source(db, "main", pApi);
   check("register commit-ancestors source", rc==SQLITE_OK);
   if( rc!=SQLITE_OK ) goto commit_ancestors_done;
+  rc = execSql(db, "SELECT count(*) FROM sqlite_master");
+  check("warm schema for commit-ancestors source-miss", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto commit_ancestors_done;
+
   sourceResetCounters(pCtx);
+  pCtx->mode = SOURCE_NOTFOUND;
   zSql = sqlite3_mprintf(
       "SELECT count(*) FROM dolt_commit_ancestors "
-      "WHERE commit_hash='%s'", zMissing);
+      "WHERE commit_hash='%s'", zFeature);
   rc = zSql ? runToError(db, zSql, &zErr) : SQLITE_NOMEM;
   check("commit ancestors propagates sourced missing commit",
         rc==SQLITE_NOTFOUND && pCtx->nGet>0);
   check("commit ancestors source miss names hash",
-        zErr && strstr(zErr, zMissing)!=0);
+        zErr && strstr(zErr, zFeature)!=0);
+  sqlite3_free(zSql);
+  zSql = 0;
+
+  pCtx->mode = SOURCE_NORMAL;
+  zSql = sqlite3_mprintf(
+      "SELECT count(*) FROM dolt_commit_ancestors "
+      "WHERE commit_hash='%s'", zMissing);
+  rc = zSql ? queryInt64(db, zSql, &nMissing) : SQLITE_NOMEM;
+  check("commit ancestors unreachable hash returns empty",
+        rc==SQLITE_OK && nMissing==0);
 
 commit_ancestors_done:
   sqlite3_free(zSql);
