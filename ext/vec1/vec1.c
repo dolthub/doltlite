@@ -2563,6 +2563,7 @@ static void vec1BestMatchTransposeN(
 
   for(vv=0; vv<VEC1_MULTIMATCH_NVEC; vv++){
     aDist[vv] = INFINITY;
+    aBest[vv] = 0;
   }
 
   /* All the AVX2 code below assumes VEC1_NTRANSPOSE_WIDTH==8 */
@@ -2657,6 +2658,7 @@ static void vec1BestMatchN(
 
   for(cc=0; cc<VEC1_MULTIMATCH_NVEC; cc++){
     aDist[cc] = INFINITY;
+    aBest[cc] = 0;
   }
 
   for(cc=0; cc<=(nCent-VEC1_MULTIMATCH_NCENT); cc+=VEC1_MULTIMATCH_NCENT){
@@ -8184,6 +8186,7 @@ static void vec1EncodeVectorPQ(
 
   for(M=0; M<nCodebook; M++){
     float fBestDist = INFINITY;
+    aCode[M] = 0;
     for(K=0; K<VEC1_PQ_CODEBOOK_SZ; K+=VEC1_TRANSPOSE_WIDTH){
       int ii;
       float aAcc[VEC1_TRANSPOSE_WIDTH];
