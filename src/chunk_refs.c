@@ -721,7 +721,10 @@ static int refsMergeCategory(RefsMergeCat *p, int checkOnly){
         int rc = csRefArrayGrow(p->paDisk, *p->pnDisk, p->stride);
         if( rc!=SQLITE_OK ) return rc;
         pD = (void*)((u8*)(*p->paDisk) + (size_t)(*p->pnDisk)*p->stride);
-        if( p->xCopyInto(pD, pL) ) return SQLITE_NOMEM;
+        if( p->xCopyInto(pD, pL) ){
+          p->xFreeEntry(pD);
+          return SQLITE_NOMEM;
+        }
         (*p->pnDisk)++;
       }
     }
