@@ -1736,7 +1736,7 @@ static int schemaSqlWithoutChecks(const char *zSql, char **pzOut){
   {
     int strRc = sqlite3_str_errcode(pOut);
     if( rc!=SQLITE_OK || strRc ){
-      sqlite3_str_finish(pOut);
+      sqlite3_free(sqlite3_str_finish(pOut));
       return (rc==SQLITE_NOMEM || strRc) ? SQLITE_NOMEM : SQLITE_OK;
     }
   }

@@ -1,0 +1,62 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
+
+set testprefix doltlite_merge_cv_oom
+
+do_execsql_test 1.0 {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b TEXT, c INT, from_root_ish TEXT);
+  INSERT INTO t VALUES(1, 10, 'alpha', 100, 'x');
+  SELECT length(dolt_commit('-Am', 'base'));
+} {40}
+
+faultsim_save_and_close
+
+do_faultsim_test 1.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db one {SELECT count(*) FROM dolt_conflicts_t}
+} -test {
+  faultsim_test_result {0 0}
+}
+
+do_faultsim_test 1.2 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db one {SELECT count(*) FROM dolt_constraint_violations_t}
+} -test {
+  faultsim_test_result {0 0}
+}
+
+reset_db
+
+do_execsql_test 2.0 {
+  CREATE TABLE p(id INTEGER PRIMARY KEY);
+  INSERT INTO p VALUES(1);
+  CREATE TABLE c(
+    id INTEGER PRIMARY KEY,
+    pid INT REFERENCES p(id),
+    v INT CHECK(v > 0),
+    w INT DEFAULT 1
+  );
+  INSERT INTO c VALUES(1, 1, 10, 2);
+  SELECT length(dolt_commit('-Am', 'ancestor'));
+  SELECT dolt_branch('side');
+  SELECT dolt_checkout('side');
+  DROP TABLE c;
+  CREATE TABLE c(
+    id INTEGER PRIMARY KEY,
+    pid INT REFERENCES p(id),
+    v INT CHECK(v > 5),
+    w INT NOT NULL DEFAULT 7
+  );
+  INSERT INTO c VALUES(1, 1, 10, 2);
+  SELECT length(dolt_commit('-Am', 'side constraints'));
+  SELECT dolt_checkout('main');
+  ALTER TABLE c ADD COLUMN extra INT DEFAULT 3;
+  SELECT length(dolt_commit('-Am', 'main add col'));
+  SELECT length(dolt_merge('side'));
+  SELECT id, pid, v, w, extra FROM c;
+} {40 0 0 40 0 40 40 1 1 10 2 3}
+
+finish_test

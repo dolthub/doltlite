@@ -975,7 +975,7 @@ static char *cfrBuildSchema(const DoltliteColInfo *ci){
     if( doltliteAppendDisambiguatedColumnList(
             pStr,ci->azName,ci->nCol,"base_",", ",azReserved,
             ArraySize(azReserved),-1,ci->azDecl)!=SQLITE_OK ){
-      sqlite3_str_reset(pStr);
+      sqlite3_free(sqlite3_str_finish(pStr));
       return 0;
     }
 
@@ -983,7 +983,7 @@ static char *cfrBuildSchema(const DoltliteColInfo *ci){
     if( doltliteAppendDisambiguatedColumnList(
             pStr,ci->azName,ci->nCol,"our_",", ",azReserved,
             ArraySize(azReserved),-1,ci->azDecl)!=SQLITE_OK ){
-      sqlite3_str_reset(pStr);
+      sqlite3_free(sqlite3_str_finish(pStr));
       return 0;
     }
   }
@@ -994,7 +994,7 @@ static char *cfrBuildSchema(const DoltliteColInfo *ci){
     if( doltliteAppendDisambiguatedColumnList(
             pStr,ci->azName,ci->nCol,"their_",", ",azReserved,
             ArraySize(azReserved),-1,ci->azDecl)!=SQLITE_OK ){
-      sqlite3_str_reset(pStr);
+      sqlite3_free(sqlite3_str_finish(pStr));
       return 0;
     }
   }

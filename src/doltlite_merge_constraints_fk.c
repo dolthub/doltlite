@@ -1051,7 +1051,7 @@ static int dlStripColumn(const char *zDef, int bStripUnique, char **pzOut){
   }
   if( rc==SQLITE_OK && sqlite3_str_errcode(pStr) ) rc = SQLITE_NOMEM;
   if( rc!=SQLITE_OK ){
-    sqlite3_str_finish(pStr);
+    sqlite3_free(sqlite3_str_finish(pStr));
     return rc==SQLITE_NOMEM ? rc : SQLITE_CORRUPT;
   }
   *pzOut = sqlite3_str_finish(pStr);
@@ -1197,7 +1197,7 @@ static int dlNeutralSql(const char *zSql, char **pzOut){
   sqlite3_free(a);
   if( rc==SQLITE_OK && sqlite3_str_errcode(pStr) ) rc = SQLITE_NOMEM;
   if( rc!=SQLITE_OK ){
-    sqlite3_str_finish(pStr);
+    sqlite3_free(sqlite3_str_finish(pStr));
     return rc==SQLITE_NOMEM ? rc : SQLITE_CORRUPT;
   }
   *pzOut = sqlite3_str_finish(pStr);
@@ -1438,7 +1438,7 @@ int dlRewriteColumns(
   sqlite3_free(a);
   if( rc==SQLITE_OK && sqlite3_str_errcode(pStr) ) rc = SQLITE_NOMEM;
   if( rc!=SQLITE_OK ){
-    sqlite3_str_finish(pStr);
+    sqlite3_free(sqlite3_str_finish(pStr));
     return rc==SQLITE_NOMEM ? rc : SQLITE_CORRUPT;
   }
   *pzOut = sqlite3_str_finish(pStr);
