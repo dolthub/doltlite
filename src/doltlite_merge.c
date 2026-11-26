@@ -1403,7 +1403,7 @@ int doltliteReindexNamedIndexes(sqlite3 *db, char **az, int n,
     int suppressed = pIdx!=0;
     char *zSql;
     if( !pIdx && bSkipMissing ) continue;
-    zSql = sqlite3_mprintf("REINDEX \"%w\"", az[i]);
+    zSql = sqlite3_mprintf("REINDEX main.\"%w\"", az[i]);
     if( !zSql ) return SQLITE_NOMEM;
     if( pIdx ) pIdx->onError = OE_None;
     rc = doltliteMergeInstallStepFails() ? SQLITE_BUSY

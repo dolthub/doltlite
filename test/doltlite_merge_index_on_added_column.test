@@ -129,4 +129,55 @@ do_execsql_test names-dropped-column.unmerged {
   PRAGMA integrity_check;
 } {{CREATE TABLE t(id INTEGER PRIMARY KEY, a INT)} ok}
 
+# Adopted index whose name matches a built-in collation or REINDEX keyword
+# must still reindex main.<name> rather than resolving as a collation/keyword.
+foreach idx {nocase binary rtrim expressions} {
+  reset_db
+  do_execsql_test reindex-qualify-$idx [subst -nocommands {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+    INSERT INTO t VALUES(1,10);
+    SELECT dolt_commit('-Am','base') IS NOT NULL;
+    SELECT dolt_checkout('-b','feat');
+    CREATE INDEX "$idx" ON t(a);
+    INSERT INTO t VALUES(2,20);
+    SELECT dolt_commit('-Am','feat') IS NOT NULL;
+    SELECT dolt_checkout('main');
+    INSERT INTO t VALUES(3,30);
+    SELECT dolt_commit('-Am','main') IS NOT NULL;
+    SELECT dolt_merge('feat') IS NOT NULL;
+    SELECT id FROM t INDEXED BY "$idx" WHERE a=30;
+    PRAGMA integrity_check;
+  }] {1 0 1 0 1 1 3 ok}
+}
+
+# Adopted index sharing a name with indexes in temp and an attached database
+# must reindex main's index without colliding with temp or attached schemas.
+reset_db
+forcedelete aux.db
+do_execsql_test reindex-qualify-attached-and-temp {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+  INSERT INTO t VALUES(1,10);
+  SELECT dolt_commit('-Am','base') IS NOT NULL;
+  SELECT dolt_checkout('-b','feat');
+  CREATE INDEX idx_shared ON t(a);
+  INSERT INTO t VALUES(2,20);
+  SELECT dolt_commit('-Am','feat') IS NOT NULL;
+  SELECT dolt_checkout('main');
+  INSERT INTO t VALUES(3,30);
+  SELECT dolt_commit('-Am','main') IS NOT NULL;
+  ATTACH 'aux.db' AS aux;
+  CREATE TABLE aux.u(id INTEGER PRIMARY KEY, x INT);
+  CREATE INDEX aux.idx_shared ON u(x);
+  INSERT INTO aux.u VALUES(1,100);
+  CREATE TEMP TABLE tmp(id INTEGER PRIMARY KEY, x INT);
+  CREATE INDEX temp.idx_shared ON tmp(x);
+  INSERT INTO tmp VALUES(1,200);
+  SELECT dolt_merge('feat') IS NOT NULL;
+  SELECT id FROM t INDEXED BY idx_shared WHERE a=30;
+  PRAGMA main.integrity_check;
+  PRAGMA aux.integrity_check;
+  DETACH aux;
+} {1 0 1 0 1 1 3 ok ok}
+forcedelete aux.db
+
 finish_test
