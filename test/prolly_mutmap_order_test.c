@@ -13,6 +13,25 @@ typedef struct TestKey {
 static int nPass;
 static int nFail;
 
+static sqlite3_mem_methods oomOrigAlloc;
+static int oomFailCountdown;
+
+static int oomShouldFail(void){
+  if( oomFailCountdown<=0 ) return 0;
+  oomFailCountdown--;
+  return oomFailCountdown==0;
+}
+
+static void *oomMalloc(int n){
+  if( oomShouldFail() ) return 0;
+  return oomOrigAlloc.xMalloc(n);
+}
+
+static void *oomRealloc(void *p, int n){
+  if( oomShouldFail() ) return 0;
+  return oomOrigAlloc.xRealloc(p, n);
+}
+
 static int check(const char *zName, int ok){
   if( ok ){
     nPass++;
@@ -165,9 +184,167 @@ static void testWritePhases(int isInt){
   prollyMutMapFree(&mm);
 }
 
+static void testReinsertDeleteOom(void){
+  sqlite3_mem_methods methods;
+  sqlite3_int64 nBefore;
+  u8 bigVal[128];
+  u8 smallVal[4] = {1, 2, 3, 4};
+  u8 otherVal[4] = {9, 8, 7, 6};
+  ProllyMutMap mm;
+  ProllyMutMapEntry *e;
+  ProllyMutMapEntry *out;
+  int rc;
+  int bornBefore;
+  int undoBefore;
+
+  memset(bigVal, 0xab, sizeof(bigVal));
+  check("get oom allocator",
+        sqlite3_config(SQLITE_CONFIG_GETMALLOC, &oomOrigAlloc)==SQLITE_OK);
+  methods = oomOrigAlloc;
+  methods.xMalloc = oomMalloc;
+  methods.xRealloc = oomRealloc;
+  check("install oom allocator",
+        sqlite3_config(SQLITE_CONFIG_MALLOC, &methods)==SQLITE_OK);
+  check("init oom allocator", sqlite3_initialize()==SQLITE_OK);
+  nBefore = sqlite3_memory_used();
+
+  prollyMutMapInit(&mm, 1);
+
+  check("delete key 1 without savepoint",
+        prollyMutMapDelete(&mm, 0, 0, 1)==SQLITE_OK);
+  check("delete key 2 without savepoint",
+        prollyMutMapDelete(&mm, 0, 0, 2)==SQLITE_OK);
+  check("delete key 3 without savepoint",
+        prollyMutMapDelete(&mm, 0, 0, 3)==SQLITE_OK);
+
+  e = 0;
+  check("find deleted key 1", prollyMutMapFindRc(&mm, 0, 0, 1, &e)==SQLITE_OK && e);
+  bornBefore = e->bornAt;
+  out = (ProllyMutMapEntry*)1;
+  oomFailCountdown = 1;
+  rc = prollyMutMapInsertGetEntry(&mm, 0, 0, 1, bigVal, sizeof(bigVal), &out);
+  oomFailCountdown = 0;
+  check("reinsert InsertGetEntry OOM returns NOMEM", rc==SQLITE_NOMEM);
+  check("reinsert InsertGetEntry OOM clears ppEntry", out==0);
+  check("reinsert InsertGetEntry OOM keeps DELETE",
+        e->op==PROLLY_EDIT_DELETE && e->nVal==0 && e->nZeroTail==0
+        && e->bornAt==bornBefore);
+
+  e = 0;
+  check("find deleted key 2", prollyMutMapFindRc(&mm, 0, 0, 2, &e)==SQLITE_OK && e);
+  bornBefore = e->bornAt;
+  oomFailCountdown = 1;
+  rc = prollyMutMapInsertZeroTail(&mm, 2, bigVal, sizeof(bigVal), 64);
+  oomFailCountdown = 0;
+  check("reinsert InsertZeroTail OOM returns NOMEM", rc==SQLITE_NOMEM);
+  check("reinsert InsertZeroTail OOM keeps DELETE",
+        e->op==PROLLY_EDIT_DELETE && e->nVal==0 && e->nZeroTail==0
+        && e->bornAt==bornBefore);
+
+  e = 0;
+  check("find deleted key 3", prollyMutMapFindRc(&mm, 0, 0, 3, &e)==SQLITE_OK && e);
+  bornBefore = e->bornAt;
+  oomFailCountdown = 1;
+  rc = prollyMutMapReplaceEntry(&mm, e, bigVal, sizeof(bigVal));
+  oomFailCountdown = 0;
+  check("reinsert ReplaceEntry OOM returns NOMEM", rc==SQLITE_NOMEM);
+  check("reinsert ReplaceEntry OOM keeps DELETE",
+        e->op==PROLLY_EDIT_DELETE && e->nVal==0 && e->nZeroTail==0
+        && e->bornAt==bornBefore);
+
+  check("insert key 4 for savepoint undo warm-up",
+        prollyMutMapInsert(&mm, 0, 0, 4, smallVal, sizeof(smallVal))==SQLITE_OK);
+  check("insert key 5 for live replace OOM",
+        prollyMutMapInsert(&mm, 0, 0, 5, smallVal, sizeof(smallVal))==SQLITE_OK);
+
+  prollyMutMapPushSavepoint(&mm, 1);
+  check("warm undo array via key 4",
+        prollyMutMapInsert(&mm, 0, 0, 4, otherVal, sizeof(otherVal))==SQLITE_OK);
+  undoBefore = mm.nUndo;
+  check("undo array warmed", undoBefore==1 && mm.nUndoAlloc>undoBefore);
+
+  e = 0;
+  check("find deleted key 1 in savepoint",
+        prollyMutMapFindRc(&mm, 0, 0, 1, &e)==SQLITE_OK && e);
+  bornBefore = e->bornAt;
+  out = (ProllyMutMapEntry*)1;
+  oomFailCountdown = 1;
+  rc = prollyMutMapInsertGetEntry(&mm, 0, 0, 1, bigVal, sizeof(bigVal), &out);
+  oomFailCountdown = 0;
+  check("sp reinsert InsertGetEntry OOM returns NOMEM", rc==SQLITE_NOMEM);
+  check("sp reinsert InsertGetEntry OOM clears ppEntry", out==0);
+  check("sp reinsert InsertGetEntry OOM keeps DELETE and undo count",
+        e->op==PROLLY_EDIT_DELETE && e->nVal==0 && e->nZeroTail==0
+        && e->bornAt==bornBefore && mm.nUndo==undoBefore);
+
+  e = 0;
+  check("find deleted key 2 in savepoint",
+        prollyMutMapFindRc(&mm, 0, 0, 2, &e)==SQLITE_OK && e);
+  bornBefore = e->bornAt;
+  oomFailCountdown = 1;
+  rc = prollyMutMapInsertZeroTail(&mm, 2, bigVal, sizeof(bigVal), 64);
+  oomFailCountdown = 0;
+  check("sp reinsert InsertZeroTail OOM returns NOMEM", rc==SQLITE_NOMEM);
+  check("sp reinsert InsertZeroTail OOM keeps DELETE and undo count",
+        e->op==PROLLY_EDIT_DELETE && e->nVal==0 && e->nZeroTail==0
+        && e->bornAt==bornBefore && mm.nUndo==undoBefore);
+
+  e = 0;
+  check("find deleted key 3 in savepoint",
+        prollyMutMapFindRc(&mm, 0, 0, 3, &e)==SQLITE_OK && e);
+  bornBefore = e->bornAt;
+  oomFailCountdown = 1;
+  rc = prollyMutMapReplaceEntry(&mm, e, bigVal, sizeof(bigVal));
+  oomFailCountdown = 0;
+  check("sp reinsert ReplaceEntry OOM returns NOMEM", rc==SQLITE_NOMEM);
+  check("sp reinsert ReplaceEntry OOM keeps DELETE and undo count",
+        e->op==PROLLY_EDIT_DELETE && e->nVal==0 && e->nZeroTail==0
+        && e->bornAt==bornBefore && mm.nUndo==undoBefore);
+
+  e = 0;
+  check("find live key 5 in savepoint",
+        prollyMutMapFindRc(&mm, 0, 0, 5, &e)==SQLITE_OK && e);
+  bornBefore = e->bornAt;
+  oomFailCountdown = 2;
+  rc = prollyMutMapInsertGetEntry(&mm, 0, 0, 5, bigVal, sizeof(bigVal), &out);
+  oomFailCountdown = 0;
+  check("sp replace live key OOM returns NOMEM", rc==SQLITE_NOMEM);
+  check("sp replace live key OOM preserves value and pops undo",
+        e->op==PROLLY_EDIT_INSERT && e->nVal==sizeof(smallVal)
+        && memcmp(e->pVal, smallVal, sizeof(smallVal))==0
+        && e->bornAt==bornBefore && mm.nUndo==undoBefore);
+
+  check("rollback savepoint after OOM",
+        prollyMutMapRollbackToSavepoint(&mm, 1)==SQLITE_OK);
+  check("undo log empty after rollback", mm.nUndo==0);
+
+  e = 0;
+  check("key 1 still DELETE after rollback",
+        prollyMutMapFindRc(&mm, 0, 0, 1, &e)==SQLITE_OK
+        && e && e->op==PROLLY_EDIT_DELETE && e->nVal==0);
+  check("key 4 restored after rollback",
+        prollyMutMapFindRc(&mm, 0, 0, 4, &e)==SQLITE_OK
+        && e && e->op==PROLLY_EDIT_INSERT && e->nVal==sizeof(smallVal)
+        && memcmp(e->pVal, smallVal, sizeof(smallVal))==0);
+
+  check("reinsert key 1 succeeds after OOM clears",
+        prollyMutMapInsert(&mm, 0, 0, 1, bigVal, sizeof(bigVal))==SQLITE_OK);
+  check("key 1 is INSERT with full value",
+        prollyMutMapFindRc(&mm, 0, 0, 1, &e)==SQLITE_OK
+        && e && e->op==PROLLY_EDIT_INSERT && e->nVal==sizeof(bigVal)
+        && memcmp(e->pVal, bigVal, sizeof(bigVal))==0);
+
+  prollyMutMapFree(&mm);
+  check("oom test releases all allocations", sqlite3_memory_used()==nBefore);
+  check("shutdown oom allocator", sqlite3_shutdown()==SQLITE_OK);
+  check("restore oom allocator",
+        sqlite3_config(SQLITE_CONFIG_MALLOC, &oomOrigAlloc)==SQLITE_OK);
+}
+
 int main(void){
   static const int prefixes[] = {0, 7, 8, 15, 16, 23, 24, 31, 32, 64, 128};
   int i, wide;
+  testReinsertDeleteOom();
   sqlite3_initialize();
   testWritePhases(0);
   testWritePhases(1);
