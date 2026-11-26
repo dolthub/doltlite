@@ -1521,6 +1521,36 @@ static void test_mixed_merge_history(void){
   }
 }
 
+static void test_weibull_large_sizes(void){
+  static const struct {
+    const char *zName;
+    i64 size;
+    i64 thisSize;
+    u32 hash;
+    int want;
+  } aCases[] = {
+    { "weibull_above_max",           PROLLY_CHUNK_MAX + 1,           8,                       0xffffffffu, 1 },
+    { "weibull_over_int32_max",      (i64)0x7fffffffLL + 1,          (i64)0x7fffffffLL + 1,   0xffffffffu, 1 },
+    { "weibull_over_int32_max_2",    (i64)0x7fffffffLL + 100000,     100000,                  0x80000000u, 1 },
+    { "weibull_over_uint32_max",     ((i64)1 << 32) + 512,           512,                     0xffffffffu, 1 },
+    { "weibull_huge_i64",            (i64)1 << 40,                   (i64)1 << 39,            0xffffffffu, 1 },
+    { "weibull_int64_max",           (i64)0x7fffffffffffffffLL,      (i64)0x7fffffffffffffffLL, 0xffffffffu, 1 },
+    { "weibull_size_zero",           0,                              0,                       0x00000000u, 0 },
+    { "weibull_negative_size",       -1,                             1,                       0x00000000u, 0 },
+    { "weibull_negative_this_size",  1024,                           -8,                      0x00000000u, 0 },
+    { "weibull_this_gt_size",        512,                            1024,                    0x00000000u, 1 },
+  };
+  int i;
+  for(i=0; i<(int)(sizeof(aCases)/sizeof(aCases[0])); i++){
+    int got = prollyWeibullCheck(aCases[i].size, aCases[i].thisSize, aCases[i].hash);
+    check(aCases[i].zName, got==aCases[i].want);
+  }
+  check("entry_bytes_no_i32_overflow",
+        PROLLY_NODE_ENTRY_BYTES(0, 8, 0x7fffffff) == (i64)0x7fffffffLL + 16);
+  check("chunker_level_nbytes_64bit",
+        sizeof(((ProllyChunkerLevel*)0)->nBytes) == sizeof(i64));
+}
+
 int main(void){
   sqlite3_initialize();
   printf("Prolly chunker boundary golden tests\n");
@@ -1528,6 +1558,7 @@ int main(void){
 
   test_xxh32_golden();
   test_weibull_golden();
+  test_weibull_large_sizes();
   test_chunker_root_golden();
   test_mixed_merge_history();
   test_chunker_repeatable();

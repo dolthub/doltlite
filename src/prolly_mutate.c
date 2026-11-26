@@ -317,20 +317,20 @@ streaming_cleanup:
 
 /* Same boundary as the chunker: split at CHUNK_MAX, or CHUNK_MIN if Weibull
 ** fires. One entry cannot split. Seeded by node level. */
-static int chunkBoundary(int nItems, int nBytes, int thisSize,
+static int chunkBoundary(int nItems, i64 nBytes, i64 thisSize,
                          const u8 *pKey, int nKey, u8 level){
   if( nItems<=1 ) return 0;
   if( nBytes >= PROLLY_CHUNK_MAX ) return 1;
   if( nBytes >= PROLLY_CHUNK_MIN ){
     u32 h = prollyXXH32(pKey, nKey, (u32)level);
-    return prollyWeibullCheck((u32)nBytes, (u32)thisSize, h);
+    return prollyWeibullCheck(nBytes, thisSize, h);
   }
   return 0;
 }
 
-static int nodeTotalBytes(const ProllyNode *pNode){
+static i64 nodeTotalBytes(const ProllyNode *pNode){
   int i;
-  int nBytes = 0;
+  i64 nBytes = 0;
   for(i=0; i<(int)pNode->nItems; i++){
     const u8 *pK, *pV;
     int nK, nV;
@@ -347,8 +347,8 @@ static void nodeAppendState(const ProllyNode *pNode,
                             int nVal,
                             int *pEndsAtBoundary,
                             int *pWouldSplit){
-  int nBytes = nodeTotalBytes(pNode);
-  int thisSize = PROLLY_NODE_ENTRY_BYTES(pNode->level, nKey, nVal);
+  i64 nBytes = nodeTotalBytes(pNode);
+  i64 thisSize = PROLLY_NODE_ENTRY_BYTES(pNode->level, nKey, nVal);
 
   *pEndsAtBoundary = 0;
   if( pNode->nItems>0 ){
@@ -368,8 +368,8 @@ static void nodeAppendState(const ProllyNode *pNode,
 static int appendWouldSplitNode(const ProllyNode *pNode,
                                 const u8 *pKey, int nKey,
                                 int nVal){
-  int thisSize = PROLLY_NODE_ENTRY_BYTES(pNode->level, nKey, nVal);
-  int nBytes = nodeTotalBytes(pNode) + thisSize;
+  i64 thisSize = PROLLY_NODE_ENTRY_BYTES(pNode->level, nKey, nVal);
+  i64 nBytes = nodeTotalBytes(pNode) + thisSize;
   return chunkBoundary((int)pNode->nItems + 1, nBytes, thisSize,
                        pKey, nKey, pNode->level);
 }
@@ -377,7 +377,7 @@ static int appendWouldSplitNode(const ProllyNode *pNode,
 static int nodeEndsAtChunkBoundary(const ProllyNode *pNode){
   const u8 *pKey, *pVal;
   int nKey, nVal;
-  int nBytes;
+  i64 nBytes;
 
   if( pNode->nItems==0 ) return 0;
   nBytes = nodeTotalBytes(pNode);
@@ -392,13 +392,13 @@ static int nodeHasSameChunkShape(const ProllyNode *pNode,
                                  int requireFinalBoundary){
   const u8 *pKey, *pVal;
   int nKey, nVal;
-  int nBytes = 0;
+  i64 nBytes = 0;
   int i;
 
   if( pNode->nItems==0 ) return 0;
   for(i=0; i<(int)pNode->nItems; i++){
     int isBoundary;
-    int thisSize;
+    i64 thisSize;
 
     prollyNodeKey(pNode, i, &pKey, &nKey);
     prollyNodeValue(pNode, i, &pVal, &nVal);

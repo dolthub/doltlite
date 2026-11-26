@@ -56,7 +56,10 @@ int prollyHashIsEmpty(const ProllyHash *h){
 #define PROLLY_WEIBULL_L  4096.0
 #define PROLLY_MAX_U32    4294967295.0
 
-int prollyWeibullCheck(u32 size, u32 thisSize, u32 hash){
+int prollyWeibullCheck(i64 size, i64 thisSize, u32 hash){
+  if( size > PROLLY_CHUNK_MAX ) return 1;
+  if( size <= 0 || thisSize <= 0 ) return 0;
+  if( thisSize > size ) thisSize = size;
 #if defined(__GNUC__) || defined(__clang__)
   static double aWeibull[PROLLY_CHUNK_MAX + 1];
   static volatile int initState = 0;

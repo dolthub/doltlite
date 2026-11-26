@@ -20,7 +20,7 @@ typedef struct ProllyChunkerLeaf ProllyChunkerLeaf;
 struct ProllyChunkerLevel {
   ProllyNodeBuilder builder;
   int nItems;
-  int nBytes;
+  i64 nBytes;
   u64 subtreeCount;
 };
 

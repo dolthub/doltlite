@@ -27,7 +27,7 @@
 #define PROLLY_NODE_BUFFER_SLOP 8
 
 #define PROLLY_NODE_ENTRY_BYTES(level,nKey,nVal) \
-  ((nKey) + (nVal) + 8 + ((level)>0 ? 8 : 0))
+  ((i64)(nKey) + (i64)(nVal) + 8 + ((level)>0 ? 8 : 0))
 
 static inline int prollyKeyCmp(const u8 *pA, int nA, const u8 *pB, int nB){
   int n = nA < nB ? nA : nB;

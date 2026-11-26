@@ -176,6 +176,60 @@ static void test_build_index_entry_wide_header(void){
   sqlite3_close(db);
 }
 
+static void test_record_int_field_signed(void){
+  static const struct {
+    const char *zName;
+    i64 val;
+    int expectedType;
+  } aCases[] = {
+    { "int_field_zero",             0,                        8 },
+    { "int_field_one",              1,                        9 },
+    { "int_field_neg_1",            -1,                       1 },
+    { "int_field_neg_128",          -128,                     1 },
+    { "int_field_pos_127",          127,                      1 },
+    { "int_field_neg_129",          -129,                     2 },
+    { "int_field_neg_32768",        -32768,                   2 },
+    { "int_field_pos_32767",        32767,                    2 },
+    { "int_field_neg_32769",        -32769,                   3 },
+    { "int_field_neg_8388608",      -8388608,                 3 },
+    { "int_field_pos_8388607",      8388607,                  3 },
+    { "int_field_neg_8388609",      -8388609,                 4 },
+    { "int_field_neg_2147483648",   -2147483648LL,            4 },
+    { "int_field_pos_2147483647",   2147483647LL,             4 },
+    { "int_field_neg_2147483649",   -2147483649LL,            5 },
+    { "int_field_neg_6byte_min",    -140737488355328LL,       5 },
+    { "int_field_pos_6byte_max",    140737488355327LL,        5 },
+    { "int_field_neg_6byte_under",  -140737488355329LL,       6 },
+    { "int_field_int64_min",        (-9223372036854775807LL - 1), 6 },
+    { "int_field_int64_max",        9223372036854775807LL,    6 },
+  };
+  int i;
+
+  for(i=0; i<(int)(sizeof(aCases)/sizeof(aCases[0])); i++){
+    DoltliteSerialValue sv;
+    DoltliteRecordInfo info = {0};
+    u8 *pRec;
+    int nRec = 0;
+    i64 got;
+
+    memset(&sv, 0, sizeof(sv));
+    sv.eType = SQLITE_INTEGER;
+    sv.i = aCases[i].val;
+    pRec = doltliteBuildRecord(&sv, 1, &nRec);
+    check(aCases[i].zName,
+          pRec!=0 && nRec>0
+          && doltliteParseRecordStrict(pRec, nRec, &info)==SQLITE_OK
+          && info.nField==1
+          && info.aType[0]==aCases[i].expectedType);
+    if( pRec && info.nField==1 ){
+      got = dlRecordIntField(pRec, nRec, &info, 0);
+      check(aCases[i].zName, got==aCases[i].val);
+    }
+    doltliteRecordInfoClear(&info);
+    sqlite3_free(pRec);
+  }
+}
+
 int main(void){
   DoltliteRecordInfo info = {0};
   u8 rec[512];
@@ -203,6 +257,7 @@ int main(void){
 
   test_build_record_overflow();
   test_build_index_entry_wide_header();
+  test_record_int_field_signed();
 
   printf("record_info_stack_test: %d passed, %d failed\n", nPass, nFail);
   return nFail ? 1 : 0;
