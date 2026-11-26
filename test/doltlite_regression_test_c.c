@@ -15135,6 +15135,62 @@ static void run_diff_table_pk_seek(void){
   removeDbFiles(dbpath);
 }
 
+/* Blaming a few rows asks each commit about those keys instead of walking
+** everything the commit changed. */
+static void run_blame_few_rows_seeks(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char sql[256];
+  long long nBlame, nDiff;
+  int i;
+
+  printf("=== Blame Few Rows Seeks Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_blame_few_rows_seeks");
+  removeDbFiles(dbpath);
+  check("bfr_open", open_db(dbpath, &db)==SQLITE_OK);
+  check("bfr_seed", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, k INTEGER);"
+    "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<20000)"
+    " INSERT INTO t SELECT x, 'base_'||x, x FROM c;"
+    "SELECT dolt_commit('-Am','base');")==SQLITE_OK);
+  for(i=1; i<=120; i++){
+    snprintf(sql, sizeof(sql),
+        "UPDATE t SET v='c%d' WHERE id%%120=%d;"
+        "SELECT dolt_commit('-Am','c%d');", i, i%120, i);
+    if( execSql(db, sql)!=SQLITE_OK ) break;
+  }
+  check("bfr_history", i==121);
+  check("bfr_tail", execSql(db,
+    "ALTER TABLE t ADD COLUMN extra TEXT;"
+    "SELECT dolt_commit('-Am','addcol');"
+    "UPDATE t SET extra='e' WHERE id=3;"
+    "SELECT dolt_commit('-Am','extra');")==SQLITE_OK);
+  sqlite3_close(db);
+
+  check("bfr_reopen_blame", open_db(dbpath, &db)==SQLITE_OK);
+  check("bfr_blame", strcmp(queryScalarText(db,
+      "SELECT group_concat(id||':'||message) FROM dolt_blame_t"
+      " WHERE id IN (1,2,3,120,20000)"),
+      "1:c1,2:c2,3:extra,120:c120,20000:c80")==0);
+  nBlame = engineStat(db, "verify_bytes");
+  sqlite3_close(db);
+
+  check("bfr_reopen_diff", open_db(dbpath, &db)==SQLITE_OK);
+  check("bfr_diff", strcmp(queryScalarText(db,
+      "SELECT count(*) FROM dolt_diff_t"), "40001")==0);
+  nDiff = engineStat(db, "verify_bytes");
+  printf("  bytes read: blame of 5 rows %lld, full history diff %lld\n",
+         nBlame, nDiff);
+  check("bfr_blame_reads_less", nBlame*3<nDiff);
+  check("bfr_matches_full_blame", strcmp(queryScalarText(db,
+      "SELECT count(*) FROM dolt_blame_t a JOIN"
+      " (SELECT id, \"commit\" c FROM dolt_blame_t WHERE id+0<=400) b"
+      " ON a.id=b.id AND a.\"commit\"=b.c WHERE a.id IN"
+      " (1,2,3,7,77,119,120,121,240,399,400)"), "11")==0);
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_workspace_schema_check_once(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -24312,6 +24368,7 @@ static const RegressionCase aCases[] = {
   { "workspace_discard_writes_once", "Workspace Discard Writes Once Test", run_workspace_discard_writes_once },
   { "clone_validates_leaves_by_presence", "Clone Validates Leaves By Presence Test", run_clone_validates_leaves_by_presence },
   { "diff_table_pk_seek", "Diff Table PK Seek Test", run_diff_table_pk_seek },
+  { "blame_few_rows_seeks", "Blame Few Rows Seeks Test", run_blame_few_rows_seeks },
   { "workspace_schema_check_once", "Workspace Schema Check Once Test", run_workspace_schema_check_once },
   { "workspace_queue_dedupes_rows", "Workspace Queue Dedupes Rows Test", run_workspace_queue_dedupes_rows },
   { "rebase_main_table_schema_guard", "Rebase Main Table Schema Guard Test", run_rebase_main_table_schema_guard },

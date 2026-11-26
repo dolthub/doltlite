@@ -551,6 +551,43 @@ static int blameCompareByDiff(
   return rc;
 }
 
+/* With few rows left, asking the diff about each key reads less than
+** walking everything the commit changed. */
+#define BLAME_POINT_ROWS 16
+static int blameCompareByKey(
+  sqlite3 *db,
+  BlameCursor *pCur,
+  const ProllyHash *pRefRoot,
+  const ProllyHash *pCurRoot,
+  const ProllyHash *pCommitHash,
+  const DoltliteCommit *pCommit,
+  DoltliteDiffLayout *pLayout
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  int rc = SQLITE_OK;
+  int i;
+
+  for(i=0; i<pCur->nRows && rc==SQLITE_OK; i++){
+    BlameRow *r = &pCur->aRows[i];
+    ProllyDiffIter iter;
+    ProllyDiffChange *pChange = 0;
+    if( r->blamed ) continue;
+    rc = prollyDiffIterOpenIntKey(&iter, cs, pCache, pRefRoot, pCurRoot,
+            pLayout->nSlot ? doltliteDiffRecordsEqual : 0, pLayout,
+            r->intKey);
+    if( rc==SQLITE_OK ) rc = prollyDiffIterStep(&iter, &pChange);
+    prollyDiffIterClose(&iter);
+    if( rc==SQLITE_ROW && pChange ){
+      rc = blameResolveRow(r, pCommitHash, pCommit);
+      if( rc==SQLITE_OK ) pCur->nUnresolved--;
+    }else if( rc==SQLITE_DONE || rc==SQLITE_ROW ){
+      rc = SQLITE_OK;
+    }
+  }
+  return rc;
+}
+
 static int blameLoadDiffLayout(
   sqlite3 *db,
   const char *zTable,
@@ -644,6 +681,13 @@ static int blameCompareAgainstRef(
   /* After crossing a layout change the fallback's working records may
   ** use different slots than the historical pair. */
   if( layout.nSlot ) pCur->changedLayout = 1;
+  if( (curFlags & PROLLY_NODE_INTKEY) && (refFlags & PROLLY_NODE_INTKEY)
+   && pCur->nUnresolved<=BLAME_POINT_ROWS ){
+    rc = blameCompareByKey(db, pCur, &refRoot, pCurRoot,
+                           pCommitHash, pCommit, &layout);
+    doltliteDiffLayoutClear(&layout);
+    return rc;
+  }
   if( !pCur->rebuiltKeyVals || pCur->changedLayout ){
     int done = 0;
     rc = blameCompareByDiff(db, pCur, &refRoot, refFlags,
