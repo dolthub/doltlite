@@ -344,4 +344,77 @@ foreach {kind fkPragma tableDdl insertSql} {
   }
 }
 
+reset_db
+do_execsql_test workspace-discard-swap-setup {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, u TEXT UNIQUE);
+  INSERT INTO t VALUES(1,'a'),(2,'b');
+  SELECT length(dolt_commit('-Am','base'));
+  UPDATE t SET u='tmp' WHERE id=1;
+  UPDATE t SET u='a' WHERE id=2;
+  UPDATE t SET u='b' WHERE id=1;
+} {40}
+do_catchsql_test workspace-discard-swap-partial-reject {
+  DELETE FROM dolt_workspace_t WHERE from_id=1;
+} {1 {UNIQUE constraint failed: t.u}}
+do_execsql_test workspace-discard-swap-partial-unchanged {
+  SELECT id, u FROM t ORDER BY id;
+  SELECT count(*) FROM dolt_workspace_t;
+  PRAGMA integrity_check;
+} {1 b 2 a 2 ok}
+do_execsql_test workspace-discard-swap-all {
+  DELETE FROM dolt_workspace_t WHERE diff_type='modified';
+  SELECT id, u FROM t ORDER BY id;
+  SELECT count(*) FROM dolt_workspace_t;
+  PRAGMA integrity_check;
+} {1 a 2 b 0 ok}
+
+reset_db
+do_execsql_test workspace-discard-rotate3-setup {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, u TEXT UNIQUE);
+  INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c');
+  SELECT length(dolt_commit('-Am','base'));
+  UPDATE t SET u='tmp' WHERE id=1;
+  UPDATE t SET u='a' WHERE id=2;
+  UPDATE t SET u='b' WHERE id=3;
+  UPDATE t SET u='c' WHERE id=1;
+} {40}
+do_catchsql_test workspace-discard-rotate3-partial-reject {
+  DELETE FROM dolt_workspace_t WHERE from_id IN (1,2);
+} {1 {UNIQUE constraint failed: t.u}}
+do_execsql_test workspace-discard-rotate3-partial-unchanged {
+  SELECT id, u FROM t ORDER BY id;
+  SELECT count(*) FROM dolt_workspace_t;
+  PRAGMA integrity_check;
+} {1 c 2 a 3 b 3 ok}
+do_execsql_test workspace-discard-rotate3-all {
+  DELETE FROM dolt_workspace_t WHERE diff_type='modified';
+  SELECT id, u FROM t ORDER BY id;
+  SELECT count(*) FROM dolt_workspace_t;
+  PRAGMA integrity_check;
+} {1 a 2 b 3 c 0 ok}
+
+reset_db
+do_execsql_test workspace-discard-swap-worowid-setup {
+  CREATE TABLE t(id TEXT PRIMARY KEY, u TEXT UNIQUE) WITHOUT ROWID;
+  INSERT INTO t VALUES('k1','a'),('k2','b');
+  SELECT length(dolt_commit('-Am','base'));
+  UPDATE t SET u='tmp' WHERE id='k1';
+  UPDATE t SET u='a' WHERE id='k2';
+  UPDATE t SET u='b' WHERE id='k1';
+} {40}
+do_catchsql_test workspace-discard-swap-worowid-partial-reject {
+  DELETE FROM dolt_workspace_t WHERE from_id='k1';
+} {1 {UNIQUE constraint failed: t.u}}
+do_execsql_test workspace-discard-swap-worowid-partial-unchanged {
+  SELECT id, u FROM t ORDER BY id;
+  SELECT count(*) FROM dolt_workspace_t;
+  PRAGMA integrity_check;
+} {k1 b k2 a 2 ok}
+do_execsql_test workspace-discard-swap-worowid-all {
+  DELETE FROM dolt_workspace_t WHERE diff_type='modified';
+  SELECT id, u FROM t ORDER BY id;
+  SELECT count(*) FROM dolt_workspace_t;
+  PRAGMA integrity_check;
+} {k1 a k2 b 0 ok}
+
 finish_test

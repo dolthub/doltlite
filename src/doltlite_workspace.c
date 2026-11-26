@@ -1577,19 +1577,10 @@ static int wsUpdate(sqlite3_vtab *pBase, int argc, sqlite3_value **argv,
     if( rc!=SQLITE_OK ) return rc;
     {
       Table *pTab = sqlite3FindTable(p->db, p->zTableName, "main");
-      if( pTab && IsOrdinaryTable(pTab) ){
-        Index *pIdx;
-        if( (p->db->flags & SQLITE_ForeignKeys)
-         && (pTab->u.tab.pFKey || sqlite3FkReferences(pTab)) ){
-          return wsDiscardRow(p, r, pTab);
-        }
-        for(pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext){
-          if( IsUniqueIndex(pIdx)
-           && (HasRowid(pTab) || !IsPrimaryKeyIndex(pIdx))
-           && (!HasRowid(pTab) || pTab->iPKey>=0 || sqlite3RowidAlias(pTab)) ){
-            return wsDiscardRow(p, r, pTab);
-          }
-        }
+      if( pTab && IsOrdinaryTable(pTab)
+       && (p->db->flags & SQLITE_ForeignKeys)
+       && (pTab->u.tab.pFKey || sqlite3FkReferences(pTab)) ){
+        return wsDiscardRow(p, r, pTab);
       }
     }
     return wsQueueChange(p, pRows, r, 0, 1);
