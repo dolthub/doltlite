@@ -276,4 +276,72 @@ do_test workspace-discard-raw-incrblob-invalidate {
   list $rc [execsql {SELECT hex(b) FROM t WHERE id=1}] [execsql {PRAGMA integrity_check}]
 } {1 01020304 ok}
 
+foreach {path fkPragma tableDdl} {
+  unique_sql OFF {CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT UNIQUE)}
+  fk_sql ON {CREATE TABLE p(id INTEGER PRIMARY KEY); INSERT INTO p VALUES(1),(2);
+             CREATE TABLE t(id INTEGER PRIMARY KEY REFERENCES p(id), v TEXT)}
+  raw OFF {CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)}
+} {
+  foreach mutation {update delete} {
+    reset_db
+    execsql "PRAGMA foreign_keys=$fkPragma; $tableDdl"
+    execsql {
+      INSERT INTO t VALUES(1,'a'),(2,'b');
+      SELECT dolt_commit('-Am','base');
+      ALTER TABLE t ADD COLUMN c INT NOT NULL DEFAULT 42;
+      ALTER TABLE t ADD COLUMN s TEXT DEFAULT 'def';
+      ALTER TABLE t ADD COLUMN r REAL DEFAULT 1;
+      ALTER TABLE t ADD COLUMN b BLOB DEFAULT X'CAFE';
+      ALTER TABLE t ADD COLUMN n INT;
+      CREATE INDEX idx_t_c ON t(c);
+      SELECT dolt_commit('-Am','add defaults');
+    }
+    if {$mutation eq "delete"} {
+      execsql {DELETE FROM t WHERE id=1}
+    } else {
+      execsql {UPDATE t SET v='x', c=99, s='mod', r=2.5, b=X'00', n=7 WHERE id=1}
+    }
+    do_execsql_test workspace-discard-default-rowid-$path-$mutation {
+      DELETE FROM dolt_workspace_t WHERE from_id=1;
+      SELECT id, v, c, s, r, typeof(r), hex(b), quote(n) FROM t ORDER BY id;
+      SELECT count(*) FROM dolt_workspace_t;
+      PRAGMA integrity_check;
+    } {1 a 42 def 1.0 real CAFE NULL 2 b 42 def 1.0 real CAFE NULL 0 ok}
+  }
+}
+
+foreach {kind fkPragma tableDdl insertSql} {
+  unique_sql OFF {CREATE TABLE t(id TEXT PRIMARY KEY, v TEXT UNIQUE) WITHOUT ROWID}
+    {INSERT INTO t VALUES('k1','a'),('k2','b')}
+  pkonly_fk_sql ON {CREATE TABLE p(id TEXT PRIMARY KEY); INSERT INTO p VALUES('k1'),('k2');
+                    CREATE TABLE t(id TEXT PRIMARY KEY REFERENCES p(id)) WITHOUT ROWID}
+    {INSERT INTO t VALUES('k1'),('k2')}
+  pkonly_raw OFF {CREATE TABLE t(id TEXT PRIMARY KEY) WITHOUT ROWID}
+    {INSERT INTO t VALUES('k1'),('k2')}
+} {
+  foreach mutation {update delete} {
+    reset_db
+    execsql "PRAGMA foreign_keys=$fkPragma; $tableDdl; $insertSql"
+    execsql {
+      SELECT dolt_commit('-Am','base');
+      ALTER TABLE t ADD COLUMN c INT NOT NULL DEFAULT 42;
+      ALTER TABLE t ADD COLUMN s TEXT DEFAULT 'def';
+      ALTER TABLE t ADD COLUMN n INT;
+      CREATE INDEX idx_t_c ON t(c);
+      SELECT dolt_commit('-Am','add defaults');
+    }
+    if {$mutation eq "delete"} {
+      execsql {DELETE FROM t WHERE id='k1'}
+    } else {
+      execsql {UPDATE t SET c=99, s='mod', n=7 WHERE id='k1'}
+    }
+    do_execsql_test workspace-discard-default-worowid-$kind-$mutation {
+      DELETE FROM dolt_workspace_t WHERE from_id='k1';
+      SELECT id, c, s, quote(n) FROM t ORDER BY id;
+      SELECT count(*) FROM dolt_workspace_t;
+      PRAGMA integrity_check;
+    } {k1 42 def NULL k2 42 def NULL 0 ok}
+  }
+}
+
 finish_test

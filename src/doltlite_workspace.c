@@ -1312,8 +1312,54 @@ void doltliteWorkspaceFinishStatement(Vdbe *pStmt){
 }
 
 
+static int wsBindDiscardDefault(
+  sqlite3 *db,
+  sqlite3_stmt *pStmt,
+  int iParam,
+  Table *pTab,
+  int iCol
+){
+  Column *pCol;
+  Expr *pDflt;
+  sqlite3_value *pVal = 0;
+  int rc;
+
+  if( !pTab || iCol<0 || iCol>=pTab->nCol ){
+    return sqlite3_bind_null(pStmt, iParam);
+  }
+  pCol = &pTab->aCol[iCol];
+  if( !pCol->iDflt || (pCol->colFlags & COLFLAG_GENERATED)!=0 ){
+    return sqlite3_bind_null(pStmt, iParam);
+  }
+  pDflt = sqlite3ColumnExpr(pTab, pCol);
+  if( !pDflt ){
+    return sqlite3_bind_null(pStmt, iParam);
+  }
+  rc = sqlite3ValueFromExpr(db, pDflt, ENC(db), pCol->affinity, &pVal);
+  if( rc!=SQLITE_OK ){
+    sqlite3ValueFree(pVal);
+    return rc;
+  }
+  if( !pVal ){
+    return sqlite3_bind_null(pStmt, iParam);
+  }
+#ifndef SQLITE_OMIT_FLOATING_POINT
+  if( pCol->affinity==SQLITE_AFF_REAL
+   && sqlite3_value_type(pVal)==SQLITE_INTEGER ){
+    rc = sqlite3_bind_double(pStmt, iParam, sqlite3_value_double(pVal));
+  }else
+#endif
+  {
+    rc = sqlite3_bind_value(pStmt, iParam, pVal);
+  }
+  sqlite3ValueFree(pVal);
+  return rc;
+}
+
 static int wsBindDiscardColumn(
+  sqlite3 *db,
   sqlite3_stmt *pStmt, int iParam,
+  Table *pTab,
   const DoltliteColInfo *pCols, int iCol,
   const u8 *pRec, int nRec, const DoltliteRecordInfo *pInfo,
   i64 intKey
@@ -1324,10 +1370,10 @@ static int wsBindDiscardColumn(
   if( iCol==pCols->iPkCol ){
     return sqlite3_bind_int64(pStmt, iParam, intKey);
   }
-  /* A trailing NULL is stored by leaving the field out. */
+  /* Short records omit trailing columns added with ALTER TABLE ADD COLUMN. */
   iField = pCols->aColToRec ? pCols->aColToRec[iCol] : iCol;
   if( iField<0 || !pInfo || iField>=pInfo->nField ){
-    return sqlite3_bind_null(pStmt, iParam);
+    return wsBindDiscardDefault(db, pStmt, iParam, pTab, iCol);
   }
   rc = doltliteSerialValueFromField(pRec, nRec, pInfo, iField, &v);
   if( rc!=SQLITE_OK ) return rc;
@@ -1440,7 +1486,8 @@ static int wsDiscardRow(WorkspaceVtab *p, WorkspaceRow *r, Table *pTab){
   for(i=0; i<pCols->nCol && rc==SQLITE_OK; i++){
     if( pCols->aGenerated[i]!=DOLTLITE_GEN_NONE ) continue;
     if( sqlite3_bind_parameter_name(pStmt, i+1)==0 ) continue;
-    rc = wsBindDiscardColumn(pStmt, i+1, pCols, i, pRec, nRec, &info, r->intKey);
+    rc = wsBindDiscardColumn(db, pStmt, i+1, pTab, pCols, i,
+                             pRec, nRec, &info, r->intKey);
   }
   if( rc==SQLITE_OK && zRowid
    && (r->diffType!=PROLLY_DIFF_DELETE || pTab->iPKey<0) ){
