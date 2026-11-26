@@ -66,4 +66,77 @@ foreach {kind value ignored} {
   }
 }
 
+foreach {variant ddl} {
+  without-rowid {CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT NOT NULL, PRIMARY KEY(pattern)) WITHOUT ROWID}
+  without-rowid-desc {CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT NOT NULL, PRIMARY KEY(pattern DESC)) WITHOUT ROWID}
+} {
+  reset_db
+  db eval {
+    CREATE TABLE base(id INTEGER PRIMARY KEY);
+    INSERT INTO base VALUES(1);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_checkout('-b','target');
+  }
+  db eval $ddl
+  db eval {
+    INSERT INTO dolt_ignore VALUES('scratch_%', 1), ('scratch_keep', 0);
+    CREATE TABLE scratch_hidden(id INTEGER PRIMARY KEY);
+    INSERT INTO scratch_hidden VALUES(8);
+    CREATE TABLE scratch_keep(id INTEGER PRIMARY KEY);
+    INSERT INTO scratch_keep VALUES(9);
+  }
+  do_execsql_test ignore-$variant-status {
+    SELECT table_name FROM dolt_status ORDER BY table_name;
+  } {dolt_ignore scratch_keep}
+  db eval {SELECT dolt_checkout('main')}
+  do_test ignore-$variant-commit-branch {
+    lindex [catchsql {SELECT dolt_commit('--branch','target','-Am','target')}] 0
+  } 0
+  db eval {SELECT dolt_checkout('target')}
+  do_execsql_test ignore-$variant-hidden-uncommitted {
+    SELECT count(*) FROM dolt_schema_diff('HEAD','WORKING') WHERE to_table_name='scratch_hidden';
+  } 1
+  do_execsql_test ignore-$variant-kept-committed {
+    SELECT count(*) FROM dolt_schema_diff('HEAD','WORKING') WHERE to_table_name='scratch_keep';
+  } 0
+  do_execsql_test ignore-$variant-integrity {PRAGMA integrity_check} ok
+}
+
+foreach {variant create_sql rewrite_sql insert_sql} {
+  without-rowid-all-pk
+  {CREATE TABLE t_tmp(pattern TEXT NOT NULL, ignored TINYINT NOT NULL, PRIMARY KEY(pattern, ignored)) WITHOUT ROWID}
+  {CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT NOT NULL, PRIMARY KEY(pattern, ignored)) WITHOUT ROWID}
+  {INSERT INTO t_tmp VALUES('scratch_%', 1), ('scratch_keep', 0)}
+
+  without-rowid-extra-col
+  {CREATE TABLE t_tmp(pattern TEXT NOT NULL, ignored TINYINT NOT NULL, extra INT, PRIMARY KEY(pattern)) WITHOUT ROWID}
+  {CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT NOT NULL, extra INT, PRIMARY KEY(pattern)) WITHOUT ROWID}
+  {INSERT INTO t_tmp VALUES('scratch_%', 1, 0)}
+} {
+  reset_db
+  sqlite3_db_config db DEFENSIVE 0
+  db eval {
+    CREATE TABLE base(id INTEGER PRIMARY KEY);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_checkout('-b','target');
+  }
+  db eval $create_sql
+  db eval $insert_sql
+  db eval {PRAGMA writable_schema=ON}
+  db eval {UPDATE sqlite_schema SET name='dolt_ignore', tbl_name='dolt_ignore', sql=$rewrite_sql WHERE name='t_tmp'}
+  db eval {PRAGMA writable_schema=RESET}
+  do_test ignore-$variant-live-schema-err {
+    set res [catchsql {SELECT * FROM dolt_status}]
+    list [lindex $res 0] [string match {*unexpected schema*} [lindex $res 1]]
+  } {1 1}
+  db eval {
+    CREATE TABLE scratch_hidden(id INTEGER PRIMARY KEY);
+    SELECT dolt_checkout('main');
+  }
+  do_test ignore-$variant-catalog-schema-err {
+    set res [catchsql {SELECT dolt_commit('--branch','target','-Am','target')}]
+    list [lindex $res 0] [string match {*unexpected schema*} [lindex $res 1]]
+  } {1 1}
+}
+
 finish_test
