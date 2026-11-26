@@ -3708,6 +3708,18 @@ static void doltliteRebaseFunc(
       keepTopLevelSavepoint = 1;
       goto rebase_cleanup;
     }
+    if( doltliteSessionHasPendingReplayCommit(db) ){
+      u8 replayKind = 0;
+      doltliteGetSessionReplayState(db, &replayKind, 0, 0, 0, 0);
+      sqlite3_result_error(context,
+        replayKind==DOLTLITE_REPLAY_REVERT
+          ? "unable to start rebase while a revert is in progress; "
+            "continue or abort the current revert before proceeding"
+          : "unable to start rebase while a cherry-pick is in progress; "
+            "continue or abort the current cherry-pick before proceeding", -1);
+      keepTopLevelSavepoint = 1;
+      goto rebase_cleanup;
+    }
   }
   if( isInteractive ){
     const char *zUpstream;
