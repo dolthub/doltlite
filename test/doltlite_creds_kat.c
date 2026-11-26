@@ -7,6 +7,8 @@
 #include <string.h>
 
 void sqlite3_free(void*);
+extern int sqlite3_alloc_stub_fail_after;
+extern int sqlite3_alloc_stub_live;
 
 static int failures = 0;
 
@@ -413,6 +415,53 @@ int main(int argc, char **argv) {
       check_bool("default load ignores non-canonical filenames",
                  doltliteCredsLoadDefault(dir, &loaded) == 0);
       doltliteCredsFree(loaded);
+    }
+
+    {
+      DoltliteCreds *resolved = NULL;
+      char *source = NULL;
+      char *error = NULL;
+      int rc = doltliteCredsResolve(dir, NULL, "/path/to/local/repo",
+                                    &resolved, &source, &error);
+      check_bool("resolve with non-URL path succeeds via single key",
+                 rc == DOLTLITE_CREDS_SELECTED && resolved != NULL &&
+                 error == NULL && source != NULL &&
+                 strcmp(source, "single key") == 0);
+      doltliteCredsFree(resolved);
+      sqlite3_free(source);
+      sqlite3_free(error);
+    }
+
+    {
+      int step, succeeded = 0, sawOom = 0, leaked = 0, nonNullOut = 0;
+      for (step = 0; step < 64; step++) {
+        DoltliteCreds *resolved = NULL;
+        char *source = NULL;
+        char *error = NULL;
+        int liveBefore = sqlite3_alloc_stub_live;
+        int rc;
+        sqlite3_alloc_stub_fail_after = step;
+        rc = doltliteCredsResolve(dir, kid, NULL, &resolved, &source, &error);
+        sqlite3_alloc_stub_fail_after = -1;
+        if (rc == DOLTLITE_CREDS_SELECTED) {
+          succeeded = 1;
+          doltliteCredsFree(resolved);
+          sqlite3_free(source);
+          sqlite3_free(error);
+          if (sqlite3_alloc_stub_live != liveBefore) leaked = 1;
+          break;
+        }
+        if (resolved != NULL) nonNullOut = 1;
+        if (error && strstr(error, "out of memory")) sawOom = 1;
+        doltliteCredsFree(resolved);
+        sqlite3_free(source);
+        sqlite3_free(error);
+        if (sqlite3_alloc_stub_live != liveBefore) leaked = 1;
+      }
+      check_bool("resolve OOM sweep reaches success", succeeded);
+      check_bool("resolve OOM sweep hits OOM error path", sawOom);
+      check_bool("resolve OOM leaves *out NULL", !nonNullOut);
+      check_bool("resolve OOM has zero leaks", !leaked);
     }
 
     if (doltliteCredsRemove(dir, kid) != 0) {
