@@ -1,5 +1,6 @@
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
 
 proc merge_schema_snapshot {} {
   set state [execsql {
@@ -130,6 +131,79 @@ foreach direction {forward reverse} {
       list [expr {$before eq [execsql {SELECT * FROM t ORDER BY id}]}] \
            [execsql {SELECT a,d FROM t WHERE id=1; PRAGMA integrity_check}]
     } {1 {10 100 ok}}
+  }
+}
+
+reset_db
+do_execsql_test merge-schema-errors-oom-setup {
+  CREATE TABLE c(
+    id INTEGER PRIMARY KEY,
+    v INT CHECK(v > 0),
+    w INT DEFAULT 1
+  );
+  INSERT INTO c VALUES(1, 10, 2);
+  SELECT length(dolt_commit('-Am', 'ancestor'));
+  SELECT dolt_branch('side');
+  SELECT dolt_checkout('side');
+  DROP TABLE c;
+  CREATE TABLE c(
+    id INTEGER PRIMARY KEY,
+    v INT CHECK(v > 5),
+    w INT NOT NULL DEFAULT 7
+  );
+  INSERT INTO c VALUES(1, 10, 2);
+  SELECT length(dolt_commit('-Am', 'side constraints'));
+  SELECT dolt_checkout('main');
+  ALTER TABLE c ADD COLUMN extra INT DEFAULT 3;
+  SELECT length(dolt_commit('-Am', 'main add col'));
+} {40 0 0 40 0 40}
+
+faultsim_save_and_close
+
+do_faultsim_test merge-schema-errors-oom-adopt -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db one {SELECT length(dolt_merge('side'))}
+} -test {
+  if {$testnfail==0 && ($testrc!=0 || $testresult ne "40")} {
+    error "nfail=0 rc=$testrc result=$testresult"
+  }
+  if {$testrc==0 && $testresult ne "40"} {
+    error "rc=0 result=$testresult"
+  }
+}
+
+reset_db
+do_execsql_test merge-schema-errors-oom-dual-col-setup {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b TEXT);
+  INSERT INTO t VALUES(1, 10, 'x');
+  CREATE INDEX idx_a ON t(a);
+  SELECT length(dolt_commit('-Am', 'base'));
+  SELECT dolt_branch('side');
+  SELECT dolt_checkout('side');
+  ALTER TABLE t ADD COLUMN c INT DEFAULT 1;
+  DROP INDEX idx_a;
+  CREATE INDEX idx_a ON t(a, b);
+  INSERT INTO t VALUES(2, 20, 'y', 2);
+  SELECT length(dolt_commit('-Am', 'side'));
+  SELECT dolt_checkout('main');
+  ALTER TABLE t ADD COLUMN d TEXT DEFAULT 'z';
+  INSERT INTO t VALUES(3, 30, 'w', 'q');
+  SELECT length(dolt_commit('-Am', 'main'));
+} {40 0 0 40 0 40}
+
+faultsim_save_and_close
+
+do_faultsim_test merge-schema-errors-oom-dual-col -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db one {SELECT length(dolt_merge('side'))}
+} -test {
+  if {$testnfail==0 && ($testrc!=0 || $testresult ne "40")} {
+    error "nfail=0 rc=$testrc result=$testresult"
+  }
+  if {$testrc==0 && $testresult ne "40"} {
+    error "rc=0 result=$testresult"
   }
 }
 

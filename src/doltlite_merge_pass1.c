@@ -1046,7 +1046,7 @@ static int mergePass1BothSides(
           c->aOurs[iOurs].iTable, schemaChoice, &zOursPrevSql,
           c->ppSchemaActions ? *c->ppSchemaActions : 0,
           c->pnSchemaActions ? *c->pnSchemaActions : 0);
-      if( rc!=SQLITE_OK ) return rc;
+      if( rc!=SQLITE_OK ) goto fail;
     }
     if( !bSchemaConflict && skipRowMerge && zName ){
       SchemaEntry *ourSE = findSchemaEntry(c->aOursSchema, c->nOursSchema, zName);
@@ -1061,7 +1061,7 @@ static int mergePass1BothSides(
             c->aOurs[iOurs].flags, theirsEntry->flags, ancEntry->flags,
             &c->aOurs[iOurs].root, &theirsEntry->root, &ancEntry->root,
             &theirsNormRoot, &ancNormRoot, &bRelaid);
-        if( rc!=SQLITE_OK ) return rc;
+        if( rc!=SQLITE_OK ) goto fail;
         ancAdj = *ancEntry;
         memcpy(&ancAdj.root, &ancNormRoot, sizeof(ProllyHash));
         pMergeAnc = &ancAdj;
@@ -1075,7 +1075,7 @@ static int mergePass1BothSides(
       if( bNamedSchemaObject ){
         rc = mergePass1ReindexIfTheirRowsMoved(
             c, zSchemaMergeName, zSchemaConflictTable);
-        if( rc!=SQLITE_OK ) return rc;
+        if( rc!=SQLITE_OK ) goto fail;
       }
       c->aMerged[(*c->pnMerged)++] = c->aOurs[iOurs];
     }
@@ -1087,10 +1087,7 @@ static int mergePass1BothSides(
     struct TableEntry seq = c->aOurs[iOurs];
     rc = mergeSequenceThreeWay(c->db, &ancEntry->root, &c->aOurs[iOurs].root,
                                &theirsEntry->root, seq.flags, &seq.root);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(zOursPrevSql);
-      return rc;
-    }
+    if( rc!=SQLITE_OK ) goto fail;
     c->aMerged[(*c->pnMerged)++] = seq;
     skipRowMerge = 1;
   }
@@ -1110,7 +1107,7 @@ static int mergePass1BothSides(
 
   if( bNamedSchemaObject && !bSchemaConflict ){
     rc = mergeNoteRedefinedIndex(c, zSchemaMergeName);
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ) goto fail;
   }
   /* Adopted their schema for a rename: our rows are off-layout. Judge
   ** the move on the schema, not on whether either side wrote rows. */
@@ -1124,10 +1121,7 @@ static int mergePass1BothSides(
           c->aOurs[iOurs].flags, c->aOurs[iOurs].flags, ancEntry->flags,
           &theirsEntry->root, &c->aOurs[iOurs].root, &ancEntry->root,
           &otherNormRoot, &ancNormRoot, &bRelaid);
-      if( rc!=SQLITE_OK ){
-        sqlite3_free(zOursPrevSql);
-        return rc;
-      }
+      if( rc!=SQLITE_OK ) goto fail;
     }
     if( bRelaid ){
       ancAdj = *ancEntry;
@@ -1276,6 +1270,9 @@ static int mergePass1BothSides(
     c->aMerged[(*c->pnMerged)++] = merged;
   }
   return SQLITE_OK;
+fail:
+  sqlite3_free(zOursPrevSql);
+  return rc;
 }
 
 static int mergePass1MergeOursEntry(MergePass1Ctx *c, int iOurs){
