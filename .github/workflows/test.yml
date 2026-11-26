@@ -577,6 +577,7 @@ jobs:
         bash ../test/remote_https_auth_test.sh ./doltlite ./doltlite-remotesrv
         bash ../test/http_transfer_test.sh .
         bash ../test/http_remote_content_length_test.sh ./doltlite ./doltlite-remotesrv
+        bash ../test/wasm_http_node_test.sh
         bash ../test/run_guarded_suite.sh ../test/http_remote_large_chunk_test.sh ./doltlite ./doltlite-remotesrv
         bash ../test/remotesrv_http_test.sh ./doltlite ./doltlite-remotesrv
         bash ../test/remotesrv_bind_warning_test.sh ./doltlite ./doltlite-remotesrv
