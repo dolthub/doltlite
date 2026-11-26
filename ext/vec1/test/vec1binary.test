@@ -158,5 +158,51 @@ do_execsql_test 3.2 {
   );
 } {5}
 
+#-------------------------------------------------------------------------
+# Selecting distance stats on small binary-quantized vectors (2, 3, 4
+# elements, where nCode=5 and formatted code can exceed nElem*8 bytes).
+#
+reset_db
+vec1_load db
+
+do_execsql_test 4.1 {
+  CREATE VIRTUAL TABLE v2 USING vec1(v);
+  INSERT INTO v2 VALUES (x'ffffff4f00000000');
+  INSERT INTO v2 VALUES (x'ffffff4fffffff4f');
+  INSERT INTO v2(cmd, arg) VALUES('rebuild', (
+    SELECT vec1_train(v, '{quantizer:"bq", nbucket:0, wht:0}') FROM v2
+  ));
+  SELECT rowid, distance FROM v2 ORDER BY rowid;
+} {
+  1 {{bucket:0, coarse_error:0.000000, reconstruction_error:0.765367, code: [255,255,255,79,1]}}
+  2 {{bucket:0, coarse_error:0.000000, reconstruction_error:0.000000, code: [242,4,53,80,3]}}
+}
+
+do_execsql_test 4.2 {
+  CREATE VIRTUAL TABLE v3 USING vec1(v);
+  INSERT INTO v3 VALUES (x'ffffff4f0000000000000000');
+  INSERT INTO v3 VALUES (x'ffffff4fffffff4fffffff4f');
+  INSERT INTO v3(cmd, arg) VALUES('rebuild', (
+    SELECT vec1_train(v, '{quantizer:"bq", nbucket:0, wht:0}') FROM v3
+  ));
+  SELECT rowid, distance FROM v3 ORDER BY rowid;
+} {
+  1 {{bucket:0, coarse_error:0.000000, reconstruction_error:0.919402, code: [255,255,255,79,1]}}
+  2 {{bucket:0, coarse_error:0.000000, reconstruction_error:0.000000, code: [215,179,93,80,7]}}
+}
+
+do_execsql_test 4.3 {
+  CREATE VIRTUAL TABLE v4 USING vec1(v);
+  INSERT INTO v4 VALUES (x'ffffff4f000000000000000000000000');
+  INSERT INTO v4 VALUES (x'ffffff4fffffff4fffffff4fffffff4f');
+  INSERT INTO v4(cmd, arg) VALUES('rebuild', (
+    SELECT vec1_train(v, '{quantizer:"bq", nbucket:0, wht:0}') FROM v4
+  ));
+  SELECT rowid, distance FROM v4 ORDER BY rowid;
+} {
+  1 {{bucket:0, coarse_error:0.000000, reconstruction_error:1.000000, code: [255,255,255,79,1]}}
+  2 {{bucket:0, coarse_error:0.000000, reconstruction_error:0.000000, code: [255,255,127,80,15]}}
+}
+
 finish_test
   
