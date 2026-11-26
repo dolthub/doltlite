@@ -619,7 +619,7 @@ static char *cvrBuildSchema(const DoltliteColInfo *ci){
   if( ci->nCol>0 ){
     sqlite3_str_appendall(pStr, ", ");
     if( doltliteAppendQuotedColumnList(pStr, ci->azName, ci->nCol, 0, 0)!=SQLITE_OK ){
-      sqlite3_str_reset(pStr);
+      sqlite3_free(sqlite3_str_finish(pStr));
       return 0;
     }
   }
