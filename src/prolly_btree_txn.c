@@ -406,6 +406,7 @@ int snapshotPendingForFlush(Btree *pBtree, Pgno iTable,
                                    ProllyMutMap **ppFlushMap,
                                    int *pCaptured){
   int i;
+  int rc;
   ProllyMutMap *pPending;
   if( pCaptured ) *pCaptured = 0;
   if( !ppFlushMap ) return SQLITE_MISUSE;
@@ -417,20 +418,19 @@ int snapshotPendingForFlush(Btree *pBtree, Pgno iTable,
   if( pBtree->nSavepoint <= 0 ) return SQLITE_OK;
   if( prollyMutMapIsEmpty(pPending) ) return SQLITE_OK;
 
+  rc = ensureStatementSavepointsCaptured(pBtree);
+  if( rc!=SQLITE_OK ) return rc;
+
   for(i = pBtree->nSavepoint - 1; i >= 0; i--){
     struct SavepointTableState *pState = &pBtree->aSavepointTables[i];
     int j;
-    if( pState->bStatement && !pState->bTablesCaptured ){
-      int rc = ensureSavepointTablesCaptured(pBtree, pState);
-      if( rc!=SQLITE_OK ) return rc;
-    }
     j = findITableIndex(pState->aTables, pState->nTables,
                         (int)sizeof(pState->aTables[0]), iTable);
     if( j < 0 ) continue;
     if( findPendingSnapshotIndex(pState, iTable) >= 0 ) return SQLITE_OK;
     {
       ProllyMutMap *pNewPending = 0;
-      int rc = allocEmptyPendingLike(pPending, &pNewPending);
+      rc = allocEmptyPendingLike(pPending, &pNewPending);
       if( rc!=SQLITE_OK ) return rc;
       rc = appendPendingSnapshot(pState, iTable, pPending);
       if( rc!=SQLITE_OK ){

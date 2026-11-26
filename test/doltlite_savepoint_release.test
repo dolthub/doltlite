@@ -90,4 +90,152 @@ foreach {name schema} {
   } {1 10 256 2 20 256 3 30 256}
 }
 
+proc nested_stmt_flush_release {x} {
+  if {$x == 1} {
+    execsql {
+      INSERT INTO sp_inner VALUES(10, 'leaked1'), (11, 'leaked2');
+    }
+  }
+  return $x
+}
+
+do_test doltlite_savepoint_release-3.1 {
+  execsql {
+    CREATE TABLE sp_outer(id INTEGER PRIMARY KEY);
+    INSERT INTO sp_outer VALUES(2);
+    CREATE TABLE sp_inner(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO sp_inner VALUES(1, 'orig');
+    CREATE TABLE sp_log(c INTEGER);
+    CREATE TRIGGER tr_sp_inner AFTER INSERT ON sp_inner BEGIN
+      INSERT INTO sp_log SELECT count(*) FROM sp_inner;
+    END;
+    BEGIN;
+  }
+  db function nested_stmt_flush_release nested_stmt_flush_release
+  set rc [catch {
+    execsql {
+      INSERT INTO sp_outer SELECT nested_stmt_flush_release(column1) FROM (VALUES(1),(2));
+    }
+  } msg]
+  set rows [execsql {
+    SELECT id, v FROM sp_inner ORDER BY id;
+  }]
+  set log_cnt [execsql {
+    SELECT count(*) FROM sp_log;
+  }]
+  set ic [execsql {
+    COMMIT;
+    PRAGMA integrity_check;
+  }]
+  set rows_after [execsql {
+    SELECT id, v FROM sp_inner ORDER BY id;
+  }]
+  execsql {
+    DROP TABLE sp_outer;
+    DROP TABLE sp_inner;
+    DROP TABLE sp_log;
+  }
+  list $rc $msg $rows $log_cnt $ic $rows_after
+} {1 {UNIQUE constraint failed: sp_outer.id} {1 orig} 0 ok {1 orig}}
+
+set ::nested_open_stmt ""
+proc nested_stmt_flush_direct {x} {
+  if {$x == 1} {
+    set ::nested_open_stmt [sqlite3_prepare_v2 db {
+      INSERT INTO sp_inner VALUES(10, 'leaked1'), (11, 'leaked2') RETURNING id
+    } -1]
+    sqlite3_step $::nested_open_stmt
+  }
+  return $x
+}
+
+do_test doltlite_savepoint_release-3.2 {
+  execsql {
+    CREATE TABLE sp_outer(id INTEGER PRIMARY KEY);
+    INSERT INTO sp_outer VALUES(2);
+    CREATE TABLE sp_inner(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO sp_inner VALUES(1, 'orig');
+    CREATE TABLE sp_log(c INTEGER);
+    CREATE TRIGGER tr_sp_inner AFTER INSERT ON sp_inner BEGIN
+      INSERT INTO sp_log SELECT count(*) FROM sp_inner;
+    END;
+    BEGIN;
+  }
+  db function nested_stmt_flush_direct nested_stmt_flush_direct
+  set ::nested_open_stmt ""
+  set rc [catch {
+    execsql {
+      INSERT INTO sp_outer SELECT nested_stmt_flush_direct(column1) FROM (VALUES(1),(2));
+    }
+  } msg]
+  if {$::nested_open_stmt ne ""} {
+    sqlite3_finalize $::nested_open_stmt
+    set ::nested_open_stmt ""
+  }
+  set rows [execsql {
+    SELECT id, v FROM sp_inner ORDER BY id;
+  }]
+  set log_cnt [execsql {
+    SELECT count(*) FROM sp_log;
+  }]
+  set ic [execsql {
+    COMMIT;
+    PRAGMA integrity_check;
+  }]
+  set rows_after [execsql {
+    SELECT id, v FROM sp_inner ORDER BY id;
+  }]
+  execsql {
+    DROP TABLE sp_outer;
+    DROP TABLE sp_inner;
+    DROP TABLE sp_log;
+  }
+  list $rc $msg $rows $log_cnt $ic $rows_after
+} {1 {UNIQUE constraint failed: sp_outer.id} {1 orig} 0 ok {1 orig}}
+
+proc nested_stmt_flush_wr {x} {
+  if {$x == 1} {
+    execsql {
+      INSERT INTO sp_inner_wr VALUES('k10', 'leaked1'), ('k11', 'leaked2');
+    }
+  }
+  return $x
+}
+
+do_test doltlite_savepoint_release-3.3 {
+  execsql {
+    CREATE TABLE sp_outer(id INTEGER PRIMARY KEY);
+    INSERT INTO sp_outer VALUES(2);
+    CREATE TABLE sp_inner_wr(id TEXT PRIMARY KEY, v TEXT) WITHOUT ROWID;
+    INSERT INTO sp_inner_wr VALUES('k01', 'orig');
+    CREATE TABLE sp_log(c INTEGER);
+    CREATE TRIGGER tr_sp_inner_wr AFTER INSERT ON sp_inner_wr BEGIN
+      INSERT INTO sp_log SELECT count(*) FROM sp_inner_wr;
+    END;
+    BEGIN;
+  }
+  db function nested_stmt_flush_wr nested_stmt_flush_wr
+  set rc [catch {
+    execsql {
+      INSERT INTO sp_outer SELECT nested_stmt_flush_wr(column1) FROM (VALUES(1),(2));
+    }
+  } msg]
+  set rows [execsql {
+    SELECT id, v FROM sp_inner_wr ORDER BY id;
+  }]
+  set log_cnt [execsql {
+    SELECT count(*) FROM sp_log;
+  }]
+  set ic [execsql {
+    COMMIT;
+    PRAGMA integrity_check;
+  }]
+  execsql {
+    DROP TABLE sp_outer;
+    DROP TABLE sp_inner_wr;
+    DROP TABLE sp_log;
+  }
+  list $rc $msg $rows $log_cnt $ic
+} {1 {UNIQUE constraint failed: sp_outer.id} {k01 orig} 0 ok}
+
 finish_test
