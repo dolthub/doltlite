@@ -262,5 +262,69 @@ do_execsql_test 8.1 {
 
 } [expr 8*4096*4 + 24]
 
+#-------------------------------------------------------------------------
+# Training chunk array bounds: exactly VEC1_TRAINING_MAXCHUNK chunks
+# succeeds; exceeding VEC1_TRAINING_MAXCHUNK returns SQLITE_TOOBIG cleanly.
+#
+reset_db
+vec1_load db
+
+do_execsql_test 9.0 {
+  WITH data(i, v) AS (
+    SELECT 1, random_vector(16)
+      UNION ALL
+    SELECT i+1, random_vector(16) FROM data WHERE i<1024
+  )
+  SELECT length( vec1_train(v, '{nbucket: 4, test_chunk_size: 64}') ) FROM data;
+} [expr 4*16*4 + 24]
+
+do_catchsql_test 9.1 {
+  WITH data(i, v) AS (
+    SELECT 1, random_vector(16)
+      UNION ALL
+    SELECT i+1, random_vector(16) FROM data WHERE i<1025
+  )
+  SELECT length( vec1_train(v, '{nbucket: 4, test_chunk_size: 64}') ) FROM data;
+} {1 {string or blob too big}}
+
+do_execsql_test 9.2 {
+  WITH data(i, v) AS (
+    SELECT 1, random_vector(16)
+      UNION ALL
+    SELECT i+1, random_vector(16) FROM data WHERE i<2048
+  )
+  SELECT length( vec1_train(v, '{nbucket: 4, test_chunk_size: 128}') ) FROM data;
+} [expr 4*16*4 + 24]
+
+do_catchsql_test 9.3 {
+  WITH data(i, v) AS (
+    SELECT 1, random_vector(16)
+      UNION ALL
+    SELECT i+1, random_vector(16) FROM data WHERE i<2049
+  )
+  SELECT length( vec1_train(v, '{nbucket: 4, test_chunk_size: 128}') ) FROM data;
+} {1 {string or blob too big}}
+
+do_catchsql_test 9.4 {
+  WITH data(i, v) AS (
+    SELECT 1, random_vector(16)
+      UNION ALL
+    SELECT i+1, random_vector(16) FROM data WHERE i<2
+  )
+  SELECT length( vec1_train(v, '{nbucket: 4, test_chunk_size: 32}') ) FROM data;
+} {1 {string or blob too big}}
+
+proc train_prof {args} {}
+db func train_prof train_prof
+
+do_catchsql_test 9.5 {
+  WITH data(i, v) AS (
+    SELECT 1, random_vector(16)
+      UNION ALL
+    SELECT i+1, random_vector(16) FROM data WHERE i<1025
+  )
+  SELECT length( vec1_train(v, '{nbucket: 4, test_chunk_size: 64, profile: "train_prof"}') ) FROM data;
+} {1 {string or blob too big}}
+
 finish_test
 

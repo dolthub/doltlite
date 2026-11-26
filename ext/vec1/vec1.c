@@ -122,6 +122,7 @@
 # include <math.h>
 # include <stdio.h>
 # include <stdlib.h>
+# include <limits.h>
 
 /* INFINITY is C99. Fall back to HUGE_VAL for C89 compilers. */
 #ifndef INFINITY
@@ -1960,8 +1961,12 @@ static int vec1JobQueueAddJob(
 ** training data. With default values, the limit is 64GiB of training
 ** vectors.
 */
-#define VEC1_TRAINING_MAXCHUNK 1024
-#define VEC1_TRAINING_SZCHUNK  (32*1024*1024)
+#ifndef VEC1_TRAINING_MAXCHUNK
+# define VEC1_TRAINING_MAXCHUNK 1024
+#endif
+#ifndef VEC1_TRAINING_SZCHUNK
+# define VEC1_TRAINING_SZCHUNK  (32*1024*1024)
+#endif
 
 /*
 ** Values for Vec1TrainCtx.eQuant
@@ -2030,6 +2035,9 @@ struct Vec1TrainCtx {
 
   /* Calculated based on training parameters + size of first vector */
   int nCodeElem;                  /* Number of elements in codebook vectors */
+#ifdef SQLITE_TEST
+  int szChunk;
+#endif
 
   u64 aTime[VEC1_TRAINING_NTIMER];
 };
@@ -3187,6 +3195,9 @@ static int vec1Ann1TrainCfg(
     "profile",             /* 11 */
 
     "index",               /* 12 */
+#ifdef SQLITE_TEST
+    "test_chunk_size",     /* 13 */
+#endif
      0
   };
   int eOpt = -1;
@@ -3260,8 +3271,7 @@ static int vec1Ann1TrainCfg(
         if( p->zProfileFunction==0 ) rc = SQLITE_NOMEM;
         break;
 
-      default: assert( sqlite3_stricmp("index", zOpt)==0 ); 
-        assert( eOpt==12 );  /* index */
+      case 12: assert( sqlite3_stricmp("index", zOpt)==0 );
         if( sqlite3_stricmp("trained", zVal) ){
           *pz = sqlite3_mprintf(
               "unrecognized index '%s', should be 'trained'", zVal
@@ -3269,6 +3279,12 @@ static int vec1Ann1TrainCfg(
           rc = SQLITE_ERROR;
         }
         break;
+#ifdef SQLITE_TEST
+      case 13: assert( sqlite3_stricmp("test_chunk_size", zOpt)==0 );
+        rc = vec1ConfigInt(eType, iVal, 1, VEC1_TRAINING_SZCHUNK, 0, zOpt, pz);
+        p->szChunk = (int)iVal;
+        break;
+#endif
     }
   }
 
@@ -3438,7 +3454,9 @@ static void vec1TrainStep(
   ** the various "training parameters" fields of Vec1TrainCtx.  */
   if( p->tv.nElem==0 ){
     p->tv.nElem = n/sizeof_f32;
-    p->tv.nVecPerChunk = (VEC1_TRAINING_SZCHUNK / (p->tv.nElem*sizeof_f32));
+#ifdef SQLITE_TEST
+    p->szChunk = VEC1_TRAINING_SZCHUNK;
+#endif
 
     /* Configure default values */
     p->eDistance = VEC1_TRAINING_DEFAULT_DISTANCE;
@@ -3460,6 +3478,7 @@ static void vec1TrainStep(
       char *zErr = 0;
       int rc = vec1ParseJsonConfig(db, zCfg, vec1Ann1TrainCfg, (void*)p, &zErr);
       if( rc ){
+        p->rc = rc;
         if( zErr!=0 ){
           vec1ResultErrorF(pCtx, "%z", zErr);
         }else{
@@ -3467,6 +3486,17 @@ static void vec1TrainStep(
         }
         return;
       }
+    }
+
+#ifdef SQLITE_TEST
+    p->tv.nVecPerChunk = (p->szChunk / (p->tv.nElem*sizeof_f32));
+#else
+    p->tv.nVecPerChunk = (VEC1_TRAINING_SZCHUNK / (p->tv.nElem*sizeof_f32));
+#endif
+    if( p->tv.nVecPerChunk<=0 ){
+      p->rc = SQLITE_TOOBIG;
+      sqlite3_result_error_code(pCtx, SQLITE_TOOBIG);
+      return;
     }
 
     /* If no quantizer was specified, select one automatically now. */
@@ -3523,10 +3553,26 @@ static void vec1TrainStep(
     }
   }
 
-  iChunk = (p->tv.nVec+1)/p->tv.nVecPerChunk;
+  if( p->tv.nVec<0 || p->tv.nVec==INT_MAX ){
+    p->rc = SQLITE_TOOBIG;
+    sqlite3_result_error_code(pCtx, SQLITE_TOOBIG);
+    return;
+  }
+  iChunk = p->tv.nVec / p->tv.nVecPerChunk;
+  if( iChunk>=VEC1_TRAINING_MAXCHUNK ){
+    p->rc = SQLITE_TOOBIG;
+    sqlite3_result_error_code(pCtx, SQLITE_TOOBIG);
+    return;
+  }
   if( iChunk>=p->tv.nChunk ){
-    p->tv.aChunk[iChunk] = (float*)sqlite3_malloc(VEC1_TRAINING_SZCHUNK);
+#ifdef SQLITE_TEST
+    int szChunk = p->szChunk;
+#else
+    int szChunk = VEC1_TRAINING_SZCHUNK;
+#endif
+    p->tv.aChunk[iChunk] = (float*)sqlite3_malloc(szChunk);
     if( p->tv.aChunk[iChunk]==0 ){
+      p->rc = SQLITE_NOMEM;
       sqlite3_result_error_nomem(pCtx);
       return;
     }
@@ -5133,6 +5179,7 @@ static void vec1TrainFinal(sqlite3_context *pCtx){
   p = (Vec1TrainCtx*)sqlite3_aggregate_context(pCtx, sizeof(*p));
   if( p==0 ) return;
   p->pCtx = pCtx;
+  if( p->rc!=SQLITE_OK ) goto train_final_out;
   bPQ = (p->eQuant==VEC1_QUANTIZE_PQ || p->eQuant==VEC1_QUANTIZE_OPQ);
   nElem = p->tv.nElem;
 
@@ -5258,7 +5305,7 @@ static void vec1TrainFinal(sqlite3_context *pCtx){
  train_final_out: 
   END_TRAINING_TIMER(p, VEC1_TRAINING_TOTAL);
   vec1TrainLog(p, "training complete");
-  vec1TrainLogTimes(p);
+  if( p->rc==SQLITE_OK ) vec1TrainLogTimes(p);
   sqlite3_finalize(p->pLogStmt);
   sqlite3_free(p->zLogFunction);
   sqlite3_free(p->zProfileFunction);
