@@ -18,6 +18,7 @@ int prollyHashSetInit(ProllyHashSet *hs, int nCapacity){
   i64 want;
   assert( hs!=0 );
   assert( nCapacity>=0 );
+  memset(hs, 0, sizeof(*hs));
   want = (i64)nCapacity * 2;
   while( n < want ) n *= 2;
   if( n > (i64)0x7fffffff/(i64)sizeof(ProllyHash) ) return SQLITE_NOMEM;
@@ -26,6 +27,7 @@ int prollyHashSetInit(ProllyHashSet *hs, int nCapacity){
   if( !hs->aSlots || !hs->aUsed ){
     sqlite3_free(hs->aSlots);
     sqlite3_free(hs->aUsed);
+    memset(hs, 0, sizeof(*hs));
     return SQLITE_NOMEM;
   }
   memset(hs->aUsed, 0, (size_t)n);
