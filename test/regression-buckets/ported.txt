@@ -324,3 +324,4 @@ doltlite_table_moveto_stale_root
 doltlite_savepoint_cursor_mutmap
 doltlite_gc_reopen_fail
 doltlite_hashof_oom
+doltlite_prolly_btree_error_paths
