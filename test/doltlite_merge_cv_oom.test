@@ -153,4 +153,74 @@ do_faultsim_test 4.1 -faults oom-transient -prep {
   faultsim_test_result {*}$::merge_oom_results
 }
 
+set merge_conflict_oom_results [list \
+  {1 {cannot merge: conflicts detected, autocommit transaction rolled back. Run the merge inside BEGIN/COMMIT to inspect dolt_conflicts and dolt_schema_conflicts, resolve with dolt_conflicts_resolve(), then commit with dolt_commit(). Conflicts are never committed as conflicts}} \
+  {1 {disk I/O error}} \
+  {1 {merge source not found}} \
+  {1 {no common ancestor found}} \
+  {1 {failed to load commit}} \
+  {1 {failed to load our commit}} \
+  {1 {failed to load their commit}} \
+  {1 {failed to load ancestor}} \
+  {1 {merge failed}} \
+  {1 {failed to create merge commit}} \
+  {1 {cannot merge: schema change could not be applied: out of memory}} \
+  {1 {cannot merge: schema change could not be applied: unable to open a temporary database file for storing temporary tables}} \
+]
+
+# Master table merge with both a conflicting row and a non-conflicting edit
+# under OOM fault injection (exercises prollyMutateFlush failure with conflicts).
+reset_db
+do_execsql_test 5.0 {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+  INSERT INTO t VALUES(1, 10);
+  SELECT length(dolt_commit('-Am', 'base'));
+  SELECT dolt_branch('side');
+  CREATE VIEW v1 AS SELECT 1 AS x;
+  SELECT length(dolt_commit('-Am', 'main view'));
+  SELECT dolt_checkout('side');
+  CREATE VIEW v1 AS SELECT 2 AS x;
+  CREATE VIEW v2 AS SELECT 3 AS y;
+  SELECT length(dolt_commit('-Am', 'side views'));
+  SELECT dolt_checkout('main');
+} {40 0 40 0 40 0}
+
+faultsim_save_and_close
+
+do_faultsim_test 5.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db one {SELECT length(dolt_merge('side'))}
+} -test {
+  faultsim_test_result {*}$::merge_conflict_oom_results
+}
+
+# User table row merge with both a row conflict and a non-conflicting edit
+# plus secondary index update under OOM fault injection.
+reset_db
+do_execsql_test 6.0 {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b TEXT);
+  CREATE INDEX idx_t_a ON t(a);
+  INSERT INTO t VALUES(1, 10, 'base1'), (2, 20, 'base2');
+  SELECT length(dolt_commit('-Am', 'base'));
+  SELECT dolt_branch('side');
+  UPDATE t SET a = 11, b = 'main1' WHERE id = 1;
+  SELECT length(dolt_commit('-am', 'main edit'));
+  SELECT dolt_checkout('side');
+  UPDATE t SET a = 12, b = 'side1' WHERE id = 1;
+  UPDATE t SET a = 22, b = 'side2' WHERE id = 2;
+  SELECT length(dolt_commit('-am', 'side edits'));
+  SELECT dolt_checkout('main');
+} {40 0 40 0 40 0}
+
+faultsim_save_and_close
+
+do_faultsim_test 6.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db one {SELECT length(dolt_merge('side'))}
+} -test {
+  faultsim_test_result {*}$::merge_conflict_oom_results
+}
+
 finish_test

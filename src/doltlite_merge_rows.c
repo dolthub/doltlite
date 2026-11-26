@@ -1611,6 +1611,9 @@ int mergeTableRows(
   int rc;
   int i;
 
+  *pnConflicts = 0;
+  *ppConflicts = 0;
+
   if( ((flags ^ theirsFlags) & PROLLY_NODE_INTKEY)!=0 ){
     return SQLITE_ERROR;
   }
@@ -1688,10 +1691,12 @@ int mergeTableRows(
     }
   }
 
-  *pnConflicts = ctx.nConflicts;
-  *ppConflicts = ctx.aConflicts;
-  ctx.aConflicts = 0;
-  ctx.nConflicts = 0;
+  if( rc==SQLITE_OK ){
+    *pnConflicts = ctx.nConflicts;
+    *ppConflicts = ctx.aConflicts;
+    ctx.aConflicts = 0;
+    ctx.nConflicts = 0;
+  }
 
 merge_err:
   for(i=0; i<nIndexes; i++){
