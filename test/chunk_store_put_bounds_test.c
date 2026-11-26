@@ -2,6 +2,7 @@
 
 #include "sqlite3.h"
 #include "chunk_store.h"
+#include "chunk_store_int.h"
 #include "chunk_index.h"
 #include "chunk_refs.h"
 #include "doltlite_internal.h"
@@ -618,6 +619,69 @@ static void testRefsMergeCategoryOomNoLeak(void){
   }
 }
 
+static void testVerifyStoredHitsSwept(void){
+  const char *zPath = DOLTLITE_TEST_TMPDIR "/test_verify_stored_hits.db";
+  char zLock[512];
+  ChunkStore cs;
+  ProllyHash hStored, hWrapper, hZero;
+  u8 aWrapper[PROLLY_HASH_SIZE + 4];
+  int has = 0;
+  int rc;
+
+  memset(&hZero, 0, sizeof(hZero));
+  remove(zPath);
+  snprintf(zLock, sizeof(zLock), "%s-lock", zPath);
+  remove(zLock);
+
+  memset(&cs, 0, sizeof(cs));
+  rc = chunkStoreOpen(&cs, 0, zPath, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+  check("vsh_open", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) return;
+
+  rc = chunkStorePut(&cs, (const u8*)"stored_hit_payload", 18, &hStored);
+  check("vsh_put_initial", rc==SQLITE_OK);
+  rc = chunkStoreCommit(&cs);
+  check("vsh_commit_initial", rc==SQLITE_OK);
+
+  rc = chunkStoreLockAndRefresh(&cs);
+  check("vsh_lock", rc==SQLITE_OK);
+
+  rc = chunkStorePut(&cs, (const u8*)"stored_hit_payload", 18, &hStored);
+  check("vsh_put_hit", rc==SQLITE_OK && cs.nStoredHit==1
+        && cs.staging.nPending==0 && cs.staging.nWriteBuf==0);
+
+  cs.index.nIndex = 0;
+  cs.staging.nRecent = 0;
+  cs.reloadGen++;
+  rc = chunkStoreHas(&cs, &hStored, &has);
+  check("vsh_swept_absent", rc==SQLITE_OK && has==0);
+
+  cs.refs.refsHash = hZero;
+  check("vsh_unreferenced_ok", csVerifyStoredHits(&cs)==SQLITE_OK);
+
+  cs.refs.refsHash = hStored;
+  check("vsh_refs_hash_busy", csVerifyStoredHits(&cs)==SQLITE_BUSY);
+  cs.refs.refsHash = hZero;
+
+  memcpy(aWrapper, hStored.data, PROLLY_HASH_SIZE);
+  memcpy(aWrapper + PROLLY_HASH_SIZE, "ref!", 4);
+  rc = chunkStorePut(&cs, aWrapper, sizeof(aWrapper), &hWrapper);
+  check("vsh_put_wrapper", rc==SQLITE_OK && cs.staging.nPending==1);
+  check("vsh_pending_mentions_busy", csVerifyStoredHits(&cs)==SQLITE_BUSY);
+
+  cs.staging.nPending = 0;
+  cs.staging.nWriteBuf = 0;
+  cs.staging.nRecentUncommitted = 1;
+  check("vsh_drained_busy", csVerifyStoredHits(&cs)==SQLITE_BUSY);
+  cs.staging.nRecentUncommitted = 0;
+
+  chunkStoreRollback(&cs);
+  chunkStoreUnlock(&cs);
+  chunkStoreClose(&cs);
+  remove(zPath);
+  remove(zLock);
+}
+
 int main(void){
   int rc;
 
@@ -646,6 +710,7 @@ int main(void){
   testZeroByteChunkGet();
   testMergeIndexDedupPending();
   testRefsMergeCategoryOomNoLeak();
+  testVerifyStoredHitsSwept();
 
   printf("%d passed, %d failed\n", nPass, nFail);
   sqlite3_shutdown();

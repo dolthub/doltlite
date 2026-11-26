@@ -1982,7 +1982,12 @@ int csVerifyStoredHits(ChunkStore *cs){
     int has = 0;
     rc = chunkStoreHas(cs, &cs->aStoredHit[i], &has);
     if( rc!=SQLITE_OK ) return rc;
-    if( !has && csPendingMentions(cs, &cs->aStoredHit[i]) ) return SQLITE_BUSY;
+    if( !has
+     && (prollyHashCompare(&cs->refs.refsHash, &cs->aStoredHit[i])==0
+      || cs->staging.nRecentUncommitted>0
+      || csPendingMentions(cs, &cs->aStoredHit[i])) ){
+      return SQLITE_BUSY;
+    }
   }
   return SQLITE_OK;
 }
