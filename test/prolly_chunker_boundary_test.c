@@ -1,6 +1,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#if !defined(_WIN32)
+#include <pthread.h>
+#endif
 #include "sqliteInt.h"
 #include "prolly_hash.h"
 #include "prolly_xxhash.h"
@@ -1551,11 +1554,104 @@ static void test_weibull_large_sizes(void){
         sizeof(((ProllyChunkerLevel*)0)->nBytes) == sizeof(i64));
 }
 
+#if !defined(_WIN32)
+typedef struct WeibullThreadGate WeibullThreadGate;
+struct WeibullThreadGate {
+  pthread_mutex_t mu;
+  pthread_cond_t cv;
+  int nReady;
+  int nTotal;
+  int go;
+};
+
+typedef struct WeibullThreadArg WeibullThreadArg;
+struct WeibullThreadArg {
+  WeibullThreadGate *pGate;
+  int id;
+  int nMismatches;
+};
+
+static void *weibullConcurrentWorker(void *pArg){
+  WeibullThreadArg *p = (WeibullThreadArg*)pArg;
+  WeibullThreadGate *pGate = p->pGate;
+  int nVec = (int)(sizeof(aWeibull)/sizeof(aWeibull[0]));
+  int round, k;
+
+  pthread_mutex_lock(&pGate->mu);
+  pGate->nReady++;
+  if( pGate->nReady==pGate->nTotal ){
+    pthread_cond_broadcast(&pGate->cv);
+  }
+  while( !pGate->go ){
+    pthread_cond_wait(&pGate->cv, &pGate->mu);
+  }
+  pthread_mutex_unlock(&pGate->mu);
+
+  for(round=0; round<4; round++){
+    for(k=0; k<nVec; k++){
+      int idx = (k + p->id * 97) % nVec;
+      int got = prollyWeibullCheck(
+        aWeibull[idx].size, aWeibull[idx].thisSize, aWeibull[idx].hash
+      );
+      if( got!=aWeibull[idx].want ){
+        p->nMismatches++;
+      }
+    }
+  }
+  return 0;
+}
+
+static void test_weibull_concurrent_init(void){
+  enum { N_THREADS = 8 };
+  pthread_t aThread[N_THREADS];
+  WeibullThreadArg aArg[N_THREADS];
+  WeibullThreadGate gate;
+  int i, nCreated = 0, nMismatches = 0;
+
+  memset(&gate, 0, sizeof(gate));
+  pthread_mutex_init(&gate.mu, 0);
+  pthread_cond_init(&gate.cv, 0);
+  gate.nTotal = N_THREADS;
+
+  for(i=0; i<N_THREADS; i++){
+    aArg[i].pGate = &gate;
+    aArg[i].id = i;
+    aArg[i].nMismatches = 0;
+    if( pthread_create(&aThread[i], 0, weibullConcurrentWorker, &aArg[i])==0 ){
+      nCreated++;
+    }
+  }
+
+  pthread_mutex_lock(&gate.mu);
+  gate.nTotal = nCreated;
+  while( gate.nReady < nCreated ){
+    pthread_cond_wait(&gate.cv, &gate.mu);
+  }
+  gate.go = 1;
+  pthread_cond_broadcast(&gate.cv);
+  pthread_mutex_unlock(&gate.mu);
+
+  for(i=0; i<nCreated; i++){
+    pthread_join(aThread[i], 0);
+    nMismatches += aArg[i].nMismatches;
+  }
+
+  pthread_cond_destroy(&gate.cv);
+  pthread_mutex_destroy(&gate.mu);
+
+  check("weibull_concurrent_init_threads", nCreated==N_THREADS);
+  check("weibull_concurrent_init_deterministic", nMismatches==0);
+}
+#endif
+
 int main(void){
   sqlite3_initialize();
   printf("Prolly chunker boundary golden tests\n");
   printf("====================================\n\n");
 
+#if !defined(_WIN32)
+  test_weibull_concurrent_init();
+#endif
   test_xxh32_golden();
   test_weibull_golden();
   test_weibull_large_sizes();

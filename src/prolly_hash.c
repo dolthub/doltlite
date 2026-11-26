@@ -59,7 +59,7 @@ int prollyHashIsEmpty(const ProllyHash *h){
 int prollyWeibullCheck(i64 size, i64 thisSize, u32 hash){
 #if defined(__GNUC__) || defined(__clang__)
   static double aWeibull[PROLLY_CHUNK_MAX + 1];
-  static volatile int initState = 0;
+  static int initState = 0;
 #else
   double pow;
 #endif
@@ -73,20 +73,20 @@ int prollyWeibullCheck(i64 size, i64 thisSize, u32 hash){
   if( size <= 0 || thisSize <= 0 ) return 0;
   if( thisSize > size ) thisSize = size;
 #if defined(__GNUC__) || defined(__clang__)
-  if( initState!=2 ){
-    if( __sync_bool_compare_and_swap(&initState, 0, 1) ){
+  if( __atomic_load_n(&initState, __ATOMIC_ACQUIRE)!=2 ){
+    int expected = 0;
+    if( __atomic_compare_exchange_n(&initState, &expected, 1, 0,
+                                    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE) ){
       u32 i;
       for(i=0; i<=PROLLY_CHUNK_MAX; i++){
         double pow = (double)i / PROLLY_WEIBULL_L;
         aWeibull[i] = -expm1(-(pow * pow * pow * pow));
       }
-      __sync_synchronize();
-      initState = 2;
+      __atomic_store_n(&initState, 2, __ATOMIC_RELEASE);
     }else{
-      while( initState!=2 ){
+      while( __atomic_load_n(&initState, __ATOMIC_ACQUIRE)!=2 ){
         /* Another thread is initializing the table. */
       }
-      __sync_synchronize();
     }
   }
 
@@ -94,19 +94,13 @@ int prollyWeibullCheck(i64 size, i64 thisSize, u32 hash){
   assert( thisSize <= size );
   start = aWeibull[size - thisSize];
   end = aWeibull[size];
-
-  p = (double)hash / PROLLY_MAX_U32;
-  d = 1.0 - start;
-  if( d <= 0.0 ) return 1;
-
-  target = (end - start) / d;
-  return p < target;
 #else
   pow = (double)(size - thisSize) / PROLLY_WEIBULL_L;
   start = -expm1(-(pow * pow * pow * pow));
 
   pow = (double)size / PROLLY_WEIBULL_L;
   end = -expm1(-(pow * pow * pow * pow));
+#endif
 
   p = (double)hash / PROLLY_MAX_U32;
   d = 1.0 - start;
@@ -114,7 +108,6 @@ int prollyWeibullCheck(i64 size, i64 thisSize, u32 hash){
 
   target = (end - start) / d;
   return p < target;
-#endif
 }
 
 #endif
