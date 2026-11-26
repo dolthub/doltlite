@@ -265,4 +265,67 @@ foreach {layout key suffix} {
   } {0 1 Abc 1 2 aBC 0 ok}
 }
 
+foreach {layout key suffix} {
+  clustered {id INT PRIMARY KEY} {}
+  rowid {id INTEGER PRIMARY KEY} {}
+  without_rowid {id INT PRIMARY KEY} {WITHOUT ROWID}
+} {
+  foreach direction {forward reverse} {
+    foreach op {merge cherry_pick} {
+      reset_db
+      execsql "CREATE TABLE t($key) $suffix"
+      execsql {
+        INSERT INTO t VALUES(1);
+        SELECT dolt_commit('-Am','base');
+        SELECT dolt_branch('br');
+        INSERT INTO t VALUES(2);
+        SELECT dolt_commit('-Am','insert row 2');
+        SELECT dolt_checkout('br');
+        ALTER TABLE t ADD COLUMN c INT DEFAULT 1;
+        CREATE UNIQUE INDEX idx_c ON t(c);
+        SELECT dolt_commit('-Am','add col and unique index');
+      }
+      if {$direction eq "forward"} {
+        execsql {SELECT dolt_checkout('main'); BEGIN}
+        set target br
+        set reopen [file normalize test.db]
+      } else {
+        execsql {BEGIN}
+        set target main
+        set reopen "[file normalize test.db]/br"
+      }
+      set prefix deferred-added-unique-$layout-$direction-$op
+      set verb [expr {$op eq "merge" ? "Merge" : "Cherry-pick"}]
+      do_catchsql_test $prefix.apply "SELECT dolt_${op}('$target')" \
+        [list 1 "$verb resulted in constraint violations. Resolve the rows in dolt_constraint_violations and then commit with dolt_commit."]
+      do_execsql_test $prefix.violations {
+        SELECT violation_type, id, c FROM dolt_constraint_violations_t ORDER BY id;
+        SELECT table_name, status FROM dolt_status WHERE status='constraint violation';
+        SELECT id FROM t INDEXED BY idx_c WHERE c=1 ORDER BY id;
+      } {{unique index} 1 1 {unique index} 2 1 t {constraint violation} 1 2}
+      do_test $prefix.resolve {
+        execsql {
+          UPDATE t SET c = 2 WHERE id = 2;
+          DELETE FROM dolt_constraint_violations_t;
+        }
+        string length [execsql {SELECT dolt_commit('-Am','resolve unique violation')}]
+      } 40
+      do_execsql_test $prefix.after {
+        SELECT count(*) FROM dolt_constraint_violations;
+        SELECT id, c FROM t INDEXED BY idx_c ORDER BY id;
+        PRAGMA integrity_check;
+      } {0 1 1 2 2 ok}
+      do_catchsql_test $prefix.enforced {
+        INSERT INTO t VALUES(3, 1);
+      } {1 {UNIQUE constraint failed: t.c}}
+      db close
+      sqlite3 db $reopen
+      do_execsql_test $prefix.reopen {
+        SELECT id, c FROM t INDEXED BY idx_c ORDER BY id;
+        PRAGMA integrity_check;
+      } {1 1 2 2 ok}
+    }
+  }
+}
+
 finish_test

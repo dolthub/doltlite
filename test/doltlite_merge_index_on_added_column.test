@@ -80,7 +80,9 @@ do_execsql_test revert-dropped-indexed-column {
 } [list 1 1 1 1 {CREATE INDEX idd ON t(d)} \
    {CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, e INT DEFAULT 9, d INT)} 2 ok]
 
-# A UNIQUE index the merged rows cannot satisfy fails the merge whole.
+# A UNIQUE index the merged rows cannot satisfy surfaces as a constraint
+# violation: autocommit rolls back, while an explicit transaction records
+# the violation in dolt_constraint_violations_t.
 reset_db
 do_test unique-violated.setup {
   execsql {
@@ -98,13 +100,33 @@ do_test unique-violated.setup {
     SELECT dolt_commit('-Am','Y');
   }
   catchsql {SELECT dolt_merge('feat')}
-} {1 {cannot merge: schema change could not be applied: UNIQUE constraint failed: t.d}}
+} {1 {Committing this transaction resulted in a working set with constraint violations, transaction rolled back.}}
 do_execsql_test unique-violated.unmerged {
   SELECT sql FROM sqlite_master;
   SELECT count(*) FROM t;
   SELECT count(*) FROM dolt_status;
   PRAGMA integrity_check;
 } {{CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, e INT DEFAULT 9)} 4 0 ok}
+do_catchsql_test unique-violated.txn {
+  BEGIN;
+  SELECT dolt_merge('feat');
+} {1 {Merge resulted in constraint violations. Resolve the rows in dolt_constraint_violations and then commit with dolt_commit.}}
+do_execsql_test unique-violated.recorded {
+  SELECT violation_type, id, d FROM dolt_constraint_violations_t ORDER BY id;
+  SELECT table_name, status FROM dolt_status WHERE status='constraint violation';
+} {{unique index} 3 5 {unique index} 4 5 t {constraint violation}}
+do_test unique-violated.resolve {
+  execsql {
+    UPDATE t SET d=4 WHERE id=4;
+    DELETE FROM dolt_constraint_violations_t;
+  }
+  string length [execsql {SELECT dolt_commit('-Am','resolve unique violation')}]
+} 40
+do_execsql_test unique-violated.clean {
+  SELECT count(*) FROM dolt_constraint_violations;
+  SELECT id, d FROM t INDEXED BY idd ORDER BY id;
+  PRAGMA integrity_check;
+} {0 1 1 2 2 3 5 4 4 ok}
 
 # An index that also names a column the other branch dropped is still
 # refused: there is no table text it could be created against.

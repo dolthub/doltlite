@@ -1217,8 +1217,11 @@ static int mergeApplySchemaActionsInTxn(
   for(si=0; si<nSchemaActions && rc==SQLITE_OK; si++){
     int sj;
     for(sj=0; rc==SQLITE_OK && sj<aSchemaActions[si].nCreateIndexes; sj++){
+      int bWasSet = (db->mDbFlags & DBFLAG_MergeIndexNoUnique)!=0;
+      db->mDbFlags |= DBFLAG_MergeIndexNoUnique;
       rc = sqlite3_exec(db, aSchemaActions[si].azCreateIndexes[sj], 0, 0,
                         &zErr);
+      if( !bWasSet ) db->mDbFlags &= ~DBFLAG_MergeIndexNoUnique;
     }
   }
 

@@ -4456,7 +4456,12 @@ static void sqlite3RefillIndex(Parse *pParse, Index *pIndex, int memRootPage){
   sqlite3VdbeChangeP5(v, OPFLAG_BULKCSR|((memRootPage>=0)?OPFLAG_P2ISREG:0));
 
   addr1 = sqlite3VdbeAddOp2(v, OP_SorterSort, iSorter, 0); VdbeCoverage(v);
+#ifdef DOLTLITE_PROLLY
+  if( IsUniqueIndex(pIndex)
+   && (db->mDbFlags & DBFLAG_MergeIndexNoUnique)==0 ){
+#else
   if( IsUniqueIndex(pIndex) ){
+#endif
     int j2 = sqlite3VdbeGoto(v, 1);
     addr2 = sqlite3VdbeCurrentAddr(v);
     sqlite3VdbeVerifyAbortable(v, OE_Abort);
