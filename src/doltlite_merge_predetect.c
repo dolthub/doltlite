@@ -298,6 +298,11 @@ static int mergePass1CheckRowEditOfDroppedColumn(MergePass1Ctx *c){
   return SQLITE_OK;
 }
 
+static int mergeIsIdentifierToken(const char *z, int type);
+static int mergeIdentifiersEqual(
+  const char *a, int nA, const char *b, int nB, int bToken
+);
+
 /* Identifier scan, quoted or bare (SQLite may quote). Indexes start
 ** at the column list so the index name cannot match. Over-matches by
 ** design: an expression index or view naming it breaks the same way. */
@@ -310,29 +315,22 @@ static int mergeSqlNamesColumn(const char *zSql, const char *zType,
   nCol = (int)strlen(zColumn);
   z = zSql;
   if( strcmp(zType, "index")==0 ){
-    z = strchr(zSql, '(');
-    if( !z ) return 0;
-    z++;
+    while( *z ){
+      int type, nTok = sqlite3GetToken((const u8*)z, &type);
+      if( nTok<=0 ) return 0;
+      z += nTok;
+      if( type==TK_LP ) break;
+    }
+    if( !*z ) return 0;
   }
   while( *z ){
-    const char *zTok;
-    int nTok;
-    if( *z=='"' || *z=='`' || *z=='[' || *z=='\'' ){
-      char cEnd = *z=='[' ? ']' : *z;
-      z++;
-      zTok = z;
-      while( *z && *z!=cEnd ) z++;
-      nTok = (int)(z-zTok);
-      if( *z ) z++;
-    }else if( sqlite3Isalnum(*z) || *z=='_' || *z=='$' ){
-      zTok = z;
-      while( *z && (sqlite3Isalnum(*z) || *z=='_' || *z=='$') ) z++;
-      nTok = (int)(z-zTok);
-    }else{
-      z++;
-      continue;
+    int type, nTok = sqlite3GetToken((const u8*)z, &type);
+    if( nTok<=0 ) break;
+    if( mergeIsIdentifierToken(z, type)
+     && mergeIdentifiersEqual(z, nTok, zColumn, nCol, 0) ){
+      return 1;
     }
-    if( nTok==nCol && sqlite3_strnicmp(zTok, zColumn, nCol)==0 ) return 1;
+    z += nTok;
   }
   return 0;
 }

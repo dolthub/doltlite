@@ -287,4 +287,73 @@ foreach {layout key} {rowid {INTEGER PRIMARY KEY} clustered {INT PRIMARY KEY}} {
   }
 }
 
+# Comments in CREATE INDEX must not confuse pass2 or predetect column scanners.
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT, c INT);
+  INSERT INTO t VALUES(1,10,20,30);
+  SELECT dolt_commit('-Am','base');
+  SELECT dolt_branch('side');
+  ALTER TABLE t DROP COLUMN c;
+  SELECT dolt_commit('-Am','drop c');
+  SELECT dolt_checkout('side');
+  CREATE INDEX /* ( */ idx_a ON t(a /* don't ) c */);
+  SELECT dolt_commit('-Am','add commented index');
+  SELECT dolt_checkout('main');
+}
+do_test index-comment-unrelated-drop-merge {
+  lindex [catchsql {SELECT dolt_merge('side')}] 0
+} 0
+do_execsql_test index-comment-unrelated-drop-check {
+  SELECT name FROM sqlite_schema WHERE type='index' ORDER BY name;
+  SELECT count(*) FROM dolt_schema_conflicts;
+  SELECT id FROM t INDEXED BY idx_a WHERE a=10;
+  PRAGMA integrity_check;
+} {idx_a 0 1 ok}
+
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT, c INT);
+  INSERT INTO t VALUES(1,10,20,30);
+  SELECT dolt_commit('-Am','base');
+  SELECT dolt_branch('side');
+  ALTER TABLE t DROP COLUMN b;
+  SELECT dolt_commit('-Am','drop b');
+  SELECT dolt_checkout('side');
+  CREATE INDEX idx_ab ON t(a /* don't ) */, b);
+  SELECT dolt_commit('-Am','add index referencing b after comment');
+  SELECT dolt_checkout('main');
+}
+do_test index-comment-referenced-drop-merge {
+  lindex [catchsql {SELECT dolt_merge('side')}] 0
+} 0
+do_execsql_test index-comment-referenced-drop-check {
+  SELECT count(*) FROM sqlite_schema WHERE type='index' AND name='idx_ab';
+  SELECT name FROM pragma_table_info('t') ORDER BY cid;
+  PRAGMA integrity_check;
+} {0 id a c ok}
+
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT, c INT);
+  INSERT INTO t VALUES(1,10,20,30);
+  SELECT dolt_commit('-Am','base');
+  SELECT dolt_branch('side');
+  ALTER TABLE t RENAME COLUMN a TO a2;
+  SELECT dolt_commit('-Am','rename a');
+  SELECT dolt_checkout('side');
+  ALTER TABLE t RENAME COLUMN c TO c2;
+  CREATE INDEX /* ( */ idx_b ON t(b /* c2 */);
+  SELECT dolt_commit('-Am','rename c and add commented index');
+  SELECT dolt_checkout('main');
+}
+do_test index-comment-dual-rename-merge {
+  lindex [catchsql {SELECT dolt_merge('side')}] 0
+} 0
+do_execsql_test index-comment-dual-rename-check {
+  SELECT name FROM sqlite_schema WHERE type='index' ORDER BY name;
+  SELECT id FROM t INDEXED BY idx_b WHERE b=20;
+  PRAGMA integrity_check;
+} {idx_b 1 ok}
+
 finish_test

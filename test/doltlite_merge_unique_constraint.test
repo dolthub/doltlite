@@ -172,4 +172,97 @@ foreach {name ours tbl col merges} {
   }
 }
 
+foreach {layout key suffix} {
+  rowid {id INTEGER PRIMARY KEY} {}
+  without_rowid {id INT PRIMARY KEY} {WITHOUT ROWID}
+} {
+  reset_db
+  execsql "CREATE TABLE t($key, a TEXT, b INT) $suffix"
+  execsql "CREATE UNIQUE INDEX /* on ( */ u_part ON /* tbl */ t(a /* don't ) where */) WHERE b > 0 -- trailing where comment"
+  execsql {
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('side');
+    INSERT INTO t VALUES(1,'dup',1);
+    SELECT dolt_commit('-Am','main row');
+    SELECT dolt_checkout('side');
+    INSERT INTO t VALUES(2,'dup',1);
+    SELECT dolt_commit('-Am','side row');
+    SELECT dolt_checkout('main');
+    BEGIN;
+  }
+  do_catchsql_test unique-comment-partial-$layout-collide {
+    SELECT dolt_merge('side');
+  } {1 {Merge resulted in constraint violations. Resolve the rows in dolt_constraint_violations and then commit with dolt_commit.}}
+  do_execsql_test unique-comment-partial-$layout-violations {
+    SELECT violation_type, id, a, b FROM dolt_constraint_violations_t ORDER BY id;
+  } {{unique index} 1 dup 1 {unique index} 2 dup 1}
+  execsql ROLLBACK
+
+  reset_db
+  execsql "CREATE TABLE t($key, a TEXT, b INT) $suffix"
+  execsql "CREATE UNIQUE INDEX /* on ( */ u_part ON /* tbl */ t(a /* don't ) where */) WHERE b > 0 -- trailing where comment"
+  execsql {
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('side');
+    INSERT INTO t VALUES(1,'dup',1);
+    SELECT dolt_commit('-Am','main row');
+    SELECT dolt_checkout('side');
+    INSERT INTO t VALUES(2,'dup',0);
+    SELECT dolt_commit('-Am','side filtered row');
+    SELECT dolt_checkout('main');
+  }
+  do_test unique-comment-partial-$layout-filtered {
+    lindex [catchsql {SELECT dolt_merge('side')}] 0
+  } 0
+  do_execsql_test unique-comment-partial-$layout-filtered-ok {
+    SELECT count(*) FROM dolt_constraint_violations;
+    SELECT id, a, b FROM t ORDER BY id;
+    PRAGMA integrity_check;
+  } {0 1 dup 1 2 dup 0 ok}
+
+  reset_db
+  execsql "CREATE TABLE t($key, a TEXT, b INT) $suffix"
+  execsql "CREATE UNIQUE INDEX /* on ( */ u_expr ON /* tbl */ t(lower(a -- inner comment\n) /* don't ) , */ DESC -- trailing expr\n) WHERE b > 0 -- trailing where"
+  execsql {
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('side');
+    INSERT INTO t VALUES(1,'Abc',1);
+    SELECT dolt_commit('-Am','main expr row');
+    SELECT dolt_checkout('side');
+    INSERT INTO t VALUES(2,'aBC',1);
+    SELECT dolt_commit('-Am','side expr row');
+    SELECT dolt_checkout('main');
+    BEGIN;
+  }
+  do_catchsql_test unique-comment-expr-$layout-collide {
+    SELECT dolt_merge('side');
+  } {1 {Merge resulted in constraint violations. Resolve the rows in dolt_constraint_violations and then commit with dolt_commit.}}
+  do_execsql_test unique-comment-expr-$layout-violations {
+    SELECT violation_type, id, a, b FROM dolt_constraint_violations_t ORDER BY id;
+  } {{unique index} 1 Abc 1 {unique index} 2 aBC 1}
+  execsql ROLLBACK
+
+  reset_db
+  execsql "CREATE TABLE t($key, a TEXT, b INT) $suffix"
+  execsql "CREATE UNIQUE INDEX /* on ( */ u_expr ON /* tbl */ t(lower(a -- inner comment\n) /* don't ) , */ DESC -- trailing expr\n) WHERE b > 0 -- trailing where"
+  execsql {
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_branch('side');
+    INSERT INTO t VALUES(1,'Abc',1);
+    SELECT dolt_commit('-Am','main expr row');
+    SELECT dolt_checkout('side');
+    INSERT INTO t VALUES(2,'aBC',0);
+    SELECT dolt_commit('-Am','side expr filtered');
+    SELECT dolt_checkout('main');
+  }
+  do_test unique-comment-expr-$layout-filtered {
+    lindex [catchsql {SELECT dolt_merge('side')}] 0
+  } 0
+  do_execsql_test unique-comment-expr-$layout-filtered-ok {
+    SELECT count(*) FROM dolt_constraint_violations;
+    SELECT id, a, b FROM t ORDER BY id;
+    PRAGMA integrity_check;
+  } {0 1 Abc 1 2 aBC 0 ok}
+}
+
 finish_test
