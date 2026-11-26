@@ -26,6 +26,20 @@ run_test "reset_clears" \
   "1
 0" "$DB"
 
+run_test "reset_join_arg" \
+  "INSERT INTO t VALUES(5,'e');
+   CREATE TABLE flags(r INT);
+   INSERT INTO flags VALUES (0);
+   SELECT count(*), sum(value)>0 FROM dolt_engine_stats(flags.r) JOIN flags;
+   SELECT sum(value)>0 FROM dolt_engine_stats;
+   UPDATE flags SET r = 1;
+   SELECT count(*), sum(value)>0 FROM dolt_engine_stats(flags.r) JOIN flags;
+   SELECT sum(value) FROM dolt_engine_stats;" \
+  "15|1
+1
+15|1
+0" "$DB"
+
 run_test_match "shell_stats_page_cache_hits" \
   "INSERT INTO t VALUES(3,'c');
 SELECT v FROM t WHERE id=3;
