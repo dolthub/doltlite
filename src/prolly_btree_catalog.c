@@ -162,10 +162,9 @@ void invalidateCursors(BtShared *pBt, Pgno iTable, int errCode){
     if( iTable==0 || p->pgnoRoot==iTable ){
       p->eState = CURSOR_FAULT;
       p->skipNext = errCode;
-      p->mmActive = 0;
-      p->mmPhysActive = 0;
-      p->mmIdx = -1;
-      p->mmPhysIdx = -1;
+      p->pMutMap = 0;
+      CLEAR_CACHED_PAYLOAD(p);
+      clearMergeCursorState(p);
       prollyCursorReleaseAll(&p->pCur);
     }
   }
@@ -226,10 +225,9 @@ static void invalidateCursorsFinished(sqlite3 *db, BtShared *pBt){
     pCur->eState = CURSOR_INVALID;
     pCur->skipNext = 0;
     pCur->bCatalogGone = 0;
-    pCur->mmActive = 0;
-    pCur->mmPhysActive = 0;
-    pCur->mmIdx = -1;
-    pCur->mmPhysIdx = -1;
+    pCur->pMutMap = 0;
+    CLEAR_CACHED_PAYLOAD(pCur);
+    clearMergeCursorState(pCur);
     prollyCursorReleaseAll(&pCur->pCur);
   }
 }
@@ -237,10 +235,9 @@ static void invalidateCursorsFinished(sqlite3 *db, BtShared *pBt){
 static void faultIncrblobCursor(BtCursor *p){
   p->eState = CURSOR_FAULT;
   p->skipNext = SQLITE_ABORT;
-  p->mmActive = 0;
-  p->mmPhysActive = 0;
-  p->mmIdx = -1;
-  p->mmPhysIdx = -1;
+  p->pMutMap = 0;
+  CLEAR_CACHED_PAYLOAD(p);
+  clearMergeCursorState(p);
   prollyCursorReleaseAll(&p->pCur);
 }
 

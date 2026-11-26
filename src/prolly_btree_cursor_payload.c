@@ -122,7 +122,8 @@ int prollyBtreeCursorCurrentTreeValueCopy(
 /* No error channel: fault the cursor and stash rc in skipNext, else OOM
 ** during a deferred seek would return a fake row under SQLITE_OK. */
 static SQLITE_NOINLINE i64 prollyBtCursorIntegerKeySlow(BtCursor *pCur){
-  if( pCur->deferredMergedSeek ){
+  if( pCur->eState==CURSOR_FAULT ) return 0;
+  if( pCur->deferredMergedSeek && pCur->pMutMap ){
     int rc = materializeDeferredMergedSeekBackward(pCur);
     if( rc!=SQLITE_OK ){
       pCur->eState = CURSOR_FAULT;
@@ -184,7 +185,8 @@ static SQLITE_NOINLINE i64 prollyBtCursorSyntheticRowid(BtCursor *pCur){
   const u8 *pKey = 0;
   int nKey = 0;
 
-  if( pCur->deferredMergedSeek ){
+  if( pCur->eState==CURSOR_FAULT ) return 0;
+  if( pCur->deferredMergedSeek && pCur->pMutMap ){
     int rc = materializeDeferredMergedSeekBackward(pCur);
     if( rc!=SQLITE_OK ){
       pCur->eState = CURSOR_FAULT;
@@ -424,7 +426,8 @@ int getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
 static SQLITE_NOINLINE u32 prollyBtCursorPayloadSizeSlow(BtCursor *pCur){
   const u8 *pData;
   int nData;
-  if( pCur->deferredMergedSeek ){
+  if( pCur->eState==CURSOR_FAULT ) return 0;
+  if( pCur->deferredMergedSeek && pCur->pMutMap ){
     int rc = materializeDeferredMergedSeekBackward(pCur);
     if( rc!=SQLITE_OK ){
       pCur->eState = CURSOR_FAULT;
@@ -502,7 +505,10 @@ int prollyBtCursorPayload(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
   int nData;
   int rc;
 
-  if( pCur->deferredMergedSeek ){
+  if( pCur->eState==CURSOR_FAULT ){
+    return pCur->skipNext ? pCur->skipNext : SQLITE_ABORT;
+  }
+  if( pCur->deferredMergedSeek && pCur->pMutMap ){
     rc = materializeDeferredMergedSeekBackward(pCur);
     if( rc!=SQLITE_OK ) return rc;
     if( pCur->eState!=CURSOR_VALID ) return SQLITE_ABORT;
@@ -560,7 +566,11 @@ static SQLITE_NOINLINE const void *prollyBtCursorPayloadFetchSlow(
   const u8 *pData;
   int nData;
 
-  if( pCur->deferredMergedSeek ){
+  if( pCur->eState==CURSOR_FAULT ){
+    if( pAmt ) *pAmt = 0;
+    return 0;
+  }
+  if( pCur->deferredMergedSeek && pCur->pMutMap ){
     int rc = materializeDeferredMergedSeekBackward(pCur);
     if( rc!=SQLITE_OK ){
       pCur->eState = CURSOR_FAULT;

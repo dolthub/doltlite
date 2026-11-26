@@ -565,12 +565,8 @@ void refreshCursorMutMapAliases(Btree *pBtree, BtShared *pBt,
   for(p = pBt->pCursor; p; p = p->pNext){
     if( p->pBtree==pBtree && p->pgnoRoot==iTable ){
       p->pMutMap = pNewMap;
-      p->mmActive = 0;
-      p->mmPhysActive = 0;
-      p->mmExactMiss = 0;
-      p->deferredTreeSeek = 0;
-      p->mmIdx = -1;
-      p->mmPhysIdx = -1;
+      CLEAR_CACHED_PAYLOAD(p);
+      clearMergeCursorState(p);
     }
   }
 }

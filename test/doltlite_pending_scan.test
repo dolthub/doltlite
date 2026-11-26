@@ -212,4 +212,99 @@ if {$had_mutmap_drain} {
   unset env(DOLTLITE_MUTMAP_DRAIN_BYTES)
 }
 
+# Cursor detach/fault paths with pending edits and deferred merged seeks.
+reset_db
+do_execsql_test deferred-seek-detach-setup {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO t VALUES (10,'a'), (20,'b'), (30,'c'), (40,'d'), (50,'e');
+  CREATE TABLE other(id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO other VALUES (1,'x');
+}
+
+# 1) ROLLBACK TO savepoint at txn start with schema change (bKeepReaders=0)
+#    while a read cursor on t has a live pMutMap.
+do_test deferred-seek-rollback-committed-state {
+  db eval {
+    SAVEPOINT sp0;
+    INSERT INTO t VALUES (60,'f'), (70,'g');
+    CREATE TABLE temp_ddl(k INTEGER PRIMARY KEY);
+    INSERT INTO temp_ddl VALUES (1);
+  }
+  set st1 [sqlite3_prepare_v2 db "SELECT id, v FROM t WHERE id <= 35 ORDER BY id DESC" -1]
+  set st2 [sqlite3_prepare_v2 db "SELECT id, v FROM t WHERE id >= 25 ORDER BY id ASC" -1]
+  set r1 [sqlite3_step $st1]
+  set r2 [sqlite3_step $st2]
+  db eval { ROLLBACK TO sp0; RELEASE sp0; }
+  catch { sqlite3_step $st1 }
+  catch { sqlite3_step $st2 }
+  sqlite3_finalize $st1
+  sqlite3_finalize $st2
+  list $r1 $r2 [db eval {SELECT count(*) FROM t}] [db eval {PRAGMA integrity_check}]
+} {SQLITE_ROW SQLITE_ROW 5 ok}
+
+# 2) Full ROLLBACK while cursors have pending edits and range seeks.
+do_test deferred-seek-full-rollback {
+  db eval {
+    BEGIN;
+    INSERT INTO t VALUES (15,'p1'), (45,'p2');
+    DELETE FROM t WHERE id = 20;
+  }
+  set st1 [sqlite3_prepare_v2 db "SELECT id, v FROM t WHERE id < 25 ORDER BY id DESC" -1]
+  set st2 [sqlite3_prepare_v2 db "SELECT id, v FROM t WHERE id > 25 ORDER BY id ASC" -1]
+  set r1 [sqlite3_step $st1]
+  set r2 [sqlite3_step $st2]
+  db eval { ROLLBACK; }
+  catch { sqlite3_step $st1 }
+  catch { sqlite3_step $st2 }
+  sqlite3_finalize $st1
+  sqlite3_finalize $st2
+  list $r1 $r2 [db eval {SELECT count(*) FROM t}] [db eval {PRAGMA integrity_check}]
+} {SQLITE_ROW SQLITE_ROW 5 ok}
+
+# 3) Flush mutmap while sibling cursors are open on the same table.
+do_test deferred-seek-flush-sibling {
+  set saved_drain [expr {[info exists env(DOLTLITE_MUTMAP_DRAIN_BYTES)] ? $env(DOLTLITE_MUTMAP_DRAIN_BYTES) : ""}]
+  set had_drain [info exists env(DOLTLITE_MUTMAP_DRAIN_BYTES)]
+  db eval {
+    BEGIN;
+    INSERT INTO t VALUES (22,'m1'), (28,'m2'), (35,'m3');
+  }
+  set st [sqlite3_prepare_v2 db "SELECT id, v FROM t WHERE id <= 33 ORDER BY id DESC" -1]
+  set r1 [sqlite3_step $st]
+  set v1 [list [sqlite3_column_int $st 0] [sqlite3_column_text $st 1]]
+  # Trigger flush via COUNT(*) and via drain limit.
+  set cnt [db eval {SELECT count(*) FROM t}]
+  set env(DOLTLITE_MUTMAP_DRAIN_BYTES) 1
+  db eval { INSERT INTO t VALUES (80,'m4'); }
+  if {$had_drain} {
+    set env(DOLTLITE_MUTMAP_DRAIN_BYTES) $saved_drain
+  } else {
+    unset env(DOLTLITE_MUTMAP_DRAIN_BYTES)
+  }
+  set rest {}
+  while {[sqlite3_step $st] eq "SQLITE_ROW"} {
+    lappend rest [sqlite3_column_int $st 0]
+  }
+  sqlite3_finalize $st
+  db eval { ROLLBACK; }
+  list $r1 $v1 $cnt [db eval {SELECT count(*) FROM t}] [db eval {PRAGMA integrity_check}]
+} {SQLITE_ROW {30 c} 8 5 ok}
+
+# 4) DROP TABLE while a cursor on that table has pending edits.
+do_test deferred-seek-drop-table {
+  db eval {
+    CREATE TABLE td(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO td VALUES (10,'a'), (20,'b'), (30,'c');
+    BEGIN;
+    INSERT INTO td VALUES (25,'p');
+  }
+  set st [sqlite3_prepare_v2 db "SELECT id, v FROM td WHERE id <= 27 ORDER BY id DESC" -1]
+  set r1 [sqlite3_step $st]
+  catchsql { DROP TABLE td; }
+  catch { sqlite3_step $st }
+  sqlite3_finalize $st
+  db eval { ROLLBACK; }
+  list $r1 [db eval {SELECT count(*) FROM td}] [db eval {PRAGMA integrity_check}]
+} {SQLITE_ROW 3 ok}
+
 finish_test

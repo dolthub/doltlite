@@ -323,6 +323,10 @@ static int deferredMergedSeekPosition(BtCursor *pCur){
   int rc;
   i64 intKey;
   pCur->deferredMergedSeek = 0;
+  if( pCur->eState==CURSOR_FAULT ){
+    return pCur->skipNext ? pCur->skipNext : SQLITE_ABORT;
+  }
+  if( !pCur->pMutMap ) return SQLITE_ABORT;
   intKey = pCur->cachedIntKey;
   refreshCursorRoot(pCur);
   rc = prollyCursorCheckInterrupt(pCur);
@@ -366,6 +370,12 @@ int materializeDeferredMergedSeekBackward(BtCursor *pCur){
   int res = 0;
   int rc;
   if( !pCur->deferredMergedSeek ) return SQLITE_OK;
+  if( pCur->eState==CURSOR_FAULT || !pCur->pMutMap ){
+    pCur->deferredMergedSeek = 0;
+    return pCur->eState==CURSOR_FAULT
+      ? (pCur->skipNext ? pCur->skipNext : SQLITE_ABORT)
+      : SQLITE_ABORT;
+  }
   rc = deferredMergedSeekPosition(pCur);
   if( rc!=SQLITE_OK ) return rc;
   pCur->mergeSrc = MERGE_SRC_BOTH;
@@ -936,7 +946,8 @@ int sqlite3BtreePrevious(BtCursor *pCur, int flags){
 }
 
 int prollyBtCursorEof(BtCursor *pCur){
-  if( pCur->deferredMergedSeek ){
+  if( pCur->eState==CURSOR_FAULT ) return 1;
+  if( pCur->deferredMergedSeek && pCur->pMutMap ){
     int rc = materializeDeferredMergedSeekBackward(pCur);
     if( rc!=SQLITE_OK ){
       pCur->eState = CURSOR_FAULT;
