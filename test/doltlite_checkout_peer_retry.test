@@ -106,4 +106,155 @@ foreach maintenance {none gc vacuum} {
   }
 }
 
+foreach txn {begin savepoint} {
+  set prefix checkout-remote-tracking-peer-$txn
+  reset_db
+  forcedelete remote_tracking.db
+  set rpath [file normalize remote_tracking.db]
+  sqlite3 rdb $rpath
+  rdb eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO t VALUES(1,'base');
+    SELECT dolt_commit('-Am','init');
+    SELECT dolt_checkout('-b','feat');
+    INSERT INTO t VALUES(10,'remote-feat');
+    SELECT dolt_commit('-am','feat commit');
+    SELECT dolt_checkout('main');
+  }
+  rdb close
+  db eval "
+    SELECT dolt_remote('add','origin','file://$rpath');
+    SELECT dolt_fetch('origin');
+    SELECT dolt_reset('--hard','origin/main');
+  "
+  # Ensure local branch list has only main and tracking has remotes/origin/feat.
+  do_test $prefix.setup {
+    list [db eval {SELECT name FROM dolt_branches ORDER BY name}] \
+         [db eval {SELECT name FROM dolt_remote_branches ORDER BY name}]
+  } {main {remotes/origin/feat remotes/origin/main}}
+
+  sqlite3 peer test.db
+  if {$txn eq "begin"} {
+    db eval {BEGIN}
+  } else {
+    db eval {SAVEPOINT s}
+  }
+  db eval {SELECT count(*) FROM t}
+  peer eval {
+    INSERT INTO t VALUES(3,'peer');
+    SELECT dolt_commit('-am','peer commit');
+  }
+
+  do_test $prefix.refused {
+    list [catch {db eval {SELECT dolt_checkout('feat')}} msg] \
+         [sqlite3_errcode db]
+  } {1 SQLITE_BUSY}
+
+  do_test $prefix.no-branch-leak {
+    list [db one {SELECT active_branch()}] \
+         [db eval {SELECT name FROM dolt_branches ORDER BY name}] \
+         [peer eval {SELECT name FROM dolt_branches ORDER BY name}]
+  } {main main main}
+
+  catch {db eval {ROLLBACK}}
+  do_test $prefix.retry-succeeds {
+    db eval {
+      SELECT dolt_checkout('feat');
+      SELECT active_branch();
+      SELECT name FROM dolt_branches ORDER BY name;
+      SELECT id, v FROM t ORDER BY id;
+    }
+  } {0 feat feat main 1 base 10 remote-feat}
+
+  peer close
+  db close
+  sqlite3 db test.db
+  do_test $prefix.reopen {
+    list [db eval {SELECT name FROM dolt_branches ORDER BY name}] \
+         [db one {PRAGMA integrity_check}]
+  } {{feat main} ok}
+  forcedelete remote_tracking.db
+}
+
+# Remote-tracking checkout under I/O errors must not leak a local branch.
+reset_db
+forcedelete remote_tracking_io.db
+forcedelete remote_tracking_io_base.db
+set rpath [file normalize remote_tracking_io.db]
+sqlite3 rdb $rpath
+rdb eval {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO t VALUES(1,'base');
+  SELECT dolt_commit('-Am','init');
+  SELECT dolt_checkout('-b','feat');
+  INSERT INTO t VALUES(10,'remote-feat');
+  SELECT dolt_commit('-am','feat commit');
+  SELECT dolt_checkout('main');
+}
+rdb close
+db eval "
+  SELECT dolt_remote('add','origin','file://$rpath');
+  SELECT dolt_fetch('origin');
+  SELECT dolt_reset('--hard','origin/main');
+"
+db close
+file copy -force test.db remote_tracking_io_base.db
+
+set rt_armed 0
+proc rt_io_error {method filename args} {
+  if {$::rt_armed && $method eq $::rt_kind && [file tail $filename] eq "test.db"} {
+    incr ::rt_calls
+    if {$::rt_calls == $::rt_fault} {
+      incr ::rt_hits
+      return SQLITE_IOERR
+    }
+  }
+  return SQLITE_OK
+}
+testvfs rtio
+rtio filter {xWrite xSync}
+rtio script rt_io_error
+
+set rt_failed 0
+foreach rt_kind {xWrite xSync} {
+  for {set rt_fault 1} {$rt_fault<=50} {incr rt_fault} {
+    forcedelete test.db
+    file copy -force remote_tracking_io_base.db test.db
+    sqlite3 db test.db -vfs rtio
+    set rt_calls 0
+    set rt_hits 0
+    set rt_armed 1
+    set res [catchsql {SELECT dolt_checkout('feat')}]
+    set rt_armed 0
+    set prefix checkout-remote-tracking-io-$rt_kind-$rt_fault
+    if {[lindex $res 0]} {
+      incr rt_failed
+      do_test $prefix.session-no-leak {
+        list [db one {SELECT active_branch()}] \
+             [db eval {SELECT name FROM dolt_branches ORDER BY name}]
+      } {main main}
+      sqlite3 obs test.db -readonly 1
+      do_test $prefix.disk-no-leak {
+        obs eval {SELECT name FROM dolt_branches ORDER BY name}
+      } {main}
+      obs close
+      do_test $prefix.retry-after-ioerr {
+        db eval {
+          SELECT dolt_checkout('feat');
+          SELECT active_branch();
+          SELECT name FROM dolt_branches ORDER BY name;
+          SELECT id, v FROM t ORDER BY id;
+        }
+      } {0 feat feat main 1 base 10 remote-feat}
+    }
+    db close
+    if {$rt_hits==0} break
+  }
+}
+do_test checkout-remote-tracking-io-exercised {expr {$rt_failed>0}} 1
+rtio delete
+forcedelete remote_tracking_io.db
+forcedelete remote_tracking_io_base.db
+sqlite3 db test.db
+
 finish_test

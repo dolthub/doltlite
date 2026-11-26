@@ -8,6 +8,9 @@
 src/doltlite_core.c:doltliteMutateRefsExpected
 src/doltlite_core.c:doltliteAdvanceBranchWithState
 
+# Shared doltliteMutateRefs callback helper called from branch and checkout callbacks.
+src/doltlite_branch.c:mutateBranchRef
+
 # First write of a fresh store.
 src/doltlite_core.c:doltliteSeedStoreIfNeeded
 
