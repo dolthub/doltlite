@@ -23579,6 +23579,52 @@ static void run_wal_checkpoint_fallback_restores_manifest(void){
   removeDbFiles(zDb2);
 }
 
+static void run_http_pending_refs_overlong_branch(void){
+  DoltliteRemote *pRemote;
+  ProllyHash h;
+  u8 payload[1] = { 'x' };
+  char *zLongBranch;
+  int rc;
+
+  printf("=== HTTP Pending Refs Overlong Branch Test ===\n\n");
+
+  zLongBranch = (char*)malloc(0x10002);
+  check("http_refs_len: alloc branch", zLongBranch!=0);
+  if( !zLongBranch ) return;
+  memset(zLongBranch, 'a', 0x10000);
+  zLongBranch[0x10000] = 0;
+
+  pRemote = doltliteHttpRemoteOpen("http://127.0.0.1:1/repo.db");
+  check("http_refs_len: open remote", pRemote!=0);
+  if( !pRemote ){
+    free(zLongBranch);
+    return;
+  }
+
+  memset(&h, 0, sizeof(h));
+
+  rc = pRemote->xSetRefs(pRemote, zLongBranch, 0, payload, 1);
+  check("http_refs_len: xSetRefs 65536 queues", rc==SQLITE_OK);
+  rc = pRemote->xCommit(pRemote);
+  check("http_refs_len: xCommit 65536 returns SQLITE_TOOBIG", rc==SQLITE_TOOBIG);
+
+  rc = pRemote->xSetRefsIf(pRemote, &h, zLongBranch, 0, payload, 1);
+  check("http_refs_len: xSetRefsIf 65536 queues", rc==SQLITE_OK);
+  rc = pRemote->xCommit(pRemote);
+  check("http_refs_len: xCommit CAS 65536 returns SQLITE_TOOBIG", rc==SQLITE_TOOBIG);
+
+  rc = pRemote->xCheckRefsIf(pRemote, &h, zLongBranch, 0, payload, 1);
+  check("http_refs_len: xCheckRefsIf 65536 returns SQLITE_TOOBIG", rc==SQLITE_TOOBIG);
+
+  zLongBranch[0x10000] = 'b';
+  zLongBranch[0x10001] = 0;
+  rc = pRemote->xCheckRefsIf(pRemote, &h, zLongBranch, 0, payload, 1);
+  check("http_refs_len: xCheckRefsIf 65537 returns SQLITE_TOOBIG", rc==SQLITE_TOOBIG);
+
+  pRemote->xClose(pRemote);
+  free(zLongBranch);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -23889,7 +23935,8 @@ static const RegressionCase aCases[] = {
   { "chunk_store_put_int_overflow", "Chunk Store Put Int Overflow Test", run_chunk_store_put_int_overflow },
   { "wal_checkpoint_fallback_restores_manifest", "WAL Checkpoint Fallback Restores Manifest Test", run_wal_checkpoint_fallback_restores_manifest },
   { "sortkey_corrupt_record_bounds", "Sortkey Corrupt Record Bounds Test", run_sortkey_corrupt_record_bounds },
-  { "sortkey_large_record_header", "Sortkey Large Record Header Test", run_sortkey_large_record_header }
+  { "sortkey_large_record_header", "Sortkey Large Record Header Test", run_sortkey_large_record_header },
+  { "http_pending_refs_overlong_branch", "HTTP Pending Refs Overlong Branch Test", run_http_pending_refs_overlong_branch }
 };
 
 static int run_case_by_name(const char *zName){
