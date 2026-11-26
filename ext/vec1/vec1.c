@@ -9530,19 +9530,20 @@ static int vec1QuantizeReconstructionError2(
   float *aRound = 0;
   u8 *aCode = 0;
   int nCode = vec1EncodedVectorSize(pMod);
+  const i64 nEnc = (((i64)nCode * 4 + 3) + 7) & ~(i64)7;
   char *zEnc = 0;
   int iEnc = 0;
   int ii;
 
   zEnc = (char*)vec1MallocZero(
-      nElem * 8 +
-      nElem * sizeof_f32 +             /* aRound[] */
+      nEnc +
+      (i64)nElem * sizeof_f32 +        /* aRound[] */
       nCode                            /* aCode[] */
   );
   if( zEnc==0 ){
     return SQLITE_NOMEM;
   }
-  aRound = (float*)&zEnc[nElem * 8];
+  aRound = (float*)&zEnc[nEnc];
   aCode = (u8*)&aRound[nElem];
 
   vec1EncodeVector(pMod, aIn, aCode);
@@ -9557,6 +9558,7 @@ static int vec1QuantizeReconstructionError2(
     zEnc[iEnc++] = (aCode[ii] % 10) + '0';
   }
   zEnc[iEnc++] = ']';
+  assert( iEnc < nEnc );
 
   *pzEnc = zEnc;
   return SQLITE_OK;
