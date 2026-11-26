@@ -887,14 +887,6 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db){
       rc = prollyDiffIterStep(&pCur->diffIter, &pChange);
       if( rc==SQLITE_ROW && pChange ){
 
-        if( pCur->needFilter
-         && pChange->type==PROLLY_DIFF_MODIFY
-         && changeIsSchemaOnly(pChange->pOldVal, pChange->nOldVal,
-                               pChange->pNewVal, pChange->nNewVal,
-                               &pCur->fromSide.ci, &pCur->toSide.ci) ){
-          continue;
-        }
-
         pCur->row.pOldVal = 0;
         pCur->row.nOldVal = 0;
         pCur->row.pNewVal = 0;
@@ -949,6 +941,24 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db){
               pCur->row.nNewVal = pCur->row.nKeyRec;
             }
           }
+        }
+
+        if( pCur->needFilter
+         && pChange->type==PROLLY_DIFF_MODIFY
+         && changeIsSchemaOnly(pCur->row.pOldVal, pCur->row.nOldVal,
+                               pCur->row.pNewVal, pCur->row.nNewVal,
+                               &pCur->fromSide.ci, &pCur->toSide.ci) ){
+          sqlite3_free(pCur->row.pOldKeyRec);
+          pCur->row.pOldKeyRec = 0;
+          pCur->row.nOldKeyRec = 0;
+          sqlite3_free(pCur->row.pKeyRec);
+          pCur->row.pKeyRec = 0;
+          pCur->row.nKeyRec = 0;
+          pCur->row.pOldVal = 0;
+          pCur->row.nOldVal = 0;
+          pCur->row.pNewVal = 0;
+          pCur->row.nNewVal = 0;
+          continue;
         }
 
         pCur->hasRow = 1;
