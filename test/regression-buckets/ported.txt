@@ -330,3 +330,4 @@ doltlite_constraint_violation_json
 doltlite_vc_oom
 doltlite_savecursor_deletekey
 doltlite_merge_state_guards
+doltlite_catalog_name_limit.test
