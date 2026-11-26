@@ -121,6 +121,10 @@ foreach {layout pk} {rowid INTEGER clustered INT} {
       SELECT from_id, quote(from_b), quote(to_b), diff_type
       FROM dolt_diff_t WHERE to_commit=dolt_hashof('HEAD') ORDER BY from_id;
     } $diffRows
+    do_execsql_test $name.history-key {
+      SELECT from_id, quote(from_b), quote(to_b), diff_type
+      FROM dolt_diff_t WHERE to_commit=dolt_hashof('HEAD') AND to_id=1;
+    } {1 NULL 5 modified}
     do_execsql_test $name.stat {
       SELECT rows_unmodified, rows_modified, cells_modified
       FROM dolt_diff_stat('HEAD~1','HEAD','t');
