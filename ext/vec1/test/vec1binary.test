@@ -208,5 +208,134 @@ do_execsql_test 4.3 {
   2 {{bucket:0, coarse_error:0.000000, reconstruction_error:0.000000, code: [255,255,127,80,15]}}
 }
 
+#-------------------------------------------------------------------------
+# Binary quantization with residual:0, nbucket:2, and nprobe:2 must
+# preserve the query norm term across all probed buckets for both L2
+# and cosine distance.
+#
+proc const_vector {n val} {
+  set l [list]
+  for {set i 0} {$i < $n} {incr i} { lappend l $val }
+  binary format f* $l
+}
+
+proc split_vector {n nPos val} {
+  set l [list]
+  for {set i 0} {$i < $n} {incr i} {
+    lappend l [expr {$i < $nPos ? $val : -$val}]
+  }
+  binary format f* $l
+}
+
+proc sparse_vector {n val} {
+  set l [list $val]
+  for {set i 1} {$i < $n} {incr i} { lappend l 0.0 }
+  binary format f* $l
+}
+
+proc wht_cos_far_vector {n scale} {
+  set l [list [expr {6.0 * $scale}] [expr {2.0 * $scale}] \
+              [expr {2.0 * $scale}] [expr {-2.0 * $scale}] \
+              [expr {2.0 * $scale}] [expr {-2.0 * $scale}] \
+              [expr {-2.0 * $scale}] [expr {2.0 * $scale}]]
+  for {set i 8} {$i < $n} {incr i} { lappend l 0.0 }
+  binary format f* $l
+}
+
+foreach {tn jarg vfn} {
+  1 {{quantizer:"bq", residual:0, nbucket:2, wht:0}} const_vector
+  2 {{quantizer:"bq", residual:0, nbucket:2, wht:1}} sparse_vector
+} {
+  reset_db
+  vec1_load db
+  db func vfn $vfn
+
+  do_execsql_test 5.$tn.1 {
+    CREATE VIRTUAL TABLE v5 USING vec1(v);
+    WITH s(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM s WHERE i<20)
+    INSERT INTO v5(rowid, v)
+      SELECT i, vfn(16, 10.0 + (i-1)*0.02) FROM s;
+    WITH s(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM s WHERE i<20)
+    INSERT INTO v5(rowid, v)
+      SELECT 20+i, vfn(16, 2.0 + (i-1)*0.02) FROM s;
+    INSERT INTO v5(cmd, arg) VALUES('rebuild', (
+      SELECT vec1_train(v, $jarg) FROM v5
+    ));
+  }
+
+  set q [$vfn 16 10.0]
+
+  # Top-5 nearest neighbors must all come from cluster A (rowids 1..20)
+  # with non-negative distances.
+  do_execsql_test 5.$tn.2 {
+    SELECT count(*), min(rowid) >= 1, max(rowid) <= 20, min(distance) >= -0.001
+      FROM v5($q, '{K:5, nprobe:2}');
+  } {5 1 1 1}
+
+  # All 40 rows across both probed buckets must have non-negative
+  # distances, and every cluster A row must precede every cluster B row.
+  do_execsql_test 5.$tn.3 {
+    SELECT count(*),
+           min(distance) >= -0.001,
+           max(CASE WHEN rowid <= 20 THEN distance END)
+             < min(CASE WHEN rowid > 20 THEN distance END)
+      FROM v5($q, '{K:40, nprobe:2}');
+  } {40 1 1}
+}
+
+foreach {tn jarg} {
+  3 {{quantizer:"bq", residual:0, nbucket:2, distance:"cos", wht:0}}
+  4 {{quantizer:"bq", residual:0, nbucket:2, distance:"cos", wht:1}}
+} {
+  reset_db
+  vec1_load db
+  db func split_vector split_vector
+  db func sparse_vector sparse_vector
+  db func wht_cos_far_vector wht_cos_far_vector
+
+  if {$tn == 3} {
+    do_execsql_test 5.$tn.1 {
+      CREATE VIRTUAL TABLE v5 USING vec1(v);
+      WITH s(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM s WHERE i<20)
+      INSERT INTO v5(rowid, v)
+        SELECT i, split_vector(16, 16, 1.0 + i*0.01) FROM s;
+      WITH s(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM s WHERE i<20)
+      INSERT INTO v5(rowid, v)
+        SELECT 20+i, split_vector(16, 14, 1.0 + i*0.01) FROM s;
+      INSERT INTO v5(cmd, arg) VALUES('rebuild', (
+        SELECT vec1_train(v, $jarg) FROM v5
+      ));
+    }
+    set q [split_vector 16 16 1.0]
+  } else {
+    do_execsql_test 5.$tn.1 {
+      CREATE VIRTUAL TABLE v5 USING vec1(v);
+      WITH s(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM s WHERE i<20)
+      INSERT INTO v5(rowid, v)
+        SELECT i, sparse_vector(16, 1.0 + i*0.01) FROM s;
+      WITH s(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM s WHERE i<20)
+      INSERT INTO v5(rowid, v)
+        SELECT 20+i, wht_cos_far_vector(16, 1.0 + i*0.01) FROM s;
+      INSERT INTO v5(cmd, arg) VALUES('rebuild', (
+        SELECT vec1_train(v, $jarg) FROM v5
+      ));
+    }
+    set q [sparse_vector 16 1.0]
+  }
+
+  do_execsql_test 5.$tn.2 {
+    SELECT count(*), min(rowid) >= 1, max(rowid) <= 20, min(distance) >= -0.001
+      FROM v5($q, '{K:5, nprobe:2}');
+  } {5 1 1 1}
+
+  do_execsql_test 5.$tn.3 {
+    SELECT count(*),
+           min(distance) >= -0.001,
+           max(CASE WHEN rowid <= 20 THEN distance END)
+             < min(CASE WHEN rowid > 20 THEN distance END)
+      FROM v5($q, '{K:40, nprobe:2}');
+  } {40 1 1}
+}
+
 finish_test
   
