@@ -9901,18 +9901,19 @@ static int vec1WriteMeta(
     int rc = SQLITE_OK;
     int szElem;
     i64 iNull;
+    u32 newFormat;
     if( p->flags & VEC1_META_1BYTEINT ){
       szElem = 1;
       iNull = VEC1_META_1BYTENULL;
-      p->format = VEC1_META_1BYTEINT;
+      newFormat = VEC1_META_1BYTEINT;
     }else if( p->flags & VEC1_META_4BYTEINT ){
       szElem = sizeof_u32;
       iNull = VEC1_META_4BYTENULL;
-      p->format = VEC1_META_4BYTEINT;
+      newFormat = VEC1_META_4BYTEINT;
     }else{
       szElem = sizeof_f64;
       iNull = VEC1_META_REALNULL;
-      p->format = VEC1_META_REAL;
+      newFormat = VEC1_META_REAL;
     }
 
     rc = vec1BufferSize(&buf, VEC1_META_SZHDR + nEntry * szElem);
@@ -9923,7 +9924,7 @@ static int vec1WriteMeta(
       if( rc!=SQLITE_OK ) break;
       if( val.eType==SQLITE_NULL ){
         val.iVal = iNull;
-      }else if( p->format==VEC1_META_REAL ){
+      }else if( newFormat==VEC1_META_REAL ){
         if( val.eType==SQLITE_INTEGER ){
           val.fVal = (double)val.iVal;
         }
@@ -9938,8 +9939,13 @@ static int vec1WriteMeta(
       }
       iOut += szElem;
     }
+    if( rc!=SQLITE_OK ){
+      vec1BufferFree(&buf);
+      return rc;
+    }
     buf.n = iOut;
 
+    p->format = newFormat;
     SWAP(Vec1Buffer, p->buf, buf);
     vec1BufferFree(&buf);
   }
@@ -10734,21 +10740,24 @@ static int vec1ExpandMetaValue(Vec1MetaBuilder *p){
     }
 
     p->buf.n = iOut;
-  }
 
-  if( p->format==VEC1_META_1BYTEINT ){
-    p->flags = VEC1_META_4BYTEINT | VEC1_META_1BYTEINT | VEC1_META_REAL;
-  }else if( p->format==VEC1_META_4BYTEINT ){
-    p->flags = VEC1_META_4BYTEINT | VEC1_META_REAL;
+    if( p->format==VEC1_META_1BYTEINT ){
+      p->flags = VEC1_META_4BYTEINT | VEC1_META_1BYTEINT | VEC1_META_REAL;
+    }else if( p->format==VEC1_META_4BYTEINT ){
+      p->flags = VEC1_META_4BYTEINT | VEC1_META_REAL;
+    }else{
+      p->flags = VEC1_META_REAL;
+    }
+    p->format = VEC1_META_GENERIC;
+    if( bHasNull ){
+      p->flags |= VEC1_META_HASNULL;
+    }
+    vec1BufferFree(&orig);
   }else{
-    p->flags = VEC1_META_REAL;
-  }
-  p->format = VEC1_META_GENERIC;
-  if( bHasNull ){
-    p->flags |= VEC1_META_HASNULL;
+    vec1BufferFree(&p->buf);
+    memcpy(&p->buf, &orig, sizeof(Vec1Buffer));
   }
 
-  vec1BufferFree(&orig);
   return rc;
 }
 
@@ -10806,7 +10815,6 @@ static int vec1WriterMetaFromArray(
         pBuf->n += sizeof_f64;
         pVal = 0;
       }else if( eType==SQLITE_NULL ){
-        rc = vec1BufferGrow(pBuf, sizeof_f64);
         if( pMeta->format==VEC1_META_1BYTEINT ){
           pBuf->a[pBuf->n++] = (VEC1_META_1BYTENULL & 0xFF);
         }
@@ -10825,7 +10833,7 @@ static int vec1WriterMetaFromArray(
       }
     }
 
-    if( pMeta->format==VEC1_META_GENERIC ){
+    if( rc==SQLITE_OK && pMeta->format==VEC1_META_GENERIC ){
       int iOff = pBuf->n;
       rc = vec1AppendMetaValue(pBuf, pVal);
       if( rc==SQLITE_OK ){
