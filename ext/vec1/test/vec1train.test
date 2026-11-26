@@ -118,6 +118,46 @@ do_catchsql_test 4.4 {
   SELECT vec1_train(v, '{nbucket: 8, progress: "errorfunc"}') FROM x1
 } {1 {this is an error!}}
 
+set ::progress_calls 0
+proc my_cb {pct msg} {
+  incr ::progress_calls
+}
+db func my_cb my_cb
+
+do_test 4.5 {
+  set ::progress_calls 0
+  set len [db one {
+    SELECT length(vec1_train(v, '{"nbucket": 8, "progress": "my_cb"}')) FROM x1
+  }]
+  list [expr {$len > 0}] [expr {$::progress_calls > 0}]
+} {1 1}
+
+do_catchsql_test 4.6 {
+  SELECT vec1_train(v, '{"nbucket": 8, "progress": "abs(1), (SELECT 1); --"}') FROM x1
+} {1 {no such function: abs(1), (SELECT 1); --}}
+
+do_catchsql_test 4.7 {
+  SELECT vec1_train(v, '{"nbucket": 8, "progress": "1) UNION SELECT (1"}') FROM x1
+} {1 {no such function: 1) UNION SELECT (1}}
+
+set ::quoted_cb_calls 0
+proc quoted_cb {pct msg} {
+  incr ::quoted_cb_calls
+}
+db func {my"cb} quoted_cb
+
+do_test 4.8 {
+  set ::quoted_cb_calls 0
+  set len [db one {
+    SELECT length(vec1_train(v, '{"nbucket": 8, "progress": "my\"cb"}')) FROM x1
+  }]
+  list [expr {$len > 0}] [expr {$::quoted_cb_calls > 0}]
+} {1 1}
+
+do_catchsql_test 4.9 {
+  SELECT vec1_train(v, '{"nbucket": 8, "progress": "my\"other"}') FROM x1
+} {1 {no such function: my"other}}
+
 #-------------------------------------------------------------------------
 reset_db
 vec1_load db
