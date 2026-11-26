@@ -46,6 +46,10 @@ int prollyNodeParseSparse(ProllyNode *pNode, const u8 *pData, int nData,
   }
   pNode->nItems = count;
   pNode->flags = pData[PROLLY_FLAGS_OFF];
+  if( pNode->flags & (u8)~(PROLLY_NODE_INTKEY | PROLLY_NODE_BLOBKEY
+                           | PROLLY_NODE_SUBTREE_COUNTS) ){
+    return SQLITE_CORRUPT;
+  }
   keyFlag = pNode->flags & (PROLLY_NODE_INTKEY | PROLLY_NODE_BLOBKEY);
   if( keyFlag!=PROLLY_NODE_INTKEY && keyFlag!=PROLLY_NODE_BLOBKEY ){
     return SQLITE_CORRUPT;

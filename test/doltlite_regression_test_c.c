@@ -8819,6 +8819,108 @@ static void run_prolly_node_corruption(void){
           prollyNodeParse(&node, badEmptyInternalNode,
                           (int)sizeof(badEmptyInternalNode))==SQLITE_CORRUPT);
   }
+  {
+    static const u8 validBlobLeaf[] = {
+      'D','O','N','P',
+      0,
+      1, 0,
+      PROLLY_NODE_BLOBKEY,
+      0,0,0,0,
+      2,0,0,0,
+      0,0,0,0,
+      2,0,0,0,
+      'k','1',
+      'v','1'
+    };
+    static const u8 validIntLeaf[] = {
+      'D','O','N','P',
+      0,
+      1, 0,
+      PROLLY_NODE_INTKEY,
+      0,0,0,0,
+      8,0,0,0,
+      0,0,0,0,
+      2,0,0,0,
+      1,2,3,4,5,6,7,8,
+      'v','1'
+    };
+    static const u8 emptyElideLeaf[] = {
+      'D','O','N','P',
+      0,
+      0, 0,
+      PROLLY_NODE_BLOBKEY | PROLLY_NODE_PREFIX_ELIDE
+    };
+    static const u8 badExtraBits[] = {
+      PROLLY_NODE_PREFIX_ELIDE, 0x40, 0x20, 0x10, 0x08
+    };
+    u8 buf[sizeof(validIntLeaf)];
+    int i;
+
+    check("valid_blob_leaf_parses",
+          prollyNodeParse(&node, validBlobLeaf,
+                          (int)sizeof(validBlobLeaf))==SQLITE_OK);
+    check("valid_blob_leaf_sparse_parses",
+          prollyNodeParseSparse(&node, validBlobLeaf,
+                                (int)sizeof(validBlobLeaf),
+                                (int)sizeof(validBlobLeaf)-1)==SQLITE_OK);
+    check("valid_int_leaf_parses",
+          prollyNodeParse(&node, validIntLeaf,
+                          (int)sizeof(validIntLeaf))==SQLITE_OK);
+    check("empty_leaf_prefix_elide_rejected",
+          prollyNodeParse(&node, emptyElideLeaf,
+                          (int)sizeof(emptyElideLeaf))==SQLITE_CORRUPT);
+
+    for(i=0; i<(int)sizeof(badExtraBits); i++){
+      memcpy(buf, validBlobLeaf, sizeof(validBlobLeaf));
+      buf[7] = (u8)(PROLLY_NODE_BLOBKEY | badExtraBits[i]);
+      check("blob_leaf_unknown_flag_rejected",
+            prollyNodeParse(&node, buf, (int)sizeof(validBlobLeaf))
+            ==SQLITE_CORRUPT);
+      check("blob_leaf_sparse_unknown_flag_rejected",
+            prollyNodeParseSparse(&node, buf, (int)sizeof(validBlobLeaf),
+                                  (int)sizeof(validBlobLeaf)-1)
+            ==SQLITE_CORRUPT);
+
+      memcpy(buf, validIntLeaf, sizeof(validIntLeaf));
+      buf[7] = (u8)(PROLLY_NODE_INTKEY | badExtraBits[i]);
+      check("int_leaf_unknown_flag_rejected",
+            prollyNodeParse(&node, buf, (int)sizeof(validIntLeaf))
+            ==SQLITE_CORRUPT);
+      check("int_leaf_sparse_unknown_flag_rejected",
+            prollyNodeParseSparse(&node, buf, (int)sizeof(validIntLeaf),
+                                  (int)sizeof(validIntLeaf)-1)
+            ==SQLITE_CORRUPT);
+    }
+  }
+  {
+    ProllyNodeBuilder b;
+    u8 k[8] = {1,2,3,4,5,6,7,8};
+    u8 h[PROLLY_HASH_SIZE];
+    u8 *pData = 0;
+    int nData = 0;
+    memset(h, 0xab, sizeof(h));
+    prollyNodeBuilderInit(&b, 1,
+                          PROLLY_NODE_INTKEY | PROLLY_NODE_SUBTREE_COUNTS);
+    check("internal_node_builder_add",
+          prollyNodeBuilderAddWithCount(&b, k, 8, h, PROLLY_HASH_SIZE, 10)
+          ==SQLITE_OK);
+    check("internal_node_builder_finish",
+          prollyNodeBuilderFinish(&b, &pData, &nData)==SQLITE_OK && pData);
+    if( pData ){
+      check("valid_internal_node_with_counts_parses",
+            prollyNodeParse(&node, pData, nData)==SQLITE_OK
+            && prollyNodeHasSubtreeCounts(&node));
+      pData[7] = (u8)(PROLLY_NODE_INTKEY | PROLLY_NODE_SUBTREE_COUNTS
+                      | PROLLY_NODE_PREFIX_ELIDE);
+      check("internal_node_prefix_elide_rejected",
+            prollyNodeParse(&node, pData, nData)==SQLITE_CORRUPT);
+      pData[7] = (u8)(PROLLY_NODE_INTKEY | PROLLY_NODE_SUBTREE_COUNTS | 0x40);
+      check("internal_node_unknown_flag_rejected",
+            prollyNodeParse(&node, pData, nData)==SQLITE_CORRUPT);
+    }
+    sqlite3_free(pData);
+    prollyNodeBuilderFree(&b);
+  }
 }
 
 static void run_memory_chunk_lookup_corruption(void){
