@@ -59,4 +59,98 @@ do_execsql_test 2.0 {
   SELECT id, pid, v, w, extra FROM c;
 } {40 0 0 40 0 40 40 1 1 10 2 3}
 
+# Wide table (>32 columns) schema relayout merge under OOM fault injection.
+reset_db
+do_test 3.0 {
+  set cols [list "id INTEGER PRIMARY KEY"]
+  set vals1 [list 1]
+  for {set i 1} {$i <= 33} {incr i} {
+    lappend cols "c$i INT"
+    lappend vals1 $i
+  }
+  execsql "CREATE TABLE wide_relayout([join $cols {, }])"
+  execsql "INSERT INTO wide_relayout VALUES([join $vals1 {, }])"
+  execsql {
+    SELECT dolt_commit('-Am', 'base');
+    SELECT dolt_branch('side');
+    ALTER TABLE wide_relayout ADD COLUMN c34 INT DEFAULT 99;
+    SELECT dolt_commit('-am', 'main add col');
+    SELECT dolt_checkout('side');
+    ALTER TABLE wide_relayout ADD COLUMN c35 INT DEFAULT 88;
+    UPDATE wide_relayout SET c35 = 77 WHERE id = 1;
+    SELECT dolt_commit('-am', 'side add col');
+    SELECT dolt_checkout('main');
+  }
+  execsql {SELECT count(*) FROM wide_relayout}
+} {1}
+
+faultsim_save_and_close
+
+set merge_oom_results [list \
+  {0 40} \
+  {1 {disk I/O error}} \
+  {1 {merge source not found}} \
+  {1 {no common ancestor found}} \
+  {1 {failed to load commit}} \
+  {1 {failed to load our commit}} \
+  {1 {failed to load their commit}} \
+  {1 {failed to load ancestor}} \
+  {1 {merge failed}} \
+  {1 {failed to create merge commit}} \
+  {1 {cannot merge: schema change could not be applied: out of memory}} \
+  {1 {cannot merge: schema change could not be applied: unable to open a temporary database file for storing temporary tables}} \
+  {1 {cannot merge: conflicts detected, autocommit transaction rolled back. Run the merge inside BEGIN/COMMIT to inspect dolt_conflicts and dolt_schema_conflicts, resolve with dolt_conflicts_resolve(), then commit with dolt_commit(). Conflicts are never committed as conflicts}} \
+]
+
+do_faultsim_test 3.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db one {SELECT length(dolt_merge('side'))}
+} -test {
+  faultsim_test_result {*}$::merge_oom_results
+}
+
+# Wide WITHOUT ROWID table (>32 columns) with UNIQUE index under OOM fault injection.
+reset_db
+do_test 4.0 {
+  set cols [list "id TEXT PRIMARY KEY" "u TEXT"]
+  set vals1 [list "'k1'" "'u1'"]
+  set vals2 [list "'k2'" "'u2'"]
+  set vals3 [list "'k3'" "'u3'"]
+  for {set i 1} {$i <= 33} {incr i} {
+    lappend cols "c$i INT"
+    lappend vals1 $i
+    lappend vals2 [expr {$i + 100}]
+    lappend vals3 [expr {$i + 200}]
+  }
+  execsql "CREATE TABLE wide_uq([join $cols {, }]) WITHOUT ROWID"
+  execsql {CREATE UNIQUE INDEX idx_wide_uq ON wide_uq(u)}
+  execsql "INSERT INTO wide_uq VALUES([join $vals1 {, }])"
+  execsql {
+    SELECT dolt_commit('-Am', 'base');
+    SELECT dolt_branch('side');
+  }
+  execsql "INSERT INTO wide_uq VALUES([join $vals2 {, }])"
+  execsql {
+    SELECT dolt_commit('-am', 'main row');
+    SELECT dolt_checkout('side');
+  }
+  execsql "INSERT INTO wide_uq VALUES([join $vals3 {, }])"
+  execsql {
+    SELECT dolt_commit('-am', 'side row');
+    SELECT dolt_checkout('main');
+  }
+  execsql {SELECT count(*) FROM wide_uq}
+} {2}
+
+faultsim_save_and_close
+
+do_faultsim_test 4.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db one {SELECT length(dolt_merge('side'))}
+} -test {
+  faultsim_test_result {*}$::merge_oom_results
+}
+
 finish_test
