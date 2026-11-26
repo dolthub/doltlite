@@ -265,10 +265,24 @@ static int csCommitResolveAppendPoint(
   }
 
   if( hadFile && !lockHeld ){
+    int bReload = 0;
     int bMoved = 0;
     int rc2 = sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED,
                                    &bMoved);
     if( rc2==SQLITE_OK && bMoved ){
+      bReload = 1;
+    }else if( fileSize < csMinExpectedFileSize(cs) ){
+      bReload = 1;
+    }
+#if defined(SQLITE_WASM) || defined(__EMSCRIPTEN__)
+    if( !bReload ){
+      int bMatch = 1;
+      rc = csDiskManifestMatches(cs, &bMatch);
+      if( rc != SQLITE_OK ) return rc;
+      if( !bMatch ) bReload = 1;
+    }
+#endif
+    if( bReload ){
       rc = csReloadFromDiskPreservingLocalRefs(cs);
       if( rc != SQLITE_OK ) return rc;
       fileSize = cs->file.iFileSize;

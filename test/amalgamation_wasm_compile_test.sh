@@ -49,6 +49,18 @@ trap 'rm -rf "$tmp"' EXIT
   -o "$tmp/wasm-backup-recovery-test"
 "$tmp/wasm-backup-recovery-test"
 
+"${CC:-cc}" -w -std=c99 -O0 \
+  -DSQLITE_THREADSAFE=0 \
+  -DSQLITE_WASM \
+  -DDOLTLITE_PROLLY=1 \
+  -DDOLTLITE_VEC1=0 \
+  -DVEC1_THREADS=0 \
+  -include "$amalgamation" \
+  "$(dirname "$0")/amalgamation_wasm_inplace_change_probe.c" \
+  -lm \
+  -o "$tmp/wasm-inplace-change-test"
+"$tmp/wasm-inplace-change-test"
+
 if ! command -v "$emcc_bin" >/dev/null 2>&1; then
   echo "SKIP: emcc not found"
   exit 0
