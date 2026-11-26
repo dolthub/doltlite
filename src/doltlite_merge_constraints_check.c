@@ -1329,7 +1329,7 @@ int schemaAdoptMergedTableSql(
 ){
   SchemaEntry *pOurs, *pTheirs, *pAnc;
   const char *zAncSql, *zOursSql, *zTheirsSql;
-  char *zNew = 0, *zErr = 0;
+  char *zNew = 0, *zErr = 0, *zOldOursSql = 0;
   int bConflict = 0, bHandled = 0, rc = SQLITE_OK;
   int nBody, bWr, bStrictAnc, bStrictOurs, bStrictTheirs;
 
@@ -1353,14 +1353,22 @@ int schemaAdoptMergedTableSql(
       sqlite3_free(zCopy);
       return pOurs ? SQLITE_NOMEM : SQLITE_CORRUPT;
     }
-    if( pzOursPrev ) *pzOursPrev = pOurs->zSql;
+    if( pzOursPrev ){
+      *pzOursPrev = pOurs->zSql;
+    }else{
+      zOldOursSql = pOurs->zSql;
+    }
     pOurs->zSql = zCopy;
   }
 
   if( !pOurs || !pOurs->zType || strcmp(pOurs->zType, "table")!=0 ){
+    sqlite3_free(zOldOursSql);
     return SQLITE_OK;
   }
-  if( !zAncSql || !zOursSql || !zTheirsSql ) return SQLITE_OK;
+  if( !zAncSql || !zOursSql || !zTheirsSql ){
+    sqlite3_free(zOldOursSql);
+    return SQLITE_OK;
+  }
   dlTableOptions(zAncSql, &nBody, &bStrictAnc, &bWr);
   dlTableOptions(zOursSql, &nBody, &bStrictOurs, &bWr);
   dlTableOptions(zTheirsSql, &nBody, &bStrictTheirs, &bWr);
@@ -1368,6 +1376,7 @@ int schemaAdoptMergedTableSql(
                          zName ? zName : zFallback, aAct, nAct,
                          &zNew, &zErr, &bConflict, &bHandled);
   sqlite3_free(zErr);
+  sqlite3_free(zOldOursSql);
   if( rc!=SQLITE_OK || bConflict ){
     sqlite3_free(zNew);
     return rc;
