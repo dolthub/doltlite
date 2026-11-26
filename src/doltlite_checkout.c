@@ -1548,27 +1548,6 @@ static void doltCheckoutParsedFunc(
     isCreateAndSwitch = 1;
   }
 
-  if( !createBranch && argc==1 ){
-    ProllyHash probe;
-    if( chunkStoreFindTag(cs, zBranch, &probe)==SQLITE_OK
-     && !prollyHashIsEmpty(&probe) ){
-      checkoutDetachedHeadError(ctx, db);
-      return;
-    }
-    if( iEndOptions!=0
-     && chunkStoreFindBranch(cs, zBranch, &probe)!=SQLITE_OK
-     && doltliteResolveRef(db, zBranch, &probe)==SQLITE_OK ){
-      checkoutDetachedHeadError(ctx, db);
-      return;
-    }
-  }
-
-  if( !createBranch && !doltliteIsDetached(db)
-   && strcmp(zBranch, doltliteGetSessionBranch(db))==0 && argc==1 ){
-    sqlite3_result_int(ctx, 0);
-    return;
-  }
-
   if( (argc>1 || iEndOptions==0) && !isCreateAndSwitch ){
     ProllyHash sourceRef;
     if( iEndOptions!=0
@@ -1581,6 +1560,26 @@ static void doltCheckoutParsedFunc(
       rc = doltliteCheckoutTables(db, ctx, 0, argv, 0, argc, &zMissing, 0, 0);
     }
     checkoutTablesResult(ctx, db, rc, zMissing, zBranch);
+    return;
+  }
+
+  if( !createBranch && argc==1 ){
+    ProllyHash probe;
+    if( chunkStoreFindTag(cs, zBranch, &probe)==SQLITE_OK
+     && !prollyHashIsEmpty(&probe) ){
+      checkoutDetachedHeadError(ctx, db);
+      return;
+    }
+    if( chunkStoreFindBranch(cs, zBranch, &probe)!=SQLITE_OK
+     && doltliteResolveRef(db, zBranch, &probe)==SQLITE_OK ){
+      checkoutDetachedHeadError(ctx, db);
+      return;
+    }
+  }
+
+  if( !createBranch && !doltliteIsDetached(db)
+   && strcmp(zBranch, doltliteGetSessionBranch(db))==0 && argc==1 ){
+    sqlite3_result_int(ctx, 0);
     return;
   }
 

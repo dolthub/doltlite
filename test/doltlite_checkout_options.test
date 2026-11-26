@@ -127,4 +127,67 @@ foreach storage {file memory} {
   }
 }
 
+foreach storage {file memory} {
+  set prefix checkout-double-dash-$storage
+  reset_db
+  if {$storage eq "memory"} {
+    db close
+    sqlite3 db :memory:
+  }
+  db eval {
+    CREATE TABLE main(id INT PRIMARY KEY, v TEXT);
+    CREATE TABLE v1(id INT PRIMARY KEY, v TEXT);
+    CREATE TABLE other(id INT PRIMARY KEY, v TEXT);
+    INSERT INTO main VALUES(1, 'committed');
+    INSERT INTO v1 VALUES(1, 'committed');
+    INSERT INTO other VALUES(1, 'committed');
+    SELECT dolt_commit('-Am', 'init');
+    SELECT dolt_tag('v1');
+    SELECT dolt_branch('other');
+    UPDATE main SET v = 'dirty' WHERE id = 1;
+    UPDATE v1 SET v = 'dirty' WHERE id = 1;
+    UPDATE other SET v = 'dirty' WHERE id = 1;
+  }
+
+  do_execsql_test $prefix.plain-main-noop {
+    SELECT dolt_checkout('main');
+    SELECT active_branch();
+    SELECT v FROM main WHERE id = 1;
+  } {0 main dirty}
+
+  do_execsql_test $prefix.double-dash-current-branch-table {
+    SELECT dolt_checkout('--', 'main');
+    SELECT active_branch();
+    SELECT v FROM main WHERE id = 1;
+  } {0 main committed}
+
+  do_catchsql_test $prefix.plain-tag-detached-error {
+    SELECT dolt_checkout('v1');
+  } {1 {dolt does not support a detached head state. To create a branch at this commit instead, run SELECT dolt_checkout(<start_point>, '-b', <new_branch_name>)}}
+
+  do_execsql_test $prefix.double-dash-tag-table {
+    SELECT dolt_checkout('--', 'v1');
+    SELECT active_branch();
+    SELECT v FROM v1 WHERE id = 1;
+  } {0 main committed}
+
+  do_execsql_test $prefix.double-dash-other-branch-table {
+    SELECT dolt_checkout('--', 'other');
+    SELECT active_branch();
+    SELECT v FROM other WHERE id = 1;
+    SELECT count(*) FROM dolt_status;
+  } {0 main committed 0}
+
+  do_catchsql_test $prefix.double-dash-missing-table-named-like-ref {
+    SELECT dolt_tag('onlytag');
+    SELECT dolt_checkout('--', 'onlytag');
+  } {1 {no such branch or table: onlytag}}
+
+  do_catchsql_test $prefix.double-dash-missing-table-named-like-current-branch {
+    DROP TABLE main;
+    SELECT dolt_commit('-am', 'drop main table');
+    SELECT dolt_checkout('--', 'main');
+  } {1 {no such branch or table: main}}
+}
+
 finish_test
