@@ -8,6 +8,8 @@
 #include "chunk_store.h"
 #include "lib/test_tmpdir.h"
 
+extern ChunkStore *doltliteGetChunkStore(sqlite3*);
+
 /* SQL tag and remote edits are durable when the call returns, so a later
 ** COMMIT of row writes keeps a peer's other ref edits. Uncommitted tag,
 ** remote, and tracking edits merge at chunk-store commit. The same name
@@ -955,6 +957,136 @@ static void storeWorkingSetSecondSession(void){
   wipe(path);
 }
 
+static void storeDedupRevertMerge(void){
+  char path[256];
+  sqlite3 *a, *b = 0, *c = 0;
+  ChunkStore *cs;
+  dbPath(path, (int)sizeof(path), "dedupmerge");
+  a = newLocal(path);
+  check("dedup_merge_setup", a!=0);
+  if( !a ) return;
+  check("dedup_merge_tag", execSql(a, "SELECT dolt_tag('t')")==SQLITE_OK);
+  b = openDb(path);
+  check("dedup_merge_peer_open", b!=0);
+  if( b ){
+    check("dedup_merge_peer_branch",
+          execSql(b, "SELECT dolt_branch('peer_b')")==SQLITE_OK);
+    cs = doltliteGetChunkStore(a);
+    check("dedup_merge_cs", cs!=0);
+    if( cs ){
+      check("dedup_merge_local_del",
+            chunkStoreDeleteTag(cs, "t")==SQLITE_OK
+            && chunkStoreSerializeRefs(cs)==SQLITE_OK);
+      check("dedup_merge_zero_pending",
+            cs->staging.nPending==0
+            && prollyHashCompare(&cs->refs.refsHash,
+                                 &cs->refs.committedRefsHash)!=0);
+      check("dedup_merge_commit", chunkStoreCommit(cs)==SQLITE_OK);
+    }
+  }
+  closeAll(a, b, 0);
+  c = openDb(path);
+  check("dedup_merge_reopen", c!=0);
+  if( c ){
+    expectEq("dedup_merge_tag_gone",
+             queryScalar(c, "SELECT count(*) FROM dolt_tags WHERE tag_name='t'"),
+             "0");
+    expectEq("dedup_merge_peer_kept",
+             queryScalar(c, "SELECT count(*) FROM dolt_branches WHERE name='peer_b'"),
+             "1");
+  }
+  closeAll(0, 0, c);
+  wipe(path);
+}
+
+static void storeDedupRevertConflict(void){
+  char path[256];
+  sqlite3 *a, *b = 0, *c = 0;
+  ChunkStore *cs;
+  dbPath(path, (int)sizeof(path), "dedupconflict");
+  a = newLocal(path);
+  check("dedup_conflict_setup", a!=0);
+  if( !a ) return;
+  check("dedup_conflict_tag", execSql(a, "SELECT dolt_tag('t')")==SQLITE_OK);
+  b = openDb(path);
+  check("dedup_conflict_peer_open", b!=0);
+  if( b ){
+    check("dedup_conflict_peer_move", execSql(b,
+          "SELECT dolt_tag('-d','t');"
+          "SELECT dolt_tag('-m','from-b','t');")==SQLITE_OK);
+    cs = doltliteGetChunkStore(a);
+    check("dedup_conflict_cs", cs!=0);
+    if( cs ){
+      check("dedup_conflict_local_del",
+            chunkStoreDeleteTag(cs, "t")==SQLITE_OK
+            && chunkStoreSerializeRefs(cs)==SQLITE_OK);
+      check("dedup_conflict_zero_pending",
+            cs->staging.nPending==0
+            && prollyHashCompare(&cs->refs.refsHash,
+                                 &cs->refs.committedRefsHash)!=0);
+      check("dedup_conflict_busy",
+            chunkStoreCommit(cs)==SQLITE_BUSY_SNAPSHOT);
+    }
+  }
+  closeAll(a, b, 0);
+  c = openDb(path);
+  check("dedup_conflict_reopen", c!=0);
+  if( c ){
+    expectEq("dedup_conflict_peer_kept",
+             queryScalar(c, "SELECT message FROM dolt_tags WHERE tag_name='t'"),
+             "from-b");
+  }
+  closeAll(0, 0, c);
+  wipe(path);
+}
+
+static void storeDedupRevertForceRefresh(void){
+  char path[256];
+  sqlite3 *a, *b = 0, *c = 0;
+  ChunkStore *cs;
+  dbPath(path, (int)sizeof(path), "deduprefresh");
+  a = newLocal(path);
+  check("dedup_refresh_setup", a!=0);
+  if( !a ) return;
+  check("dedup_refresh_tag", execSql(a, "SELECT dolt_tag('t')")==SQLITE_OK);
+  b = openDb(path);
+  check("dedup_refresh_peer_open", b!=0);
+  if( b ){
+    check("dedup_refresh_peer_branch",
+          execSql(b, "SELECT dolt_branch('peer_b')")==SQLITE_OK);
+    cs = doltliteGetChunkStore(a);
+    check("dedup_refresh_cs", cs!=0);
+    if( cs ){
+      cs->snapshotPinned = 1;
+      check("dedup_refresh_lock", chunkStoreLockAndRefresh(cs)==SQLITE_OK);
+      check("dedup_refresh_local_del",
+            chunkStoreDeleteTag(cs, "t")==SQLITE_OK
+            && chunkStoreSerializeRefs(cs)==SQLITE_OK);
+      check("dedup_refresh_zero_pending",
+            cs->staging.nPending==0
+            && prollyHashCompare(&cs->refs.refsHash,
+                                 &cs->refs.committedRefsHash)!=0);
+      check("dedup_refresh_force", chunkStoreForceRefresh(cs)==SQLITE_OK);
+      check("dedup_refresh_commit", chunkStoreCommit(cs)==SQLITE_OK);
+      chunkStoreUnlock(cs);
+      cs->snapshotPinned = 0;
+    }
+  }
+  closeAll(a, b, 0);
+  c = openDb(path);
+  check("dedup_refresh_reopen", c!=0);
+  if( c ){
+    expectEq("dedup_refresh_tag_gone",
+             queryScalar(c, "SELECT count(*) FROM dolt_tags WHERE tag_name='t'"),
+             "0");
+    expectEq("dedup_refresh_peer_kept",
+             queryScalar(c, "SELECT count(*) FROM dolt_branches WHERE name='peer_b'"),
+             "1");
+  }
+  closeAll(0, 0, c);
+  wipe(path);
+}
+
 int main(void){
   snprintf(gPid, sizeof(gPid), "%ld", (long)getpid());
   scenarioTagAdd();
@@ -978,6 +1110,9 @@ int main(void){
   storeTrackingDelete();
   storeWorkingSetReplaceUnread();
   storeWorkingSetSecondSession();
+  storeDedupRevertMerge();
+  storeDedupRevertConflict();
+  storeDedupRevertForceRefresh();
   printf("Results: %d passed, %d failed out of %d tests\n",
          nPass, nFail, nPass + nFail);
   return nFail > 0 ? 1 : 0;

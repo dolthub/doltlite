@@ -595,8 +595,7 @@ int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs){
     return SQLITE_BUSY_SNAPSHOT;
   }
 
-  preserveRefs = cs->staging.nPending > 0
-              && prollyHashCompare(&cs->refs.refsHash,
+  preserveRefs = prollyHashCompare(&cs->refs.refsHash,
                                    &cs->refs.committedRefsHash)!=0;
   memset(&savedRefs, 0, sizeof(savedRefs));
   if( preserveRefs ){
