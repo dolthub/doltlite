@@ -463,6 +463,9 @@ int prollyBtCursorCount(sqlite3 *db, BtCursor *pCur, i64 *pnEntry){
   ProllyHash live;
   int rc;
   (void)db;
+  if( pCur->eState==CURSOR_FAULT && pCur->bCatalogGone ){
+    return doltliteBtreeCursorFaultCode(pCur);
+  }
   rc = flushPendingForCount(pCur, &pScratch, &live);
   if( rc!=SQLITE_OK ) return rc;
   rc = countTreeEntries(pCur->pBtree, pCur->pgnoRoot, pnEntry);
@@ -481,6 +484,9 @@ int prollyBtCursorCountRange(
   ProllyHash live;
   int rc;
   (void)db;
+  if( pCur->eState==CURSOR_FAULT && pCur->bCatalogGone ){
+    return doltliteBtreeCursorFaultCode(pCur);
+  }
   rc = flushPendingForCount(pCur, &pScratch, &live);
   if( rc!=SQLITE_OK ) return rc;
   rc = countTreeIntRange(pCur->pBtree, pCur->pgnoRoot,
@@ -500,6 +506,9 @@ int prollyBtCursorCountIndexRange(
   ProllyHash live;
   int rc;
   (void)db;
+  if( pCur->eState==CURSOR_FAULT && pCur->bCatalogGone ){
+    return doltliteBtreeCursorFaultCode(pCur);
+  }
   if( pCur->curIntKey ) return SQLITE_NOTFOUND;
   if( !pLower || !pUpper ) return SQLITE_NOTFOUND;
   if( pCur->pKeyInfo ){
@@ -553,6 +562,9 @@ i64 prollyBtCursorRowCountEst(BtCursor *pCur){
   i64 nPending = 0;
   int i;
 
+  if( pCur->eState==CURSOR_FAULT && pCur->bCatalogGone ){
+    return 0;
+  }
   pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
   if( !pTE || prollyHashIsEmpty(&pTE->root) ){
     if( pTE && pTE->pPending ){

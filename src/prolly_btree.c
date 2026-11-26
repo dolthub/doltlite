@@ -2296,6 +2296,9 @@ int sqlite3BtreeClearTable(Btree *p, int iTable, i64 *pnChange){
 }
 
 int prollyBtCursorClearTableOfCursor(BtCursor *pCur){
+  if( pCur->eState==CURSOR_FAULT && pCur->bCatalogGone ){
+    return doltliteBtreeCursorFaultCode(pCur);
+  }
   return sqlite3BtreeClearTable(pCur->pBtree, (int)pCur->pgnoRoot, 0);
 }
 int sqlite3BtreeClearTableOfCursor(BtCursor *pCur){
@@ -2771,8 +2774,9 @@ void prollyBtCursorClearCursor(BtCursor *pCur){
   }
   CLEAR_CACHED_PAYLOAD(pCur);
   clearMergeCursorState(pCur);
-  pCur->eState = CURSOR_INVALID;
   pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_AtLast);
+  if( pCur->eState==CURSOR_FAULT && pCur->bCatalogGone ) return;
+  pCur->eState = CURSOR_INVALID;
   pCur->skipNext = 0;
 }
 void sqlite3BtreeClearCursor(BtCursor *pCur){

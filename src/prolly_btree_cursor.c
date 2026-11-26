@@ -622,6 +622,9 @@ int mergeLast(BtCursor *pCur, int *pRes){
 int prollyBtCursorFirst(BtCursor *pCur, int *pRes){
   int rc;
   struct TableEntry *pTE;
+  if( pCur->eState==CURSOR_FAULT && pCur->bCatalogGone ){
+    return doltliteBtreeCursorFaultCode(pCur);
+  }
   rc = flushScanDeletes(pCur);
   if( rc!=SQLITE_OK ) return rc;
   CLEAR_CACHED_PAYLOAD(pCur);
@@ -661,6 +664,9 @@ int sqlite3BtreeFirst(BtCursor *pCur, int *pRes){
 int prollyBtCursorLast(BtCursor *pCur, int *pRes){
   int rc;
   struct TableEntry *pTE;
+  if( pCur->eState==CURSOR_FAULT && pCur->bCatalogGone ){
+    return doltliteBtreeCursorFaultCode(pCur);
+  }
   rc = flushScanDeletes(pCur);
   if( rc!=SQLITE_OK ) return rc;
   CLEAR_CACHED_PAYLOAD(pCur);
@@ -973,6 +979,9 @@ int sqlite3BtreeEof(BtCursor *pCur){
 
 int prollyBtCursorIsEmpty(BtCursor *pCur, int *pRes){
   struct TableEntry *pTE;
+  if( pCur->eState==CURSOR_FAULT && pCur->bCatalogGone ){
+    return doltliteBtreeCursorFaultCode(pCur);
+  }
   pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
   if( !pTE ){
     *pRes = 1;

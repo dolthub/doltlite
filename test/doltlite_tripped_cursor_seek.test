@@ -65,4 +65,128 @@ do_execsql_test tripped-rollback-schema-after {
   SELECT b FROM t ORDER BY id;
 } {main1 main2 main3}
 
+proc tripped_ext_setup {} {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, b, c);
+    CREATE INDEX tb ON t(b);
+    INSERT INTO t VALUES(1,'main1',10),(2,'main2',20),(3,'main3',30),(4,'main4',40);
+    CREATE TABLE nt(k TEXT PRIMARY KEY, b BLOB);
+    INSERT INTO nt VALUES('k1', CAST('main1-blob' AS BLOB)),('k2', CAST('main2-blob' AS BLOB));
+    CREATE TABLE w(k TEXT PRIMARY KEY, b TEXT, c INT) WITHOUT ROWID;
+    CREATE INDEX wb ON w(b);
+    INSERT INTO w VALUES('k1','main1',10),('k2','main2',20),('k3','main3',30);
+    SELECT dolt_commit('-Am','base');
+    SELECT dolt_checkout('-b','other');
+    DROP INDEX tb;
+    DROP TABLE nt;
+    DROP INDEX wb;
+    DROP TABLE w;
+    CREATE TABLE s(id INTEGER PRIMARY KEY, secret, n);
+    INSERT INTO s VALUES(1,'S1',-1),(2,'S2',-2),(3,'S3',-3),(4,'S4',-4),(5,'S5',-5);
+    CREATE TABLE s2(k TEXT PRIMARY KEY, b BLOB);
+    INSERT INTO s2 VALUES('k1', CAST('secret-blob' AS BLOB));
+    SELECT dolt_commit('-Am','other');
+    SELECT dolt_checkout('main');
+  }
+}
+
+foreach {name sql step} {
+  count {SELECT count(*) FROM t} 4
+  count-range {SELECT count(*) FROM t WHERE id BETWEEN 1 AND 4} 4
+} {
+  tripped_ext_setup
+  do_test tripped-$name-checkout {
+    set ::pstep 0
+    set ::ptarget $step
+    proc tripped_prog_cb {} {
+      incr ::pstep
+      if {$::pstep==$::ptarget} {
+        db progress 0 ""
+        db eval {SELECT dolt_checkout('other')}
+      }
+      return 0
+    }
+    db progress 1 tripped_prog_cb
+    set rc [catch {db eval $sql} msg]
+    db progress 0 ""
+    list $rc [string match {*abort*} $msg]
+  } {1 1}
+  do_execsql_test tripped-$name-checkout-after {
+    SELECT count(*) FROM s;
+    PRAGMA integrity_check;
+  } {5 ok}
+}
+
+foreach {op between} {
+  checkout {SELECT dolt_checkout('other')}
+  reset {SELECT dolt_reset('--hard','other')}
+} {
+  foreach {name sql} {
+    first {SELECT k, t.b FROM (SELECT tripped_nd(1) AS k UNION ALL SELECT 2) CROSS JOIN t}
+    last {SELECT k, t.c FROM (SELECT tripped_nd(1) AS k UNION ALL SELECT 2) CROSS JOIN t ORDER BY t.id DESC}
+  } {
+    tripped_ext_setup
+    do_test tripped-$name-$op {
+      set ::fired 0
+      set ::ubetween $between
+      proc tripped_nd {x} {
+        if {!$::fired} {
+          set ::fired 1
+          db eval $::ubetween
+        }
+        return $x
+      }
+      db function tripped_nd tripped_nd
+      set rc [catch {db eval $sql} msg]
+      list $rc [string match {*abort*} $msg]
+    } {1 1}
+    do_execsql_test tripped-$name-$op-after {
+      SELECT count(*) FROM s;
+      PRAGMA integrity_check;
+    } {5 ok}
+  }
+
+  tripped_ext_setup
+  do_test tripped-count-index-range-$op {
+    set ::fired 0
+    set ::ubetween $between
+    proc tripped_udf {x} {
+      if {!$::fired} {
+        set ::fired 1
+        db eval $::ubetween
+      }
+      return $x
+    }
+    db function tripped_udf -deterministic tripped_udf
+    set rc [catch {
+      db eval {SELECT count(*) FROM t WHERE b BETWEEN tripped_udf('main1') AND 'main4'}
+    } msg]
+    list $rc [string match {*abort*} $msg]
+  } {1 1}
+
+  tripped_ext_setup
+  do_test tripped-sql-rowid-moveto-$op {
+    set r1 [db onecolumn {SELECT rowid FROM nt WHERE k='k1'}]
+    set r2 [db onecolumn {SELECT rowid FROM nt WHERE k='k2'}]
+    set fd [db incrblob -readonly nt b $r1]
+    db eval $between
+    set rc [catch {sqlite3_blob_reopen $fd $r2} msg]
+    close $fd
+    list $rc [string match {*ABORT*} $msg]
+  } {1 1}
+
+  tripped_ext_setup
+  do_test tripped-without-rowid-index-seek-$op {
+    set rows {}
+    set rc [catch {
+      db eval {SELECT c FROM w WHERE b IN ('main1','main2','main3')} {
+        lappend rows $c
+        if {[llength $rows]==1} {db eval $between}
+      }
+    } msg]
+    list $rc [string match {*abort*} $msg] $rows
+  } {1 1 10}
+}
+
 finish_test

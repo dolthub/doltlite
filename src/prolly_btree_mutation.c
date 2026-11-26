@@ -1702,6 +1702,9 @@ int prollyBtCursorInsert(
   u8 *pKeep = 0;
   u8 *pCanon = 0;
   int rc;
+  if( pCur->eState==CURSOR_FAULT && pCur->bCatalogGone ){
+    return doltliteBtreeCursorFaultCode(pCur);
+  }
   pCur->pBtree->bTxnWrote = 1;
   rc = btCursorInsertImpl(pCur, pPayload, flags, seekResult,
                               &pKeep, &pCanon);
@@ -1736,6 +1739,9 @@ int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
   int hasSavedKey = 0;
   ProllyMutMapEntry *pDelEntry = 0;
 
+  if( pCur->eState==CURSOR_FAULT && pCur->bCatalogGone ){
+    return doltliteBtreeCursorFaultCode(pCur);
+  }
   pCur->deferredMergedSeek = 0;
 
   assert( pCur->pBtree->inTrans==TRANS_WRITE );

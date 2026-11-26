@@ -59,9 +59,7 @@ int prollyBtCursorTableMoveto(
 
   assert( pCur->curIntKey );
 
-  if( pCur->eState==CURSOR_FAULT && pCur->bCatalogGone ){
-    return doltliteBtreeCursorFaultCode(pCur);
-  }
+  if( pCur->eState==CURSOR_FAULT && pCur->bCatalogGone ) return doltliteBtreeCursorFaultCode(pCur);
   rc = flushScanDeletes(pCur);
   if( rc!=SQLITE_OK ) return rc;
   pCur->nSeek++;
@@ -1135,9 +1133,7 @@ static int prollyIndexMoveto(
 
   assert( !pCur->curIntKey );
 
-  if( pCur->eState==CURSOR_FAULT && pCur->bCatalogGone ){
-    return doltliteBtreeCursorFaultCode(pCur);
-  }
+  if( pCur->eState==CURSOR_FAULT && pCur->bCatalogGone ) return doltliteBtreeCursorFaultCode(pCur);
   rc = flushScanDeletes(pCur);
   if( rc!=SQLITE_OK ) return rc;
   if( pCur->pBtree ) pCur->pBtree->nSeek++;
@@ -1374,6 +1370,7 @@ int prollyIndexMovetoExactSortKey(
   u8 eqSeen = 0;
   int rc;
 
+  if( pCur->eState==CURSOR_FAULT && pCur->bCatalogGone ) return doltliteBtreeCursorFaultCode(pCur);
   if( pCur->pBtree ) pCur->pBtree->nSeek++;
   if( pCur->pBt ) prollyStatAdd(&pCur->pBt->stats, nSeek, 1);
 
@@ -1471,6 +1468,7 @@ int prollyBtCursorSeekMergedAtOrAfter(
   const u8 *pLand = 0;
   int nLand = 0;
   int rc;
+  if( pCur->eState==CURSOR_FAULT && pCur->bCatalogGone ) return doltliteBtreeCursorFaultCode(pCur);
   if( pExact ) *pExact = 0;
   rc = seekMergedLowerBound(pCur, pKey, nKey);
   if( rc!=SQLITE_OK || pCur->eState!=CURSOR_VALID ) return rc;
@@ -1589,11 +1587,13 @@ static int rowidCacheAppend(
 static int sqlRowidMoveto(BtCursor *pCur, i64 rowid, int *pRes){
   Btree *p = pCur->pBtree;
   ProllyRowidCache *pCache = p->pSqlRowidCache;
-  TableEntry *pTE = findTable(p, pCur->pgnoRoot);
+  TableEntry *pTE;
   ProllyMutMap *pPending;
   i64 nLimit = MIN((i64)8*1024*1024, p->pBt->cache.nMaxByte/4);
   int rc = SQLITE_OK;
   int res = 0;
+  if( pCur->eState==CURSOR_FAULT && pCur->bCatalogGone ) return doltliteBtreeCursorFaultCode(pCur);
+  pTE = findTable(p, pCur->pgnoRoot);
   if( !pTE ) return SQLITE_CORRUPT_BKPT;
   pPending = pTE->pPending;
   pCur->pMutMap = pPending;
