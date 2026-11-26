@@ -771,7 +771,7 @@ int prollyDiffIterOpenIntKey(
   pIter->pCompare = pCompare;
   pIter->pointOnly = 1;
   pIter->pointKey = intKey;
-  if( prollyHashCompare(pOldRoot, pNewRoot)==0 ){
+  if( !xEqual && prollyHashCompare(pOldRoot, pNewRoot)==0 ){
     pIter->eof = 1;
     return SQLITE_OK;
   }
