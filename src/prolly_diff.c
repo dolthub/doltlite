@@ -276,7 +276,8 @@ static int diffIterActivateRange(
   const ProllyHash *pOldHash,
   const ProllyHash *pNewHash,
   const ProllyNode *pSeekNode,
-  int iSeekItem
+  int iSeekItem,
+  int expectedLevel
 ){
   int rc = SQLITE_OK;
   int emO = 0, emN = 0;
@@ -315,6 +316,20 @@ static int diffIterActivateRange(
   }else{
     rc = prollyCursorFirst(pIter->pCurOld, &emO);
     if( rc==SQLITE_OK ) rc = prollyCursorFirst(pIter->pCurNew, &emN);
+  }
+
+  if( rc==SQLITE_OK && expectedLevel>=0 ){
+    if( !prollyHashIsEmpty(pOldHash)
+     && pIter->pCurOld->aLevel[0].pEntry
+     && (int)pIter->pCurOld->aLevel[0].pEntry->node.level!=expectedLevel ){
+      rc = SQLITE_CORRUPT;
+    }
+    if( rc==SQLITE_OK
+     && !prollyHashIsEmpty(pNewHash)
+     && pIter->pCurNew->aLevel[0].pEntry
+     && (int)pIter->pCurNew->aLevel[0].pEntry->node.level!=expectedLevel ){
+      rc = SQLITE_CORRUPT;
+    }
   }
 
   if( rc!=SQLITE_OK ){
@@ -367,12 +382,14 @@ static int diffIterEnsurePrefetchBuf(ProllyDiffIter *pIter){
 static int diffIterPrefetchPairs(
   ProllyDiffIter *pIter,
   const DiffPrefetchPair *aInitial,
-  int nInitial
+  int nInitial,
+  int expectedLevel
 ){
   DiffPrefetchPair *aPair;
   ProllyHash *aHash;
   int iLevel = 0;
   int nPair = nInitial;
+  int depth = 0;
   int rc = SQLITE_OK;
 
   if( !pIter->pStore->pChunkSource || nInitial==0 ) return SQLITE_OK;
@@ -385,7 +402,12 @@ static int diffIterPrefetchPairs(
   while( iLevel<nPair ){
     int iLevelEnd = nPair;
     int iBatch = iLevel;
+    int nextExpectedLevel = expectedLevel>0 ? expectedLevel - 1 : -1;
     int k;
+
+    if( depth>=PROLLY_CURSOR_MAX_DEPTH ){
+      return SQLITE_CORRUPT;
+    }
 
     while( iBatch<iLevelEnd ){
       int nBatchPair = iLevelEnd - iBatch;
@@ -420,8 +442,18 @@ static int diffIterPrefetchPairs(
         sqlite3_free(pOldData);
         return rc;
       }
+      if( (int)oldNode.level>=PROLLY_CURSOR_MAX_DEPTH
+       || (int)newNode.level>=PROLLY_CURSOR_MAX_DEPTH
+       || (expectedLevel>=0
+        && ((int)oldNode.level!=expectedLevel
+         || (int)newNode.level!=expectedLevel)) ){
+        sqlite3_free(pOldData);
+        sqlite3_free(pNewData);
+        return SQLITE_CORRUPT;
+      }
       if( oldNode.level>0 && newNode.level>0
        && oldNode.level==newNode.level ){
+        nextExpectedLevel = (int)oldNode.level - 1;
         while( i<(int)oldNode.nItems
             && j<(int)newNode.nItems
             && nPair<DIFF_PREFETCH_MAX_PAIRS ){
@@ -445,6 +477,8 @@ static int diffIterPrefetchPairs(
       sqlite3_free(pOldData);
       sqlite3_free(pNewData);
     }
+    expectedLevel = nextExpectedLevel;
+    depth++;
     iLevel = iLevelEnd;
   }
 
@@ -489,7 +523,7 @@ static int diffIterPrefetchFrame(
 
   pF->iPrefetched = i;
   pF->jPrefetched = j;
-  return diffIterPrefetchPairs(pIter, aPair, nPair);
+  return diffIterPrefetchPairs(pIter, aPair, nPair, (int)pF->oldNode.level - 1);
 }
 
 /* Expand one differing subtree pair: identical hashes vanish, same-level
@@ -498,7 +532,8 @@ static int diffIterPrefetchFrame(
 static int diffIterDescendPair(
   ProllyDiffIter *pIter,
   const ProllyHash *pOldHash,
-  const ProllyHash *pNewHash
+  const ProllyHash *pNewHash,
+  int expectedLevel
 ){
   ProllyNode oldNode, newNode;
   u8 *pOldData = 0, *pNewData = 0;
@@ -509,7 +544,7 @@ static int diffIterDescendPair(
     return SQLITE_OK;
   }
   if( prollyHashIsEmpty(pOldHash) || prollyHashIsEmpty(pNewHash) ){
-    return diffIterActivateRange(pIter, pOldHash, pNewHash, 0, 0);
+    return diffIterActivateRange(pIter, pOldHash, pNewHash, 0, 0, expectedLevel);
   }
 
   rc = prollyFetchNode(pIter->pStore, pOldHash, &oldNode, &pOldData);
@@ -520,8 +555,23 @@ static int diffIterDescendPair(
     return rc;
   }
 
+  if( (int)oldNode.level>=PROLLY_CURSOR_MAX_DEPTH
+   || (int)newNode.level>=PROLLY_CURSOR_MAX_DEPTH
+   || (expectedLevel>=0
+    && ((int)oldNode.level!=expectedLevel
+     || (int)newNode.level!=expectedLevel)) ){
+    sqlite3_free(pOldData);
+    sqlite3_free(pNewData);
+    return SQLITE_CORRUPT;
+  }
+
   if( oldNode.level>0 && newNode.level>0 && oldNode.level==newNode.level ){
     DiffIterFrame *pF;
+    if( pIter->nFrames>=PROLLY_CURSOR_MAX_DEPTH ){
+      sqlite3_free(pOldData);
+      sqlite3_free(pNewData);
+      return SQLITE_CORRUPT;
+    }
     if( pIter->nFrames+1 > pIter->nFramesAlloc ){
       int nNew = pIter->nFramesAlloc ? pIter->nFramesAlloc*2 : 8;
       DiffIterFrame *aNew = sqlite3_realloc(pIter->aFrames,
@@ -547,7 +597,7 @@ static int diffIterDescendPair(
 
   sqlite3_free(pOldData);
   sqlite3_free(pNewData);
-  return diffIterActivateRange(pIter, pOldHash, pNewHash, 0, 0);
+  return diffIterActivateRange(pIter, pOldHash, pNewHash, 0, 0, expectedLevel);
 }
 
 /* Resume the top frame's child walk until it activates a cursor range,
@@ -572,11 +622,12 @@ static int diffIterAdvanceFrame(ProllyDiffIter *pIter){
     cmp = diffNodeKeyCmp(&pF->oldNode, pF->i, &pF->newNode, pF->j,
                          pIter->flags);
     if( cmp==0 ){
+      int childLevel = (int)pF->oldNode.level - 1;
       rc = diffIterPrefetchFrame(pIter, pF);
       if( rc!=SQLITE_OK ) return rc;
       pF->i++;
       pF->j++;
-      return diffIterDescendPair(pIter, &oldChild, &newChild);
+      return diffIterDescendPair(pIter, &oldChild, &newChild, childLevel);
     }
 
     /* Chunk boundaries diverged; walk the rest of both subtrees as one
@@ -589,7 +640,7 @@ static int diffIterAdvanceFrame(ProllyDiffIter *pIter){
       pF->i = (int)pF->oldNode.nItems;
       pF->j = (int)pF->newNode.nItems;
       rc = diffIterActivateRange(pIter, &oldHash, &newHash,
-                                 pSeekNode, iSeek);
+                                 pSeekNode, iSeek, -1);
       return rc;
     }
   }
@@ -597,18 +648,20 @@ static int diffIterAdvanceFrame(ProllyDiffIter *pIter){
   if( pF->i < (int)pF->oldNode.nItems ){
     ProllyHash ch;
     ProllyHash empty;
+    int childLevel = (int)pF->oldNode.level - 1;
     memset(&empty, 0, sizeof(empty));
     prollyNodeChildHash(&pF->oldNode, pF->i, &ch);
     pF->i++;
-    return diffIterActivateRange(pIter, &ch, &empty, 0, 0);
+    return diffIterActivateRange(pIter, &ch, &empty, 0, 0, childLevel);
   }
   if( pF->j < (int)pF->newNode.nItems ){
     ProllyHash ch;
     ProllyHash empty;
+    int childLevel = (int)pF->newNode.level - 1;
     memset(&empty, 0, sizeof(empty));
     prollyNodeChildHash(&pF->newNode, pF->j, &ch);
     pF->j++;
-    return diffIterActivateRange(pIter, &empty, &ch, 0, 0);
+    return diffIterActivateRange(pIter, &empty, &ch, 0, 0, childLevel);
   }
 
   diffIterPopFrame(pIter);
@@ -645,7 +698,7 @@ int prollyDiffIterOpenCompare(
       DiffPrefetchPair rootPair;
       rootPair.oldHash = *pOldRoot;
       rootPair.newHash = *pNewRoot;
-      rc = diffIterPrefetchPairs(pIter, &rootPair, 1);
+      rc = diffIterPrefetchPairs(pIter, &rootPair, 1, -1);
     }else{
       ProllyHash rootHash = prollyHashIsEmpty(pOldRoot)
                           ? *pNewRoot : *pOldRoot;
@@ -659,9 +712,9 @@ int prollyDiffIterOpenCompare(
   }
 
   if( pIter->shapeMismatch || xEqual ){
-    rc = diffIterActivateRange(pIter, pOldRoot, pNewRoot, 0, 0);
+    rc = diffIterActivateRange(pIter, pOldRoot, pNewRoot, 0, 0, -1);
   }else{
-    rc = diffIterDescendPair(pIter, pOldRoot, pNewRoot);
+    rc = diffIterDescendPair(pIter, pOldRoot, pNewRoot, -1);
   }
   if( rc!=SQLITE_OK ){
     pIter->eof = 1;

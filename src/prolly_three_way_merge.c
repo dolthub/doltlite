@@ -22,6 +22,7 @@ static int fmEmitChild(
   FmCtx *fm, ProllyChunker *pCh,
   const u8 *pBoundKey, int nBoundKey,
   int parentLevel,
+  int depth,
   const ProllyHash *pAnc,
   const ProllyHash *pOurs,
   const ProllyHash *pTheirs
@@ -29,15 +30,26 @@ static int fmEmitChild(
 
 static int fmEmitSubtreeRows(
   FmCtx *fm, ProllyChunker *pCh,
-  const ProllyHash *pSubtreeRoot
+  const ProllyHash *pSubtreeRoot,
+  int expectedLevel,
+  int depth
 ){
   u8 *pData = 0;
   ProllyNode node;
   int rc;
   int i;
 
+  if( depth >= PROLLY_CURSOR_MAX_DEPTH ){
+    return SQLITE_CORRUPT;
+  }
+
   rc = prollyFetchNode(fm->pStore, pSubtreeRoot, &node, &pData);
   if( rc != SQLITE_OK ) return rc;
+
+  if( (int)node.level != expectedLevel ){
+    sqlite3_free(pData);
+    return SQLITE_CORRUPT;
+  }
 
   if( node.level == 0 ){
     for( i = 0; i < (int)node.nItems; i++ ){
@@ -52,7 +64,7 @@ static int fmEmitSubtreeRows(
     for( i = 0; i < (int)node.nItems; i++ ){
       ProllyHash childHash;
       prollyNodeChildHash(&node, i, &childHash);
-      rc = fmEmitSubtreeRows(fm, pCh, &childHash);
+      rc = fmEmitSubtreeRows(fm, pCh, &childHash, (int)node.level - 1, depth + 1);
       if( rc != SQLITE_OK ){ sqlite3_free(pData); return rc; }
     }
   }
@@ -300,7 +312,8 @@ static int fmCursorRecover(
 static int fmWalkInterior(
   FmCtx *fm, ProllyChunker *pCh,
   ProllyNode *pAncN, ProllyNode *pOursN, ProllyNode *pTheirsN,
-  const ProllyHash *pAncH, const ProllyHash *pOursH, const ProllyHash *pTheirsH
+  const ProllyHash *pAncH, const ProllyHash *pOursH, const ProllyHash *pTheirsH,
+  int depth
 ){
   int i;
   int parentLevel = pAncN->level;
@@ -340,7 +353,8 @@ static int fmWalkInterior(
     prollyNodeChildHash(pOursN, i, &hOurs);
     prollyNodeChildHash(pTheirsN, i, &hTheirs);
 
-    rc = fmEmitChild(fm, pCh, pAK, nAK, parentLevel, &hAnc, &hOurs, &hTheirs);
+    rc = fmEmitChild(fm, pCh, pAK, nAK, parentLevel, depth + 1,
+                     &hAnc, &hOurs, &hTheirs);
     if( rc != SQLITE_OK ) return rc;
   }
 
@@ -351,6 +365,7 @@ static int fmEmitChild(
   FmCtx *fm, ProllyChunker *pCh,
   const u8 *pBoundKey, int nBoundKey,
   int parentLevel,
+  int depth,
   const ProllyHash *pAnc,
   const ProllyHash *pOurs,
   const ProllyHash *pTheirs
@@ -359,6 +374,10 @@ static int fmEmitChild(
   u8 *pAncData = 0, *pOursData = 0, *pTheirsData = 0;
   ProllyNode ancNode, oursNode, theirsNode;
   int rc;
+
+  if( depth >= PROLLY_CURSOR_MAX_DEPTH ){
+    return SQLITE_CORRUPT;
+  }
 
   if( prollyHashCompare(pOurs, pTheirs) == 0 )      pSplice = pOurs;
   else if( prollyHashCompare(pOurs, pAnc) == 0 )    pSplice = pTheirs;
@@ -375,7 +394,7 @@ static int fmEmitChild(
                                               pSplice->data, PROLLY_HASH_SIZE,
                                               spliceCount);
     }
-    return fmEmitSubtreeRows(fm, pCh, pSplice);
+    return fmEmitSubtreeRows(fm, pCh, pSplice, parentLevel - 1, depth);
   }
 
   rc = prollyFetchNode(fm->pStore, pAnc, &ancNode, &pAncData);
@@ -385,8 +404,10 @@ static int fmEmitChild(
   rc = prollyFetchNode(fm->pStore, pTheirs, &theirsNode, &pTheirsData);
   if( rc != SQLITE_OK ) goto done;
 
-  if( oursNode.level != ancNode.level || theirsNode.level != ancNode.level ){
-    rc = FM_FALLBACK;
+  if( (int)ancNode.level != parentLevel - 1
+   || (int)oursNode.level != parentLevel - 1
+   || (int)theirsNode.level != parentLevel - 1 ){
+    rc = SQLITE_CORRUPT;
     goto done;
   }
 
@@ -394,7 +415,7 @@ static int fmEmitChild(
     rc = fmMergeLeaves(fm, pCh, &ancNode, &oursNode, &theirsNode);
   }else{
     rc = fmWalkInterior(fm, pCh, &ancNode, &oursNode, &theirsNode,
-                         pAnc, pOurs, pTheirs);
+                         pAnc, pOurs, pTheirs, depth);
   }
 
 done:
@@ -451,6 +472,12 @@ int prollyThreeWayMergeFast(
   rc = prollyFetchNode(pStore, pTheirsRoot, &theirsNode, &pTheirsData);
   if( rc != SQLITE_OK ){ sqlite3_free(pAncData); sqlite3_free(pOursData); return rc; }
 
+  if( (int)ancNode.level >= PROLLY_CURSOR_MAX_DEPTH
+   || (int)oursNode.level >= PROLLY_CURSOR_MAX_DEPTH
+   || (int)theirsNode.level >= PROLLY_CURSOR_MAX_DEPTH ){
+    sqlite3_free(pAncData); sqlite3_free(pOursData); sqlite3_free(pTheirsData);
+    return SQLITE_CORRUPT;
+  }
   if( oursNode.level != ancNode.level || theirsNode.level != ancNode.level ){
     sqlite3_free(pAncData); sqlite3_free(pOursData); sqlite3_free(pTheirsData);
     return SQLITE_OK;
@@ -489,7 +516,7 @@ int prollyThreeWayMergeFast(
   }
 
   rc = fmWalkInterior(&fm, &chunker, &ancNode, &oursNode, &theirsNode,
-                       pAncRoot, pOursRoot, pTheirsRoot);
+                       pAncRoot, pOursRoot, pTheirsRoot, 0);
 
   sqlite3_free(pAncData);
   sqlite3_free(pOursData);
