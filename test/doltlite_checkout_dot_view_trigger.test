@@ -48,4 +48,110 @@ do_execsql_test 1.4 {
   SELECT count(*) FROM dolt_status;
 } {0 a_first tt v vt 0}
 
+# Shadowing TEMP table must not be dropped when dolt_checkout rebuilds main.t.
+do_test 2.1-temp-table-shadow {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT);
+    INSERT INTO t VALUES(1,'orig');
+    SELECT dolt_commit('-Am','base');
+    ALTER TABLE t ADD COLUMN b INT;
+    INSERT INTO t VALUES(2,'mod',9);
+    CREATE TEMP TABLE t(x TEXT);
+    INSERT INTO temp.t VALUES('temp_keep');
+  }
+  list \
+    [db eval {SELECT dolt_checkout('t')}] \
+    [db eval {SELECT id, a FROM main.t ORDER BY id}] \
+    [db eval {SELECT x FROM temp.t}] \
+    [db eval {SELECT count(*) FROM dolt_status}] \
+    [db eval {PRAGMA integrity_check}]
+} {0 {1 orig} temp_keep 0 ok}
+
+# Shadowing TEMP view must not be dropped when dolt_checkout replaces a main
+# view holding a table's name or reverts dolt_schemas.
+do_test 2.2-temp-view-shadow-table-rebuild {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT);
+    INSERT INTO t VALUES(1,'orig');
+    SELECT dolt_commit('-Am','base');
+    DROP TABLE t;
+    CREATE VIEW t AS SELECT 99 AS a;
+    CREATE TEMP VIEW t AS SELECT 'temp_view' AS x;
+  }
+  list \
+    [db eval {SELECT dolt_checkout('t')}] \
+    [db eval {SELECT id, a FROM main.t ORDER BY id}] \
+    [db eval {SELECT x FROM temp.t}] \
+    [db eval {SELECT count(*) FROM dolt_status}] \
+    [db eval {PRAGMA integrity_check}]
+} {0 {1 orig} temp_view 0 ok}
+
+do_test 2.3-temp-view-trigger-shadow-schemas {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT);
+    CREATE VIEW v AS SELECT id FROM t;
+    CREATE TRIGGER tr AFTER INSERT ON t BEGIN SELECT 1; END;
+    SELECT dolt_commit('-Am','base');
+    DROP VIEW v;
+    CREATE VIEW v AS SELECT a FROM t;
+    CREATE TEMP TABLE tt(k INT);
+    CREATE TEMP VIEW v AS SELECT 'temp_v' AS s;
+    CREATE TEMP TRIGGER tr AFTER INSERT ON tt BEGIN SELECT 2; END;
+  }
+  list \
+    [db eval {SELECT dolt_checkout('dolt_schemas')}] \
+    [db eval {SELECT sql FROM main.sqlite_master WHERE name='v'}] \
+    [db eval {SELECT s FROM temp.v}] \
+    [db eval {SELECT count(*) FROM sqlite_temp_master WHERE type='trigger' AND name='tr'}] \
+    [db eval {SELECT count(*) FROM dolt_status}] \
+    [db eval {PRAGMA integrity_check}]
+} {0 {{CREATE VIEW v AS SELECT id FROM t}} temp_v 1 0 ok}
+
+# Shadowing TEMP index must not be dropped when dolt_checkout drops a
+# working-only main index on a table.
+do_test 2.4-temp-index-shadow {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT);
+    INSERT INTO t VALUES(1,'orig');
+    SELECT dolt_commit('-Am','base');
+    CREATE INDEX ix ON t(a);
+    CREATE TEMP TABLE tmp(z TEXT);
+    CREATE INDEX temp.ix ON tmp(z);
+    INSERT INTO temp.tmp VALUES('keep');
+  }
+  list \
+    [db eval {SELECT dolt_checkout('t')}] \
+    [db eval {SELECT count(*) FROM main.sqlite_master WHERE type='index' AND name='ix'}] \
+    [db eval {SELECT count(*) FROM sqlite_temp_master WHERE type='index' AND name='ix'}] \
+    [db eval {SELECT z FROM temp.tmp}] \
+    [db eval {SELECT count(*) FROM dolt_status}] \
+    [db eval {PRAGMA integrity_check}]
+} {0 0 1 keep 0 ok}
+
+# Shadowing TEMP table/view must not be dropped when dolt_checkout drops a
+# main table/view holding a committed index's name.
+do_test 2.5-temp-shadow-index-name-holder {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT);
+    CREATE INDEX ix ON t(a);
+    INSERT INTO t VALUES(1,'a1');
+    SELECT dolt_commit('-Am','base');
+    DROP INDEX ix;
+    CREATE TABLE ix(q);
+    CREATE TEMP TABLE ix(z TEXT);
+    INSERT INTO temp.ix VALUES('temp_ix');
+  }
+  list \
+    [db eval {SELECT dolt_checkout('t')}] \
+    [db eval {SELECT type, name FROM main.sqlite_master WHERE name='ix'}] \
+    [db eval {SELECT z FROM temp.ix}] \
+    [db eval {SELECT count(*) FROM dolt_status}] \
+    [db eval {PRAGMA integrity_check}]
+} {0 {index ix} temp_ix 0 ok}
+
 finish_test

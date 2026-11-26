@@ -215,7 +215,7 @@ int doltliteCheckoutIndexOwner(
   if( rc==SQLITE_OK && !*pExists ){
     Table *pHolder = sqlite3FindTable(db, zIndex, "main");
     if( pHolder ){
-      char *zDrop = sqlite3_mprintf("DROP %s \"%w\"",
+      char *zDrop = sqlite3_mprintf("DROP %s main.\"%w\"",
           IsView(pHolder) ? "VIEW" : "TABLE", zIndex);
       if( !zDrop ) return SQLITE_NOMEM;
       rc = sqlite3_exec(db, zDrop, 0, 0, 0);
@@ -490,7 +490,7 @@ int doltliteCheckoutRebuildTable(
       rc = keepTableDependents(db, zName, &kept);
       if( rc!=SQLITE_OK ) return rc;
     }
-    zDrop = sqlite3_mprintf("DROP %s \"%w\"", bView ? "VIEW" : "TABLE", zName);
+    zDrop = sqlite3_mprintf("DROP %s main.\"%w\"", bView ? "VIEW" : "TABLE", zName);
     if( !zDrop ){
       keptClear(&kept);
       return SQLITE_NOMEM;

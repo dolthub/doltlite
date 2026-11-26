@@ -932,7 +932,7 @@ int doltliteRevertViewsAndTriggers(
       if( !azNew ){ rc = SQLITE_NOMEM; break; }
       azDrop = azNew;
       /* Dropping a view drops its INSTEAD OF triggers with it. */
-      azDrop[nDrop] = sqlite3_mprintf("DROP %s IF EXISTS \"%w\"",
+      azDrop[nDrop] = sqlite3_mprintf("DROP %s IF EXISTS main.\"%w\"",
           strcmp(zType, "view")==0 ? "VIEW" : "TRIGGER", zName);
       if( !azDrop[nDrop] ){ rc = SQLITE_NOMEM; break; }
       nDrop++;
