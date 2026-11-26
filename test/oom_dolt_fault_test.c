@@ -19,6 +19,7 @@ static int nFail = 0;
 typedef struct OomState {
   long long nCall;
   long long nFailAt;
+  int       persistent;
   int       triggered;
 } OomState;
 
@@ -28,7 +29,7 @@ static sqlite3_mem_methods gReal;
 static void *oomMalloc(int n){
   long long c;
   c = ++gOom.nCall;
-  if( c==gOom.nFailAt ){
+  if( gOom.nFailAt>0 && (c==gOom.nFailAt || (gOom.persistent && c>=gOom.nFailAt)) ){
     gOom.triggered = 1;
     return 0;
   }
@@ -43,7 +44,7 @@ static void oomFree(void *p){
 static void *oomRealloc(void *p, int n){
   long long c;
   c = ++gOom.nCall;
-  if( c==gOom.nFailAt ){
+  if( gOom.nFailAt>0 && (c==gOom.nFailAt || (gOom.persistent && c>=gOom.nFailAt)) ){
     gOom.triggered = 1;
     return 0;
   }
@@ -69,6 +70,14 @@ static int installOomAllocator(void){
 static void resetOom(long long failAt){
   gOom.nCall = 0;
   gOom.nFailAt = failAt;
+  gOom.persistent = 0;
+  gOom.triggered = 0;
+}
+
+static void resetOomPersistent(long long failAt){
+  gOom.nCall = 0;
+  gOom.nFailAt = failAt;
+  gOom.persistent = 1;
   gOom.triggered = 0;
 }
 
@@ -1145,6 +1154,195 @@ static int sweepMergeRestore(void){
   return opBugs;
 }
 
+static int childHardResetRestoreCase(long long failAt){
+  sqlite3 *db = 0;
+  ProllyHash c1Commit;
+  ProllyHash c1CatHash;
+  char zText[128];
+  int orc;
+  int rc;
+  int n;
+  int triggered;
+  int bug = 0;
+
+  cleanupFiles(kDbBase);
+  disableOom();
+  if( sqlite3_open(kDbBase, &db)!=SQLITE_OK
+   || execSilent(db,
+        "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+        "INSERT INTO t VALUES(1, 'v1');"
+        "SELECT dolt_commit('-A', '-m', 'c1');")!=SQLITE_OK ){
+    if( db ) sqlite3_close(db);
+    cleanupFiles(kDbBase);
+    return CHILD_BUG;
+  }
+  memset(&c1Commit, 0, sizeof(c1Commit));
+  memset(&c1CatHash, 0, sizeof(c1CatHash));
+  doltliteGetSessionHead(db, &c1Commit);
+  if( doltliteCommitCatalogHash(db, &c1Commit, &c1CatHash)!=SQLITE_OK
+   || execSilent(db,
+        "UPDATE t SET v = 'v2' WHERE id = 1;"
+        "CREATE TABLE t2(a INTEGER PRIMARY KEY, b TEXT);"
+        "INSERT INTO t2 VALUES(10, 'extra');"
+        "SELECT dolt_commit('-A', '-m', 'c2');")!=SQLITE_OK ){
+    sqlite3_close(db);
+    cleanupFiles(kDbBase);
+    return CHILD_BUG;
+  }
+
+  if( failAt<=0 ){
+    char zPath[512];
+    FILE *f;
+    resetOom(0);
+    sqlite3_mutex_enter(sqlite3_db_mutex(db));
+    orc = doltliteHardReset(db, &c1CatHash);
+    sqlite3_mutex_leave(sqlite3_db_mutex(db));
+    n = (int)gOom.nCall;
+    disableOom();
+    sqlite3_close(db);
+    cleanupFiles(kDbBase);
+    if( orc!=SQLITE_OK ) return CHILD_BUG;
+    snprintf(zPath, sizeof(zPath), "%s.ncall", kDbBase);
+    f = fopen(zPath, "w");
+    if( !f ) return CHILD_BUG;
+    fprintf(f, "%d\n", n);
+    fclose(f);
+    return CHILD_OK;
+  }
+
+  resetOomPersistent(failAt);
+  sqlite3_mutex_enter(sqlite3_db_mutex(db));
+  orc = doltliteHardReset(db, &c1CatHash);
+  sqlite3_mutex_leave(sqlite3_db_mutex(db));
+  triggered = gOom.triggered;
+  disableOom();
+
+  if( !triggered ){
+    sqlite3_close(db);
+    cleanupFiles(kDbBase);
+    if( orc!=SQLITE_OK ){
+      fprintf(stderr,
+          "  BUG[hardreset_restore_oom,N=%lld]: rc=%d without injected OOM\n",
+          failAt, orc);
+      return CHILD_BUG;
+    }
+    return CHILD_SWEPT;
+  }
+
+  if( orc!=SQLITE_OK && !isAcceptableErr(orc) ){
+    fprintf(stderr,
+        "  BUG[hardreset_restore_oom,N=%lld]: rc=%d (not acceptable)\n",
+        failAt, orc);
+    bug = 1;
+  }
+
+  rc = querySingleInt(db,
+      "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='t'",
+      &n);
+  if( rc!=SQLITE_OK || n!=1 ){
+    fprintf(stderr,
+        "  BUG[hardreset_restore_oom,N=%lld]: catalog left empty after "
+        "failed hardReset (orc=%d rc=%d n=%d)\n", failAt, orc, rc, n);
+    bug = 1;
+  }
+
+  zText[0] = 0;
+  rc = querySingleText(db, "SELECT v FROM t WHERE id=1", zText, sizeof(zText));
+  if( rc!=SQLITE_OK
+   || (orc!=SQLITE_OK && strcmp(zText, "v2")!=0)
+   || (orc==SQLITE_OK && strcmp(zText, "v1")!=0) ){
+    fprintf(stderr,
+        "  BUG[hardreset_restore_oom,N=%lld]: unexpected row after hardReset "
+        "(orc=%d rc=%d v='%s')\n", failAt, orc, rc, zText);
+    bug = 1;
+  }
+
+  zText[0] = 0;
+  rc = querySingleText(db, "PRAGMA integrity_check", zText, sizeof(zText));
+  if( rc!=SQLITE_OK || strcmp(zText, "ok")!=0 ){
+    fprintf(stderr,
+        "  BUG[hardreset_restore_oom,N=%lld]: integrity_check failed "
+        "(rc=%d res='%s')\n", failAt, rc, zText);
+    bug = 1;
+  }
+
+  sqlite3_close(db);
+  cleanupFiles(kDbBase);
+  if( bug ) return CHILD_BUG;
+  return orc==SQLITE_OK ? CHILD_OK : CHILD_ERR_OK;
+}
+
+static int runHardResetRestoreChild(long long failAt){
+  pid_t pid;
+  int status = 0;
+  fflush(stdout);
+  fflush(stderr);
+  pid = fork();
+  if( pid<0 ){
+    fprintf(stderr, "  fork failed at N=%lld\n", failAt);
+    return -1;
+  }
+  if( pid==0 ){
+    int rc = childHardResetRestoreCase(failAt);
+    fflush(stdout);
+    fflush(stderr);
+    _exit(rc);
+  }
+  if( waitpid(pid, &status, 0)<0 ){
+    fprintf(stderr, "  waitpid failed at N=%lld\n", failAt);
+    return -1;
+  }
+  if( WIFSIGNALED(status) ){
+    fprintf(stderr, "  BUG[hardreset_restore_oom,N=%lld]: child killed by signal %d\n",
+            failAt, WTERMSIG(status));
+    return CHILD_BUG;
+  }
+  return WIFEXITED(status) ? WEXITSTATUS(status) : CHILD_BUG;
+}
+
+static int sweepHardResetRestore(void){
+  int opBugs = 0;
+  int nOk = 0;
+  int nErrOk = 0;
+  long long nTotal = 0;
+  long long n;
+
+  if( runHardResetRestoreChild(0)!=CHILD_OK ){
+    fprintf(stderr, "  BUG[hardreset_restore_oom]: allocation measure run failed\n");
+    return 1;
+  }
+  {
+    char zPath[512];
+    FILE *f;
+    snprintf(zPath, sizeof(zPath), "%s.ncall", kDbBase);
+    f = fopen(zPath, "r");
+    if( !f || fscanf(f, "%lld", &nTotal)!=1 || nTotal<=0 ){
+      if( f ) fclose(f);
+      fprintf(stderr, "  BUG[hardreset_restore_oom]: bad allocation count\n");
+      return 1;
+    }
+    fclose(f);
+    remove(zPath);
+  }
+
+  for( n=1; n<=nTotal+2; n++ ){
+    int ec = runHardResetRestoreChild(n);
+    if( ec<0 ) return 1;
+    if( ec==CHILD_BUG ){
+      opBugs++;
+    }else if( ec==CHILD_ERR_OK ){
+      nErrOk++;
+    }else{
+      nOk++;
+    }
+  }
+  printf("  [hardreset_restore_oom] swept N=1..%lld of %lld, "
+         "ok=%d, errOk=%d, bugs=%d\n",
+         nTotal+2, nTotal, nOk, nErrOk, opBugs);
+  fflush(stdout);
+  return opBugs;
+}
+
 int main(void){
   const char *zOnlyOp = getenv("OOM_DOLT_OP");
   int rc = installOomAllocator();
@@ -1186,6 +1384,17 @@ int main(void){
         nPass++;
       }
       totalBugs += mergeBugs;
+    }
+    if( !zOnlyOp || strcmp(zOnlyOp, "hardreset_restore_oom")==0 ){
+      int hrBugs;
+      printf("[extra] sweeping op: hardreset_restore_oom\n");
+      hrBugs = sweepHardResetRestore();
+      if( hrBugs>0 ){
+        nFail++;
+      }else{
+        nPass++;
+      }
+      totalBugs += hrBugs;
     }
     printf("\n%d ops passed, %d ops surfaced bugs\n", nPass, nFail);
     printf("Total fault-iterations that surfaced bugs: %d\n", totalBugs);
