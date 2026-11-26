@@ -103,15 +103,22 @@ static int uniqueIndexRecordHasNull(UnpackedRecord *pRecord, int nKeyCol){
   return 0;
 }
 
-static int uniqueIsIdent(char c){
-  return sqlite3Isalnum(c) || c=='_';
+static int uniqueNextToken(const char **pz, int *pType){
+  int n;
+  while( **pz ){
+    n = sqlite3GetToken((const u8*)*pz, pType);
+    if( n<=0 || *pType==TK_ILLEGAL ) return -1;
+    if( *pType!=TK_SPACE && *pType!=TK_COMMENT ) return n;
+    *pz += n;
+  }
+  return 0;
 }
 
 static char *uniqueIndexWhereFromSql(const char *zSql, int *pRc){
   const char *p = zSql;
   int depth = 0;
   int seenOn = 0;
-  int quote = 0;
+  int type, n;
   char *zWhere;
 
   *pRc = SQLITE_OK;
@@ -119,35 +126,16 @@ static char *uniqueIndexWhereFromSql(const char *zSql, int *pRc){
     *pRc = SQLITE_CORRUPT;
     return 0;
   }
-  while( *p ){
-    if( quote ){
-      if( *p==quote ){
-        if( p[1]==quote ){ p += 2; continue; }
-        quote = 0;
-      }
-      p++;
-      continue;
-    }
-    if( *p=='\'' || *p=='"' || *p=='`' ){ quote = *p++; continue; }
-    if( *p=='[' ){ quote = ']'; p++; continue; }
-    if( *p=='(' ){ depth++; p++; continue; }
-    if( *p==')' ){
+  while( (n = uniqueNextToken(&p, &type))>0 ){
+    if( type==TK_LP ){
+      depth++;
+    }else if( type==TK_RP ){
       if( depth>0 ) depth--;
-      p++;
-      continue;
-    }
-    if( depth==0 && (p==zSql || !uniqueIsIdent(p[-1]))
-     && (p[0]=='O' || p[0]=='o') && (p[1]=='N' || p[1]=='n')
-     && !uniqueIsIdent(p[2]) ){
+    }else if( depth==0 && type==TK_ON ){
       seenOn = 1;
-      p += 2;
-      continue;
-    }
-    if( depth==0 && seenOn
-     && sqlite3_strnicmp(p, "WHERE", 5)==0 && !uniqueIsIdent(p[5]) ){
-      p += 5;
-      while( *p==' ' || *p=='\t' || *p=='\n' || *p=='\r' ) p++;
-      if( !*p ){
+    }else if( depth==0 && seenOn && type==TK_WHERE ){
+      p += n;
+      if( uniqueNextToken(&p, &type)<=0 ){
         *pRc = SQLITE_CORRUPT;
         return 0;
       }
@@ -155,7 +143,7 @@ static char *uniqueIndexWhereFromSql(const char *zSql, int *pRc){
       if( !zWhere ) *pRc = SQLITE_NOMEM;
       return zWhere;
     }
-    p++;
+    p += n;
   }
   *pRc = SQLITE_CORRUPT;
   return 0;
@@ -650,7 +638,7 @@ static int detectUniqueViolationsForIndex(
     if( rc!=SQLITE_OK ) goto unique_done;
     if( zWhere ){
       zQuery = sqlite3_mprintf(
-          "SELECT %s, %s FROM main.\"%w\" NOT INDEXED WHERE (%s)",
+          "SELECT %s, %s FROM main.\"%w\" NOT INDEXED WHERE (%s\n)",
           zRowid, zSelect, zTable, zWhere);
       sqlite3_free(zWhere);
     }else{
@@ -818,108 +806,56 @@ without_rowid_done:
   return rc;
 }
 
-static const char *uniqueSkipWs(const char *p){
-  while( *p==' ' || *p=='\t' || *p=='\n' || *p=='\r' ) p++;
-  return p;
-}
+typedef struct UniqueTokSpan UniqueTokSpan;
+struct UniqueTokSpan {
+  const char *z;
+  int n;
+  int type;
+};
 
-static int uniqueSkipName(const char **pp){
-  const char *p = *pp;
-  if( *p=='"' || *p=='`' || *p=='[' ){
-    char end = (*p=='[') ? ']' : *p;
-    p++;
-    while( *p ){
-      if( *p==end ){
-        if( end!=']' && p[1]==end ){ p += 2; continue; }
-        p++;
-        *pp = p;
-        return 1;
-      }
-      p++;
-    }
-    return 0;
-  }
-  if( !uniqueIsIdent(*p) ) return 0;
-  while( uniqueIsIdent(*p) ) p++;
-  *pp = p;
-  return 1;
-}
-
-static const char *uniqueFindKeyword(const char *z, const char *zKw){
-  int n = (int)strlen(zKw);
-  const char *p = z;
-  int depth = 0;
-  int quote = 0;
-  while( *p ){
-    if( quote ){
-      if( *p==quote ){
-        if( quote!=']' && p[1]==quote ){ p += 2; continue; }
-        quote = 0;
-      }
-      p++;
-      continue;
-    }
-    if( *p=='\'' || *p=='"' || *p=='`' ){ quote = *p++; continue; }
-    if( *p=='[' ){ quote = ']'; p++; continue; }
-    if( *p=='(' ){ depth++; p++; continue; }
-    if( *p==')' ){ if( depth>0 ) depth--; p++; continue; }
-    if( depth==0
-     && (p==z || !uniqueIsIdent(p[-1]))
-     && sqlite3_strnicmp(p, zKw, n)==0
-     && !uniqueIsIdent(p[n]) ){
-      return p;
-    }
-    p++;
-  }
-  return 0;
-}
-
-static void uniqueTrim(char *z){
-  char *s = z;
-  char *e;
-  while( *s==' ' || *s=='\t' || *s=='\n' || *s=='\r' ) s++;
-  if( s!=z ) memmove(z, s, strlen(s)+1);
-  e = z + strlen(z);
-  while( e>z && (e[-1]==' '||e[-1]=='\t'||e[-1]=='\n'||e[-1]=='\r') ){
-    *--e = 0;
-  }
+static int uniqueTokIsKw(const UniqueTokSpan *pTok, const char *zKw){
+  int k = (int)strlen(zKw);
+  return pTok->n==k && sqlite3_strnicmp(pTok->z, zKw, k)==0
+      && pTok->z[0]!='"' && pTok->z[0]!='`' && pTok->z[0]!='[';
 }
 
 static void uniqueStripSort(char *z){
-  int n, k;
-  const char *azNulls[2] = { "FIRST", "LAST" };
-  const char *azKw[2] = { "DESC", "ASC" };
-  int i;
-  uniqueTrim(z);
-  for(i=0; i<2; i++){
-    n = (int)strlen(z);
-    k = (int)strlen(azNulls[i]);
-    if( n>k
-     && sqlite3_strnicmp(z+n-k, azNulls[i], k)==0
-     && (z[n-k-1]==' ' || z[n-k-1]=='\t' || z[n-k-1]=='\n' || z[n-k-1]=='\r') ){
-      int p = n - k;
-      while( p>0 && (z[p-1]==' ' || z[p-1]=='\t' || z[p-1]=='\n' || z[p-1]=='\r') ){
-        p--;
-      }
-      if( p>5
-       && sqlite3_strnicmp(z+p-5, "NULLS", 5)==0
-       && !uniqueIsIdent(z[p-6]) ){
-        z[p-5] = 0;
-        uniqueTrim(z);
-        break;
-      }
+  UniqueTokSpan aLast[4];
+  const char *p = z;
+  const char *zFirst = 0;
+  int nLast = 0, type, nTok;
+  while( (nTok = uniqueNextToken(&p, &type))>0 ){
+    if( !zFirst ) zFirst = p;
+    if( nLast==4 ){
+      memmove(aLast, aLast+1, 3*sizeof(UniqueTokSpan));
+      nLast = 3;
     }
+    aLast[nLast].z = p;
+    aLast[nLast].n = nTok;
+    aLast[nLast].type = type;
+    nLast++;
+    p += nTok;
   }
-  for(i=0; i<2; i++){
-    n = (int)strlen(z);
-    k = (int)strlen(azKw[i]);
-    if( n>k
-     && sqlite3_strnicmp(z+n-k, azKw[i], k)==0
-     && !uniqueIsIdent(z[n-k-1]) ){
-      z[n-k] = 0;
-      uniqueTrim(z);
-      break;
-    }
+  if( nTok<0 || nLast==0 ){
+    z[0] = 0;
+    return;
+  }
+  if( nLast>=2 && uniqueTokIsKw(&aLast[nLast-2], "NULLS")
+   && (uniqueTokIsKw(&aLast[nLast-1], "FIRST")
+    || uniqueTokIsKw(&aLast[nLast-1], "LAST")) ){
+    nLast -= 2;
+  }
+  if( nLast>=1 && (aLast[nLast-1].type==TK_ASC || aLast[nLast-1].type==TK_DESC) ){
+    nLast--;
+  }
+  if( nLast==0 ){
+    z[0] = 0;
+    return;
+  }
+  {
+    int nOut = (int)((aLast[nLast-1].z - zFirst) + aLast[nLast-1].n);
+    if( zFirst!=z ) memmove(z, zFirst, (size_t)nOut);
+    z[nOut] = 0;
   }
 }
 
@@ -943,11 +879,11 @@ static int uniqueIndexKeyExprs(
   sqlite3_stmt *pStmt = 0;
   const char *zSql = 0;
   char *zOwned = 0;
-  const char *pOn, *p, *zItem;
+  const char *p, *zItem;
   char **az = 0;
   int n = 0;
   int depth = 0;
-  int quote = 0;
+  int type, nTok = 0;
   int rc;
   int stepRc;
 
@@ -970,46 +906,61 @@ static int uniqueIndexKeyExprs(
   rc = finishConstraintStmt(pStmt, rc);
   if( rc!=SQLITE_OK ){ sqlite3_free(zOwned); return rc; }
 
-  pOn = uniqueFindKeyword(zOwned, "ON");
-  p = pOn ? uniqueSkipWs(pOn+2) : 0;
-  if( !p || !uniqueSkipName(&p) ){ rc = SQLITE_CORRUPT; goto expr_done; }
-  p = uniqueSkipWs(p);
-  if( *p=='.' ){
-    p = uniqueSkipWs(p+1);
-    if( !uniqueSkipName(&p) ){ rc = SQLITE_CORRUPT; goto expr_done; }
-    p = uniqueSkipWs(p);
+  p = zOwned;
+  while( (nTok = uniqueNextToken(&p, &type))>0 ){
+    if( type==TK_LP ){
+      depth++;
+    }else if( type==TK_RP ){
+      if( depth>0 ) depth--;
+    }else if( depth==0 && type==TK_ON ){
+      p += nTok;
+      break;
+    }
+    p += nTok;
   }
-  if( *p!='(' ){ rc = SQLITE_CORRUPT; goto expr_done; }
-  p++;
+  if( nTok<=0 ){ rc = SQLITE_CORRUPT; goto expr_done; }
+  nTok = uniqueNextToken(&p, &type);
+  if( nTok<=0 || type==TK_LP || type==TK_RP || type==TK_DOT ){
+    rc = SQLITE_CORRUPT;
+    goto expr_done;
+  }
+  p += nTok;
+  nTok = uniqueNextToken(&p, &type);
+  if( nTok>0 && type==TK_DOT ){
+    p += nTok;
+    nTok = uniqueNextToken(&p, &type);
+    if( nTok<=0 || type==TK_LP || type==TK_RP || type==TK_DOT ){
+      rc = SQLITE_CORRUPT;
+      goto expr_done;
+    }
+    p += nTok;
+    nTok = uniqueNextToken(&p, &type);
+  }
+  if( nTok<=0 || type!=TK_LP ){ rc = SQLITE_CORRUPT; goto expr_done; }
+  p += nTok;
   zItem = p;
   depth = 1;
   az = sqlite3_malloc64((sqlite3_int64)pIdx->nKeyCol * sizeof(char*));
   if( !az ){ rc = SQLITE_NOMEM; goto expr_done; }
   memset(az, 0, (size_t)pIdx->nKeyCol * sizeof(char*));
-  while( *p && depth>0 && rc==SQLITE_OK ){
-    if( quote ){
-      if( *p==quote ){
-        if( quote!=']' && p[1]==quote ){ p += 2; continue; }
-        quote = 0;
-      }
-      p++;
-      continue;
-    }
-    if( *p=='\'' || *p=='"' || *p=='`' ){ quote = *p++; continue; }
-    if( *p=='[' ){ quote = ']'; p++; continue; }
-    if( *p=='(' ){ depth++; p++; continue; }
-    if( (*p==',' && depth==1) || (*p==')' && depth==1) ){
+  while( depth>0 && rc==SQLITE_OK ){
+    nTok = uniqueNextToken(&p, &type);
+    if( nTok<=0 ){ rc = SQLITE_CORRUPT; break; }
+    if( type==TK_LP ){
+      depth++;
+    }else if( depth==1 && (type==TK_COMMA || type==TK_RP) ){
       if( n>=pIdx->nKeyCol ){ rc = SQLITE_CORRUPT; break; }
       az[n] = uniqueDupRange(zItem, p, &rc);
       if( rc!=SQLITE_OK ) break;
       n++;
-      if( *p==')' ){ depth = 0; p++; break; }
-      p++;
+      if( type==TK_RP ){ depth = 0; p += nTok; break; }
+      p += nTok;
       zItem = p;
       continue;
+    }else if( type==TK_RP ){
+      depth--;
     }
-    if( *p==')' ){ depth--; p++; continue; }
-    p++;
+    p += nTok;
   }
   if( rc==SQLITE_OK && (n!=pIdx->nKeyCol || depth!=0) ) rc = SQLITE_CORRUPT;
 
@@ -1048,7 +999,7 @@ static int uniqueIndexExprLists(
     /* CASE keeps the value but does not match the index expression, so
     ** the probe is computed from the row. A wrong index entry must not
     ** hide a collision or invent one. */
-    sqlite3_str_appendf(pSelect, "(CASE WHEN 1 THEN %s END)", az[i]);
+    sqlite3_str_appendf(pSelect, "(CASE WHEN 1 THEN %s\nEND)", az[i]);
     doltliteMergeAppendJsonString(pJson, az[i]);
     sqlite3_free(az[i]);
   }
@@ -1090,7 +1041,7 @@ static int detectUniqueExprViolationsWithoutRowid(
   if( rc!=SQLITE_OK ) goto expr_wo_done;
   if( zWhere ){
     zQuery = sqlite3_mprintf(
-        "SELECT %s, %s FROM main.\"%w\" NOT INDEXED WHERE (%s)",
+        "SELECT %s, %s FROM main.\"%w\" NOT INDEXED WHERE (%s\n)",
         pPk->zPkCols, zSelect, zTable, zWhere);
   }else{
     zQuery = sqlite3_mprintf(

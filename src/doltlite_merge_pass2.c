@@ -37,26 +37,15 @@ int mergeNoteRedefinedIndex(MergePass1Ctx *c, const char *zIndex){
   return mergeAppendReindexName(c->pazReindex, c->pnReindex, zIndex);
 }
 
-static const char *mergeIndexSkipQuoted(const char *z, char q){
-  char qEnd = (q=='[') ? ']' : q;
-  z++;
-  while( *z ){
-    if( q!='[' && *z==q && z[1]==q ){ z += 2; continue; }
-    if( *z==qEnd ) return z+1;
-    z++;
+static int mergeIndexNextToken(const char **pz, int *pType){
+  int n;
+  while( **pz ){
+    n = sqlite3GetToken((const u8*)*pz, pType);
+    if( n<=0 ) return 0;
+    if( *pType!=TK_SPACE && *pType!=TK_COMMENT ) return n;
+    *pz += n;
   }
-  return z;
-}
-
-static const char *mergeIndexSkipName(const char *z, const char *zEnd){
-  while( z<zEnd && sqlite3Isspace(*z) ) z++;
-  if( z>=zEnd ) return z;
-  if( *z=='\'' || *z=='"' || *z=='`' || *z=='[' ) return mergeIndexSkipQuoted(z, *z);
-  if( sqlite3Isalnum(*z) || *z=='_' || *z=='$' ){
-    z++;
-    while( z<zEnd && (sqlite3Isalnum(*z) || *z=='_' || *z=='$') ) z++;
-  }
-  return z;
+  return 0;
 }
 
 static int mergeIndexIsSortKeyword(const char *z, int n){
@@ -83,67 +72,73 @@ static int mergeIndexEachColumn(
   void *pCtx
 ){
   const char *zOpen = 0;
-  const char *zEnd, *z, *zIdent, *zLook;
+  const char *zEnd, *z;
   char *zCol;
-  int depth, nIdent, rc = SQLITE_OK;
+  int depth, rc = SQLITE_OK;
 
   if( zIndexSql ){
     const char *p = zIndexSql;
-    while( *p && !zOpen ){
-      if( *p=='\'' || *p=='"' || *p=='`' || *p=='[' ){
-        p = mergeIndexSkipQuoted(p, *p);
-      }else if( *p=='(' ){
+    int type, nTok;
+    while( (nTok = mergeIndexNextToken(&p, &type))>0 ){
+      if( type==TK_LP ){
         zOpen = p;
-      }else{
-        p++;
+        break;
       }
+      p += nTok;
     }
   }
   if( !zOpen ) return SQLITE_OK;
   depth = 1;
   zEnd = zOpen + 1;
-  while( *zEnd && depth>0 ){
-    if( *zEnd=='\'' || *zEnd=='"' || *zEnd=='`' || *zEnd=='[' ){
-      zEnd = mergeIndexSkipQuoted(zEnd, *zEnd);
-      continue;
-    }
-    if( *zEnd=='(' ) depth++;
-    else if( *zEnd==')' ) depth--;
-    if( depth>0 ) zEnd++;
+  while( depth>0 ){
+    int type, nTok = mergeIndexNextToken(&zEnd, &type);
+    if( nTok<=0 ) return SQLITE_OK;
+    if( type==TK_LP ) depth++;
+    else if( type==TK_RP ) depth--;
+    if( depth>0 ) zEnd += nTok;
   }
-  if( depth!=0 ) return SQLITE_OK;
 
   z = zOpen + 1;
   if( bIncludeWhere ) zEnd = zIndexSql + strlen(zIndexSql);
   while( z<zEnd && rc==SQLITE_OK ){
-    if( *z=='\'' ){ z = mergeIndexSkipQuoted(z, '\''); continue; }
-    if( *z=='"' || *z=='`' || *z=='[' ){
-      zIdent = z;
-      z = mergeIndexSkipQuoted(z, *z);
-      zCol = mergeIndexDupIdent(zIdent, (int)(z-zIdent));
+    int type, nTok = mergeIndexNextToken(&z, &type);
+    if( nTok<=0 || z>=zEnd ) break;
+    if( type==TK_ID && (*z=='"' || *z=='`' || *z=='[') ){
+      zCol = mergeIndexDupIdent(z, nTok);
       if( !zCol ) return SQLITE_NOMEM;
       sqlite3Dequote(zCol);
       if( zCol[0] ) rc = xEach(pCtx, zCol);
       sqlite3_free(zCol);
+      z += nTok;
       continue;
     }
-    if( !(sqlite3Isalnum(*z) || *z=='_' || *z=='$') ){ z++; continue; }
-    zIdent = z++;
-    while( z<zEnd && (sqlite3Isalnum(*z) || *z=='_' || *z=='$') ) z++;
-    nIdent = (int)(z-zIdent);
-    zLook = z;
-    while( zLook<zEnd && sqlite3Isspace(*zLook) ) zLook++;
-    if( zLook<zEnd && *zLook=='(' ) continue;
-    if( mergeIndexIsSortKeyword(zIdent, nIdent) ){
-      if( nIdent==7 && sqlite3_strnicmp(zIdent, "COLLATE", 7)==0 ){
-        z = mergeIndexSkipName(z, zEnd);
+    if( type==TK_STRING || type==TK_BLOB || type==TK_INTEGER || type==TK_FLOAT
+     || !(type==TK_ID || sqlite3Isalpha(*z) || *z=='_' || *z=='$') ){
+      z += nTok;
+      continue;
+    }
+    {
+      const char *zLook = z + nTok;
+      int lookType, nLook = mergeIndexNextToken(&zLook, &lookType);
+      if( nLook>0 && zLook<zEnd && lookType==TK_LP ){
+        z += nTok;
+        continue;
+      }
+    }
+    if( mergeIndexIsSortKeyword(z, nTok) ){
+      z += nTok;
+      if( type==TK_COLLATE ){
+        const char *zCollate = z;
+        int cType, nCollate = mergeIndexNextToken(&zCollate, &cType);
+        if( nCollate>0 && zCollate+nCollate<=zEnd ) z = zCollate + nCollate;
       }
       continue;
     }
-    zCol = mergeIndexDupIdent(zIdent, nIdent);
+    zCol = mergeIndexDupIdent(z, nTok);
     if( !zCol ) return SQLITE_NOMEM;
     rc = xEach(pCtx, zCol);
     sqlite3_free(zCol);
+    z += nTok;
   }
   return rc;
 }
