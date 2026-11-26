@@ -498,6 +498,69 @@ run_test "null_default_set_and_clear_hash_stable" \
 1
 0" "$DB18"
 
-rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18"
+# Dropping a trailing NULL column leaving an all-PK WITHOUT ROWID table is
+# schema-only for rows whose dropped cell was NULL, while rows with a non-NULL
+# dropped value still report modified.
+DB19=/tmp/test_diff_alter19_$$.db; rm -f "$DB19"
+echo "CREATE TABLE t(a INT, b INT, c INT, PRIMARY KEY(a, b)) WITHOUT ROWID;
+INSERT INTO t VALUES (1, 2, NULL), (3, 4, 99);
+SELECT dolt_commit('-Am', 'init');
+ALTER TABLE t DROP COLUMN c;
+SELECT dolt_commit('-Am', 'drop c');" | $DOLTLITE "$DB19" > /dev/null 2>&1
+
+run_test "all_pk_drop_null_col_diff_slice" \
+  "SELECT from_a || '|' || from_b || '|' || to_a || '|' || to_b || '|' || diff_type FROM dolt_diff_t('HEAD~1','HEAD');" \
+  "3|4|3|4|modified" "$DB19"
+
+run_test "all_pk_drop_null_col_diff_history_modified_count" \
+  "SELECT count(*) FROM dolt_diff_t WHERE diff_type='modified';" \
+  "1" "$DB19"
+
+run_test "all_pk_drop_null_col_diff_stat_matches" \
+  "SELECT rows_unmodified || '|' || rows_modified FROM dolt_diff_stat('HEAD~1','HEAD','t');" \
+  "1|1" "$DB19"
+
+DB20=/tmp/test_diff_alter20_$$.db; rm -f "$DB20"
+echo "CREATE TABLE t(a INT, b INT, c INT, PRIMARY KEY(a, b)) WITHOUT ROWID;
+INSERT INTO t VALUES (1, 2, NULL);
+SELECT dolt_commit('-Am', 'init');
+ALTER TABLE t DROP COLUMN c;
+SELECT dolt_commit('-Am', 'drop c');" | $DOLTLITE "$DB20" > /dev/null 2>&1
+
+run_test "all_pk_drop_only_null_col_diff_empty" \
+  "SELECT count(*) FROM dolt_diff_t('HEAD~1','HEAD');" \
+  "0" "$DB20"
+
+run_test "all_pk_drop_only_null_col_diff_history_no_modified" \
+  "SELECT count(*) FROM dolt_diff_t WHERE diff_type='modified';" \
+  "0" "$DB20"
+
+# Adding a nullable column to an all-PK WITHOUT ROWID table is schema-only for
+# rows left NULL (even when rewritten with NULL) and reports modified only for
+# rows given a non-NULL value.
+DB21=/tmp/test_diff_alter21_$$.db; rm -f "$DB21"
+echo "CREATE TABLE t(a INT, b INT, PRIMARY KEY(a, b)) WITHOUT ROWID;
+INSERT INTO t VALUES (1, 2), (3, 4);
+SELECT dolt_commit('-Am', 'init');
+ALTER TABLE t ADD COLUMN c INT;
+UPDATE t SET c=NULL WHERE a=1 AND b=2;
+SELECT dolt_commit('-Am', 'add c null only');" | $DOLTLITE "$DB21" > /dev/null 2>&1
+
+run_test "all_pk_add_null_col_diff_empty" \
+  "SELECT count(*) FROM dolt_diff_t('HEAD~1','HEAD');" \
+  "0" "$DB21"
+
+run_test "all_pk_add_null_col_diff_history_no_modified" \
+  "SELECT count(*) FROM dolt_diff_t WHERE diff_type='modified';" \
+  "0" "$DB21"
+
+echo "UPDATE t SET c=7 WHERE a=3 AND b=4;
+SELECT dolt_commit('-Am', 'set c on 3,4');" | $DOLTLITE "$DB21" > /dev/null 2>&1
+
+run_test "all_pk_add_null_col_genuine_change" \
+  "SELECT from_a || '|' || from_b || '|' || coalesce(from_c,'NULL') || '|' || to_a || '|' || to_b || '|' || to_c || '|' || diff_type FROM dolt_diff_t('HEAD~2','HEAD');" \
+  "3|4|NULL|3|4|7|modified" "$DB21"
+
+rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21"
 
 dltest_finish
