@@ -1,7 +1,9 @@
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "sortkey.h"
+#include "vdbeInt.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -280,11 +282,124 @@ static void testValidRoundTrips(void){
   sqlite3_free(pAscDesc);
 }
 
+static void testSerialTypeOverflowHelper(void){
+  u32 st = 0;
+  static const u32 aOverflow[] = {
+    0x7ffffffau, 0x7ffffffbu, 0x7ffffffcu, 0x7ffffffdu,
+    0x7ffffffeu, 0x7fffffffu, 0x80000000u, 0xffffffffu
+  };
+  size_t i;
+
+  check("st_blob_0", sortKeyVarlenSerialType(0, 0, &st)==SQLITE_OK && st==12u);
+  check("st_text_0", sortKeyVarlenSerialType(0, 1, &st)==SQLITE_OK && st==13u);
+  check("st_blob_1", sortKeyVarlenSerialType(1, 0, &st)==SQLITE_OK && st==14u);
+  check("st_text_1", sortKeyVarlenSerialType(1, 1, &st)==SQLITE_OK && st==15u);
+  check("st_blob_max_minus_1",
+        sortKeyVarlenSerialType(SORTKEY_MAX_VARLEN - 1u, 0, &st)==SQLITE_OK
+        && st==0xfffffffcu);
+  check("st_text_max_minus_1",
+        sortKeyVarlenSerialType(SORTKEY_MAX_VARLEN - 1u, 1, &st)==SQLITE_OK
+        && st==0xfffffffdu);
+  check("st_blob_max",
+        sortKeyVarlenSerialType(SORTKEY_MAX_VARLEN, 0, &st)==SQLITE_OK
+        && st==0xfffffffeu);
+  check("st_text_max",
+        sortKeyVarlenSerialType(SORTKEY_MAX_VARLEN, 1, &st)==SQLITE_OK
+        && st==0xffffffffu);
+
+  for(i = 0; i < sizeof(aOverflow)/sizeof(aOverflow[0]); i++){
+    check("st_blob_overflow",
+          sortKeyVarlenSerialType(aOverflow[i], 0, &st)==SQLITE_TOOBIG);
+    check("st_text_overflow",
+          sortKeyVarlenSerialType(aOverflow[i], 1, &st)==SQLITE_TOOBIG);
+  }
+}
+
+static void testMemSerialTypeOverflow(void){
+  static char dummy[4] = { 'a', 'b', 'c', 'd' };
+  static const int aOverflowLen[] = {
+    0x7ffffffa, 0x7ffffffb, 0x7ffffffc, 0x7ffffffd, 0x7ffffffe, INT_MAX
+  };
+  u8 aFlagDesc[1] = { KEYINFO_ORDER_DESC };
+  KeyInfo *pDesc = allocKeyInfo(1, aFlagDesc);
+  u8 *pBuf = 0;
+  int nAlloc = 0;
+  int nOut = -1;
+  size_t i;
+
+  check("alloc_keyinfo_overflow", pDesc!=0);
+  if( !pDesc ) return;
+
+  for(i = 0; i < sizeof(aOverflowLen)/sizeof(aOverflowLen[0]); i++){
+    Mem aMem[2];
+    int n = aOverflowLen[i];
+    int rc;
+
+    /* Single-field ASC BLOB/TEXT (fast path) */
+    memset(aMem, 0, sizeof(aMem));
+    aMem[0].flags = MEM_Blob;
+    aMem[0].z = dummy;
+    aMem[0].n = n;
+    rc = sortKeyFromMemPrefixCollBuffer(&aMem[0], 1, 0, 0, &pBuf, &nAlloc, &nOut);
+    check("mem_fast_blob_overflow", rc==SQLITE_TOOBIG && nOut==0);
+
+    aMem[0].flags = MEM_Str;
+    rc = sortKeyFromMemPrefixCollBuffer(&aMem[0], 1, 0, 0, &pBuf, &nAlloc, &nOut);
+    check("mem_fast_text_overflow", rc==SQLITE_TOOBIG && nOut==0);
+
+    /* Single-field DESC BLOB/TEXT (sortKeyEncodeMemArray -> sortKeyMemSerialType) */
+    aMem[0].flags = MEM_Blob;
+    rc = sortKeyFromMemPrefixCollBuffer(&aMem[0], 1, 0, pDesc, &pBuf, &nAlloc, &nOut);
+    check("mem_desc_blob_overflow", rc==SQLITE_TOOBIG && nOut==0);
+
+    aMem[0].flags = MEM_Str;
+    rc = sortKeyFromMemPrefixCollBuffer(&aMem[0], 1, 0, pDesc, &pBuf, &nAlloc, &nOut);
+    check("mem_desc_text_overflow", rc==SQLITE_TOOBIG && nOut==0);
+
+    /* Multi-field [INT, BLOB/TEXT] (sortKeyEncodeMemArray -> sortKeyMemSerialType) */
+    memset(aMem, 0, sizeof(aMem));
+    aMem[0].flags = MEM_Int;
+    aMem[0].u.i = 1;
+    aMem[1].flags = MEM_Blob;
+    aMem[1].z = dummy;
+    aMem[1].n = n;
+    rc = sortKeyFromMemPrefixCollBuffer(aMem, 2, 0, 0, &pBuf, &nAlloc, &nOut);
+    check("mem_multi_blob_overflow", rc==SQLITE_TOOBIG && nOut==0);
+
+    aMem[1].flags = MEM_Str;
+    rc = sortKeyFromMemPrefixCollBuffer(aMem, 2, 0, 0, &pBuf, &nAlloc, &nOut);
+    check("mem_multi_text_overflow", rc==SQLITE_TOOBIG && nOut==0);
+  }
+
+  /* Zeroblob whose total length overflows u32 serial type */
+  {
+    Mem m;
+    int rc;
+    memset(&m, 0, sizeof(m));
+    m.flags = MEM_Blob | MEM_Zero;
+    m.z = dummy;
+    m.n = 0;
+    m.u.nZero = 0x7ffffffa;
+    rc = sortKeyFromMemPrefixCollBuffer(&m, 1, 0, 0, &pBuf, &nAlloc, &nOut);
+    check("mem_zeroblob_overflow_exact", rc==SQLITE_TOOBIG && nOut==0);
+
+    m.n = 4;
+    m.u.nZero = 0x7ffffff6;
+    rc = sortKeyFromMemPrefixCollBuffer(&m, 1, 0, 0, &pBuf, &nAlloc, &nOut);
+    check("mem_zeroblob_overflow_sum", rc==SQLITE_TOOBIG && nOut==0);
+  }
+
+  sqlite3_free(pBuf);
+  sqlite3_free(pDesc);
+}
+
 int main(void){
   testUnterminatedAsc();
   testUnterminatedNumericFastPath();
   testUnterminatedDesc();
   testValidRoundTrips();
+  testSerialTypeOverflowHelper();
+  testMemSerialTypeOverflow();
   printf("sortkey_test: %d passed, %d failed\n", nPass, nFail);
   return nFail ? 1 : 0;
 }

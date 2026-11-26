@@ -516,6 +516,12 @@ static int sortKeyMemSerialType(Mem *pMem, u32 *pSerialType, u32 *pLen){
   }
   if( flags & (MEM_Str|MEM_Blob) ){
     if( flags & MEM_Zero ){
+      if( pMem->n < 0 || pMem->u.nZero < 0 ){
+        return SQLITE_CORRUPT;
+      }
+      if( (u64)pMem->n + (u64)pMem->u.nZero > SORTKEY_MAX_VARLEN ){
+        return SQLITE_TOOBIG;
+      }
       /* Expand zeroblob tails so probes match stored keys. */
       if( sqlite3VdbeMemExpandBlob(pMem)!=SQLITE_OK ){
         return SQLITE_NOMEM;
@@ -525,7 +531,9 @@ static int sortKeyMemSerialType(Mem *pMem, u32 *pSerialType, u32 *pLen){
       return SQLITE_CORRUPT;
     }
     *pLen = (u32)pMem->n;
-    *pSerialType = (*pLen * 2) + 12 + ((flags & MEM_Str)!=0);
+    if( sortKeyVarlenSerialType(*pLen, (flags & MEM_Str)!=0, pSerialType)!=SQLITE_OK ){
+      return SQLITE_TOOBIG;
+    }
     return SQLITE_OK;
   }
   return SQLITE_NOTFOUND;
@@ -553,6 +561,7 @@ static int sortKeyEncodeMemArray(
     int coll;
     int rc = sortKeyMemSerialType(pMem, &serialType, &fieldLen);
     if( rc==SQLITE_NOTFOUND ) return -3;
+    if( rc==SQLITE_TOOBIG ) return -2;
     if( rc!=SQLITE_OK ) return -1;
     /* zeroblob expansion may have reallocated pMem->z. */
     pField = (const u8*)pMem->z;
@@ -647,6 +656,7 @@ static int sortKeyFromSingleBinaryMemFast(
   }else{
     return SQLITE_NOTFOUND;
   }
+  if( (u32)pMem->n > SORTKEY_MAX_VARLEN ) return SQLITE_TOOBIG;
 
   hasZero = pMem->n>0 && memchr(pMem->z, 0, (size_t)pMem->n)!=0;
   if( hasZero ){
@@ -1201,11 +1211,20 @@ static int recordFromNumericVarlenSortKeyBuffer(
   }
 
   decodeNumericSortKeyToRecord(pSortKey + 1, 8, &aType0, &aLen0, aBuf0);
-  aType1 = aLen1 * 2 + (tag1==SORTKEY_TEXT ? 13 : 12);
+  if( sortKeyVarlenSerialType(aLen1, tag1==SORTKEY_TEXT, &aType1)!=SQLITE_OK ){
+    return SQLITE_TOOBIG;
+  }
 
-  nHdr = (int)skRecordHeaderSize(
-      sqlite3VarintLen(aType0) + sqlite3VarintLen(aType1));
-  nTotal = nHdr + (int)aLen0 + (int)aLen1;
+  {
+    sqlite3_int64 nHdr64 = skRecordHeaderSize(
+        sqlite3VarintLen(aType0) + sqlite3VarintLen(aType1));
+    sqlite3_int64 nTotal64 = nHdr64 + (sqlite3_int64)aLen0 + (sqlite3_int64)aLen1;
+    if( nHdr64 > INT_MAX || nTotal64 > INT_MAX ){
+      return SQLITE_TOOBIG;
+    }
+    nHdr = (int)nHdr64;
+    nTotal = (int)nTotal64;
+  }
   if( *pnAlloc < nTotal ){
     u8 *pNew = (u8*)sqlite3_realloc(*ppBuf, nTotal);
     if( !pNew ) return SQLITE_NOMEM;
@@ -1493,10 +1512,10 @@ int recordFromSortKeyBuffer(
         rc = SQLITE_CORRUPT;
         goto record_from_sortkey_done;
       }
-      if( tag == SORTKEY_TEXT ){
-        aType[nFields] = (u32)dataLen * 2 + 13;
-      }else{
-        aType[nFields] = (u32)dataLen * 2 + 12;
+      if( sortKeyVarlenSerialType((u32)dataLen, tag == SORTKEY_TEXT,
+                                  &aType[nFields])!=SQLITE_OK ){
+        rc = SQLITE_TOOBIG;
+        goto record_from_sortkey_done;
       }
       aLen[nFields] = (u32)dataLen;
 
