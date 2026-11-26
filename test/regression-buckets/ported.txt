@@ -331,3 +331,4 @@ doltlite_vc_oom
 doltlite_savecursor_deletekey
 doltlite_merge_state_guards
 doltlite_catalog_name_limit
+doltlite_constraint_detect_like

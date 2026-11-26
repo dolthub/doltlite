@@ -175,9 +175,11 @@ int walkMergeUserTables(
   rc = sqlite3_prepare_v2(db,
       wantSql
         ? "SELECT name, sql FROM main.sqlite_master WHERE type='table' "
-          "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'dolt_%'"
+          "AND substr(lower(name),1,7)!='sqlite_' "
+          "AND substr(lower(name),1,5)!='dolt_'"
         : "SELECT name FROM main.sqlite_master WHERE type='table' "
-          "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'dolt_%'",
+          "AND substr(lower(name),1,7)!='sqlite_' "
+          "AND substr(lower(name),1,5)!='dolt_'",
       -1, &pTbls, 0);
   if( rc!=SQLITE_OK ){
     doltliteFreeCatalog(aAnc, nAnc);
