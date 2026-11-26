@@ -15054,6 +15054,87 @@ static void run_workspace_discard_writes_once(void){
   removeDbFiles(dbpath);
 }
 
+static long long engineStat(sqlite3 *db, const char *zName){
+  char sql[160];
+  snprintf(sql, sizeof(sql),
+      "SELECT value FROM dolt_engine_stats WHERE name='%s'", zName);
+  return atoll(queryScalarText(db, sql));
+}
+
+/* A dolt_diff_<table> query that pins the INTEGER PRIMARY KEY seeks the key
+** in each commit instead of diffing each pair of commits. */
+static void run_diff_table_pk_seek(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char sql[256];
+  long long nSeek, nScan;
+  int i;
+
+  printf("=== Diff Table PK Seek Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_diff_table_pk_seek");
+  removeDbFiles(dbpath);
+  check("dtpk_open", open_db(dbpath, &db)==SQLITE_OK);
+  check("dtpk_seed", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, k INTEGER);"
+    "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<20000)"
+    " INSERT INTO t SELECT x, 'base_'||x, x FROM c;"
+    "SELECT dolt_commit('-Am','base');")==SQLITE_OK);
+  for(i=1; i<=120; i++){
+    snprintf(sql, sizeof(sql),
+        "UPDATE t SET v='c%d' WHERE id%%120=%d;"
+        "SELECT dolt_commit('-Am','c%d');", i, i%120, i);
+    if( execSql(db, sql)!=SQLITE_OK ) break;
+  }
+  check("dtpk_history", i==121);
+  check("dtpk_tail", execSql(db,
+    "DELETE FROM t WHERE id=77;"
+    "SELECT dolt_commit('-Am','del');"
+    "INSERT INTO t VALUES(77,'again',77);"
+    "SELECT dolt_commit('-Am','readd');"
+    "ALTER TABLE t ADD COLUMN extra TEXT;"
+    "SELECT dolt_commit('-Am','addcol');"
+    "UPDATE t SET extra='e' WHERE id IN (77,78);"
+    "SELECT dolt_commit('-Am','extra');"
+    "UPDATE t SET v='working' WHERE id=77;")==SQLITE_OK);
+  sqlite3_close(db);
+
+  check("dtpk_reopen_seek", open_db(dbpath, &db)==SQLITE_OK);
+  check("dtpk_to", strcmp(queryScalarText(db,
+      "SELECT group_concat(diff_type||':'||coalesce(to_v,''))"
+      " FROM dolt_diff_t WHERE to_id=77"),
+      "modified:working,modified:again,added:again,modified:c77,"
+      "added:base_77")==0);
+  nSeek = engineStat(db, "verify_bytes");
+  sqlite3_close(db);
+
+  check("dtpk_reopen_scan", open_db(dbpath, &db)==SQLITE_OK);
+  check("dtpk_scan", strcmp(queryScalarText(db,
+      "SELECT count(*) FROM dolt_diff_t WHERE to_id+0=77"), "5")==0);
+  nScan = engineStat(db, "verify_bytes");
+  printf("  bytes read: key seek %lld, full diff %lld\n", nSeek, nScan);
+  check("dtpk_seek_reads_less", nSeek*3<nScan);
+  check("dtpk_from", strcmp(queryScalarText(db,
+      "SELECT group_concat(diff_type||':'||coalesce(from_v,''))"
+      " FROM dolt_diff_t WHERE from_id=77"),
+      "modified:again,modified:again,removed:c77,modified:base_77")==0);
+  check("dtpk_matches_scan", strcmp(queryScalarText(db,
+      "SELECT (SELECT count(*) FROM dolt_diff_t WHERE to_id=78)||','||"
+      "(SELECT count(*) FROM dolt_diff_t WHERE to_id+0=78)||','||"
+      "(SELECT count(*) FROM dolt_diff_t WHERE from_id=78)||','||"
+      "(SELECT count(*) FROM dolt_diff_t WHERE from_id+0=78)||','||"
+      "(SELECT count(*) FROM dolt_diff_t WHERE to_id=20001)||','||"
+      "(SELECT count(*) FROM dolt_diff_t WHERE to_id='77')||','||"
+      "(SELECT count(*) FROM dolt_diff_t WHERE to_id=77.0)||','||"
+      "(SELECT count(*) FROM dolt_diff_t WHERE to_id=NULL)"),
+      "3,3,2,2,0,5,5,0")==0);
+  check("dtpk_slice", strcmp(queryScalarText(db,
+      "SELECT group_concat(diff_type||':'||from_v||'>'||to_v) FROM dolt_diff_t"
+      " WHERE from_ref='HEAD~5' AND to_ref='WORKING' AND to_id=77"),
+      "modified:c77>working")==0);
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_workspace_schema_check_once(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -24230,6 +24311,7 @@ static const RegressionCase aCases[] = {
   { "workspace_stage_writes_once", "Workspace Stage Writes Once Test", run_workspace_stage_writes_once },
   { "workspace_discard_writes_once", "Workspace Discard Writes Once Test", run_workspace_discard_writes_once },
   { "clone_validates_leaves_by_presence", "Clone Validates Leaves By Presence Test", run_clone_validates_leaves_by_presence },
+  { "diff_table_pk_seek", "Diff Table PK Seek Test", run_diff_table_pk_seek },
   { "workspace_schema_check_once", "Workspace Schema Check Once Test", run_workspace_schema_check_once },
   { "workspace_queue_dedupes_rows", "Workspace Queue Dedupes Rows Test", run_workspace_queue_dedupes_rows },
   { "rebase_main_table_schema_guard", "Rebase Main Table Schema Guard Test", run_rebase_main_table_schema_guard },

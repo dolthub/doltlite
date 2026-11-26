@@ -78,6 +78,9 @@ struct ProllyDiffIter {
   /* Cursors cover a bounded differing range; frames hold suspended
   ** internal-node walks above it. */
   u8 cursorsActive;
+  /* Only the row at pointKey is compared. */
+  u8 pointOnly;
+  i64 pointKey;
   DiffIterFrame *aFrames;
   int nFrames;
   int nFramesAlloc;
@@ -109,6 +112,10 @@ int prollyDiffIterOpenCompare(ProllyDiffIter *pIter, ChunkStore *pStore,
                        const ProllyHash *pOldRoot, const ProllyHash *pNewRoot,
                        u8 oldFlags, u8 newFlags,
                        ProllyDiffCompare xEqual, void *pCompare);
+int prollyDiffIterOpenIntKey(ProllyDiffIter *pIter, ChunkStore *pStore,
+                       ProllyCache *pCache,
+                       const ProllyHash *pOldRoot, const ProllyHash *pNewRoot,
+                       ProllyDiffCompare xEqual, void *pCompare, i64 intKey);
 int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange);
 void prollyDiffIterClose(ProllyDiffIter *pIter);
 

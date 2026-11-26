@@ -694,6 +694,60 @@ int prollyDiffIterOpen(
                                    oldFlags, newFlags, 0, 0);
 }
 
+/* Both trees are keyed by integer; an empty root has no row. */
+int prollyDiffIterOpenIntKey(
+  ProllyDiffIter *pIter,
+  ChunkStore *pStore,
+  ProllyCache *pCache,
+  const ProllyHash *pOldRoot,
+  const ProllyHash *pNewRoot,
+  ProllyDiffCompare xEqual,
+  void *pCompare,
+  i64 intKey
+){
+  int rc;
+  int res = 0;
+
+  memset(pIter, 0, sizeof(*pIter));
+  pIter->pStore = pStore;
+  pIter->pCache = pCache;
+  pIter->flags = PROLLY_NODE_INTKEY;
+  pIter->oldFlags = PROLLY_NODE_INTKEY;
+  pIter->newFlags = PROLLY_NODE_INTKEY;
+  pIter->xEqual = xEqual;
+  pIter->pCompare = pCompare;
+  pIter->pointOnly = 1;
+  pIter->pointKey = intKey;
+  if( prollyHashCompare(pOldRoot, pNewRoot)==0 ){
+    pIter->eof = 1;
+    return SQLITE_OK;
+  }
+  pIter->pCurOld = (ProllyCursor*)sqlite3_malloc(sizeof(ProllyCursor));
+  pIter->pCurNew = (ProllyCursor*)sqlite3_malloc(sizeof(ProllyCursor));
+  if( !pIter->pCurOld || !pIter->pCurNew ){
+    sqlite3_free(pIter->pCurOld);
+    sqlite3_free(pIter->pCurNew);
+    pIter->pCurOld = 0;
+    pIter->pCurNew = 0;
+    pIter->eof = 1;
+    pIter->rc = SQLITE_NOMEM;
+    return SQLITE_NOMEM;
+  }
+  prollyCursorInit(pIter->pCurOld, pStore, pCache, pOldRoot,
+                   PROLLY_NODE_INTKEY);
+  prollyCursorInit(pIter->pCurNew, pStore, pCache, pNewRoot,
+                   PROLLY_NODE_INTKEY);
+  pIter->cursorsActive = 1;
+  rc = prollyCursorSeekInt(pIter->pCurOld, intKey, &res);
+  if( rc==SQLITE_OK ) rc = prollyCursorSeekInt(pIter->pCurNew, intKey, &res);
+  if( rc!=SQLITE_OK ){
+    diffIterCloseCursors(pIter);
+    pIter->eof = 1;
+    pIter->rc = rc;
+  }
+  return rc;
+}
+
 int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
   ProllyCursor *pOld;
   ProllyCursor *pNew;
@@ -724,6 +778,10 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
     pNew = pIter->pCurNew;
     validOld = prollyCursorIsValid(pOld);
     validNew = prollyCursorIsValid(pNew);
+    if( pIter->pointOnly ){
+      if( validOld && prollyCursorIntKey(pOld)!=pIter->pointKey ) validOld = 0;
+      if( validNew && prollyCursorIntKey(pNew)!=pIter->pointKey ) validNew = 0;
+    }
 
     if( !validOld && !validNew ){
       diffIterCloseCursors(pIter);

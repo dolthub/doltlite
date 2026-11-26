@@ -133,6 +133,8 @@ struct DiffTblCursor {
   DoltliteSideCols toSide;
   DoltliteDiffLayout layout;
   int    needFilter;
+  int    pkEq;
+  i64    pkKey;
 
   AuditRow row;
   int hasRow;
@@ -173,6 +175,7 @@ static int dtLoadTableRootOrEmpty(
 #define DT_IDX_SLICE          0x02
 #define DT_IDX_RANGE_SPEC     0x04
 #define DT_IDX_FROM_COMMIT_EQ 0x10
+#define DT_IDX_PK_EQ          0x20
 
 static int dtRefError(DiffTblVtab *pVtab, const char *zRef, int rc){
   const char *zKind;
@@ -853,9 +856,21 @@ static int openNextPairIter(DiffTblCursor *pCur, sqlite3 *db){
                                   &pCur->toSide.ci);
       if( rc!=SQLITE_OK ) return rc;
     }
-    rc = prollyDiffIterOpenCompare(&pCur->diffIter, cs, pCache,
-          &p->fromTblRoot, &p->toTblRoot, fromFlags, toFlags,
-          pCur->layout.nSlot ? doltliteDiffRecordsEqual : 0, &pCur->layout);
+    /* A row keeps its key across the pair only while both sides store the
+    ** declared INTEGER PRIMARY KEY as the tree key. */
+    if( pCur->pkEq
+     && (fromFlags & PROLLY_NODE_INTKEY) && (toFlags & PROLLY_NODE_INTKEY)
+     && doltliteSideColsMatchIntPk(&pCur->fromSide, &pVtab->cols)
+     && doltliteSideColsMatchIntPk(&pCur->toSide, &pVtab->cols) ){
+      rc = prollyDiffIterOpenIntKey(&pCur->diffIter, cs, pCache,
+            &p->fromTblRoot, &p->toTblRoot,
+            pCur->layout.nSlot ? doltliteDiffRecordsEqual : 0, &pCur->layout,
+            pCur->pkKey);
+    }else{
+      rc = prollyDiffIterOpenCompare(&pCur->diffIter, cs, pCache,
+            &p->fromTblRoot, &p->toTblRoot, fromFlags, toFlags,
+            pCur->layout.nSlot ? doltliteDiffRecordsEqual : 0, &pCur->layout);
+    }
     pCur->diffIterOpen = 1;
     return rc;
   }
@@ -971,6 +986,8 @@ static int dtBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   int iFromCommitEq = -1;
   int iFromRefEq = -1;
   int iToRefEq = -1;
+  int iPkEq = -1;
+  int nArg;
   int nUser = p->cols.nCol;
   int toCommitCol = nUser;
   int fromCommitCol = 2*nUser + 2;
@@ -988,7 +1005,11 @@ static int dtBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
      && sqlite3_stricmp(sqlite3_vtab_collation(pInfo,i),"BINARY")!=0 ){
       continue;
     }
-    if( pInfo->aConstraint[i].iColumn==toCommitCol ){
+    if( p->cols.iPkCol>=0 && iPkEq<0
+     && (pInfo->aConstraint[i].iColumn==p->cols.iPkCol
+      || pInfo->aConstraint[i].iColumn==nUser+2+p->cols.iPkCol) ){
+      iPkEq = i;
+    }else if( pInfo->aConstraint[i].iColumn==toCommitCol ){
       iToCommitEq = i;
     }else if( pInfo->aConstraint[i].iColumn==fromCommitCol ){
       iFromCommitEq = i;
@@ -1006,27 +1027,41 @@ static int dtBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
     pInfo->aConstraintUsage[iToRefEq].argvIndex = 2;
     pInfo->aConstraintUsage[iToRefEq].omit = 1;
     pInfo->estimatedCost = 10.0;
+    nArg = 2;
   }else if( iFromRefEq>=0 ){
     pInfo->idxNum = DT_IDX_RANGE_SPEC;
     pInfo->aConstraintUsage[iFromRefEq].argvIndex = 1;
     pInfo->aConstraintUsage[iFromRefEq].omit = 1;
     pInfo->estimatedCost = 10.0;
+    nArg = 1;
   }else if( iFromCommitEq>=0 && iToCommitEq>=0 ){
     pInfo->idxNum = DT_IDX_FROM_COMMIT_EQ | DT_IDX_TO_COMMIT_EQ;
     pInfo->aConstraintUsage[iFromCommitEq].argvIndex = 1;
     pInfo->aConstraintUsage[iToCommitEq].argvIndex = 2;
     pInfo->estimatedCost = 10.0;
+    nArg = 2;
   }else if( iToCommitEq>=0 ){
     pInfo->idxNum = DT_IDX_TO_COMMIT_EQ;
     pInfo->aConstraintUsage[iToCommitEq].argvIndex = 1;
     pInfo->estimatedCost = 100.0;
+    nArg = 1;
   }else if( iFromCommitEq>=0 ){
     pInfo->idxNum = DT_IDX_FROM_COMMIT_EQ;
     pInfo->aConstraintUsage[iFromCommitEq].argvIndex = 1;
     pInfo->estimatedCost = 500.0;
+    nArg = 1;
   }else{
     pInfo->idxNum = 0;
     pInfo->estimatedCost = 10000.0;
+    nArg = 0;
+  }
+  /* The seek is a fast path over pairs whose key is the declared rowid
+  ** alias; the constraint still applies to the rendered value. */
+  if( iPkEq>=0 ){
+    pInfo->idxNum |= DT_IDX_PK_EQ;
+    pInfo->aConstraintUsage[iPkEq].argvIndex = nArg+1;
+    pInfo->aConstraintUsage[iPkEq].omit = 0;
+    pInfo->estimatedCost /= 2;
   }
   return SQLITE_OK;
 }
@@ -1091,6 +1126,7 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
   c->sliceTime = 0;
   c->zFromFilter[0] = 0;
   c->zToFilter[0] = 0;
+  c->pkEq = 0;
   c->isHistory = (idxNum & (DT_IDX_SLICE|DT_IDX_RANGE_SPEC))==0;
 
   {
@@ -1100,6 +1136,11 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
       c->pairsDone = 1;
       return SQLITE_OK;
     }
+  }
+
+  if( (idxNum & DT_IDX_PK_EQ)!=0 && argc>=1
+   && doltliteExactInt64Arg(argv[argc-1], &c->pkKey)>0 ){
+    c->pkEq = 1;
   }
 
   if( (idxNum & DT_IDX_SLICE)!=0 && argc>=2 ){
