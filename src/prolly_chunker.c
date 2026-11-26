@@ -278,7 +278,8 @@ static int addToLevel(ProllyChunker *ch, int level,
                       u64 childSubtreeCount){
   ProllyChunkerLevel *pLevel;
   int rc;
-  int thisSize;
+  i64 thisSize;
+  i64 nValLogical = (i64)nVal;
   u64 incCount;
 
   assert( level >= 0 && level < PROLLY_CURSOR_MAX_DEPTH );
@@ -299,7 +300,7 @@ static int addToLevel(ProllyChunker *ch, int level,
     if( nZeroTail>0 ){
       rc = prollyNodeBuilderAddZeroTail(&pLevel->builder, pKey, nKey,
                                         pVal, nVal, nZeroTail);
-      nVal += (int)nZeroTail;  /* size accounting below is logical */
+      nValLogical += nZeroTail;  /* size accounting below is logical */
     }else{
       rc = prollyNodeBuilderAdd(&pLevel->builder, pKey, nKey, pVal, nVal);
     }
@@ -313,7 +314,7 @@ static int addToLevel(ProllyChunker *ch, int level,
   pLevel->nItems++;
   pLevel->subtreeCount += incCount;
 
-  thisSize = PROLLY_NODE_ENTRY_BYTES(level, nKey, nVal);
+  thisSize = PROLLY_NODE_ENTRY_BYTES(level, nKey, nValLogical);
   pLevel->nBytes += thisSize;
 
   /* One oversize entry cannot split; flushing it would propagate SQLITE_FULL. */
@@ -323,8 +324,7 @@ static int addToLevel(ProllyChunker *ch, int level,
       atBoundary = 1;
     } else {
       u32 h = prollyXXH32(pKey, nKey, (u32)level);
-      atBoundary = prollyWeibullCheck((u32)pLevel->nBytes,
-                                       (u32)thisSize, h);
+      atBoundary = prollyWeibullCheck(pLevel->nBytes, thisSize, h);
     }
     if( atBoundary ){
       rc = flushLevel(ch, level);

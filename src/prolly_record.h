@@ -190,9 +190,7 @@ static inline i64 dlRecordIntField(
   const DoltliteRecordInfo *pRi,
   int iField
 ){
-  const u8 *pBody;
-  int st, off, nByte, i;
-  i64 v;
+  int st, off, nByte;
 
   if( iField>=pRi->nField ) return 0;
   st = pRi->aType[iField];
@@ -210,12 +208,7 @@ static inline i64 dlRecordIntField(
     default: return 0;
   }
   if( off<0 || off+nByte>nVal ) return 0;
-  pBody = pVal + off;
-  v = (pBody[0] & 0x80) ? -1 : 0;
-  for(i=0; i<nByte; i++){
-    v = (v << 8) | pBody[i];
-  }
-  return v;
+  return dlReadIntBytes(pVal + off, nByte);
 }
 
 #endif
