@@ -1285,6 +1285,7 @@ static int btCursorInsertImpl(
           isIndex ? 0 : (splitKey ? nKeyField : 0)) ){
       storePayload = 1;
     }
+    CLEAR_CACHED_SEEK_KEY(pCur);
     rc = sortKeyFromIntRecordLocal(
         pCur, (const u8*)pPayload->pKey, (int)pPayload->nKey,
         isIndex ? 0 : (splitKey ? nKeyField : 0),
@@ -1823,6 +1824,7 @@ int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
             nDelKeyField = (int)pCur->pKeyInfo->nKeyField;
           }
         }
+        CLEAR_CACHED_SEEK_KEY(pCur);
         if( pCur->pSeekSortKey==pCur->aSeekSortKey ){
           pCur->pSeekSortKey = 0;
           pCur->nSeekSortKeyAlloc = 0;
@@ -1964,6 +1966,7 @@ int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
     }
     if( canDefer ){
       CLEAR_CACHED_PAYLOAD(pCur);
+      CLEAR_CACHED_SEEK_KEY(pCur);
       pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_AtLast);
       pCur->mmActive = 0;
       if( flags & (BTREE_SAVEPOSITION | BTREE_AUXDELETE) ){
@@ -1995,6 +1998,7 @@ int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
 
   rc = btreeDeleteImmediate(pCur);
   if( rc!=SQLITE_OK ) goto delete_cleanup;
+  CLEAR_CACHED_SEEK_KEY(pCur);
 
   if( flags & BTREE_SAVEPOSITION ){
     int res = 0;

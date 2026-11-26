@@ -3,9 +3,28 @@
 #include <string.h>
 #include "sqliteInt.h"
 #include "vdbeInt.h"
+#include "prolly_btree_int.h"
 
 static int nPass = 0;
 static int nFail = 0;
+static sqlite3_mem_methods gRealMem;
+static int gFailNextAlloc = 0;
+
+static void *oomMalloc(int n){
+  if( gFailNextAlloc>0 ){
+    gFailNextAlloc--;
+    if( gFailNextAlloc==0 ) return 0;
+  }
+  return gRealMem.xMalloc(n);
+}
+
+static void *oomRealloc(void *p, int n){
+  if( gFailNextAlloc>0 ){
+    gFailNextAlloc--;
+    if( gFailNextAlloc==0 ) return 0;
+  }
+  return gRealMem.xRealloc(p, n);
+}
 
 static void check(const char *zName, int cond){
   if( cond ){
@@ -287,7 +306,217 @@ static void runNonIntKeySuite(
   removeDb(zDb);
 }
 
+static void initIntSeekKey(
+  UnpackedRecord *pRec,
+  Mem *aMem,
+  KeyInfo *pKeyInfo,
+  i64 v0,
+  int nField,
+  i64 v1
+){
+  memset(pRec, 0, sizeof(*pRec));
+  memset(aMem, 0, sizeof(Mem) * 2);
+  aMem[0].flags = MEM_Int;
+  aMem[0].u.i = v0;
+  aMem[1].flags = MEM_Int;
+  aMem[1].u.i = v1;
+  pRec->pKeyInfo = pKeyInfo;
+  pRec->aMem = aMem;
+  pRec->nField = (u16)nField;
+  pRec->default_rc = 0;
+}
+
+static void runCachedSeekKeyTests(void){
+  sqlite3 *db = 0;
+  Btree *pBt;
+  BtCursor *pCur = 0;
+  Index *pIdx;
+  KeyInfo *pKeyInfo = 0;
+  Parse sParse;
+  Pgno root = 0;
+  UnpackedRecord seekKey;
+  Mem aMem[2];
+  BtreePayload payload;
+  u8 aRec[128];
+  int nRec;
+  int rc;
+  int res = 0;
+  int cmpRes = 0;
+  const char *zDb = "savepos_cached_seek.db";
+
+  removeDb(zDb);
+  rc = sqlite3_open(zDb, &db);
+  check("seekkey: open", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ){ sqlite3_close(db); return; }
+
+  if( execSql(db,
+        "CREATE TABLE t_sk(id INTEGER PRIMARY KEY, k);"
+        "CREATE INDEX t_sk_k ON t_sk(k);"
+        "INSERT INTO t_sk VALUES(1,10),(2,20),(3,30);")!=SQLITE_OK ){
+    nFail++;
+    sqlite3_close(db);
+    removeDb(zDb);
+    return;
+  }
+
+  sqlite3BtreeEnterAll(db);
+  pBt = db->aDb[0].pBt;
+  pIdx = sqlite3FindIndex(db, "t_sk_k", "main");
+  if( pIdx ){
+    root = pIdx->tnum;
+    memset(&sParse, 0, sizeof(sParse));
+    sParse.db = db;
+    pKeyInfo = sqlite3KeyInfoOfIndex(&sParse, pIdx);
+  }
+  check("seekkey: resolved index", pBt!=0 && root>1 && pKeyInfo!=0);
+  if( !pBt || root<=1 || !pKeyInfo ){
+    sqlite3KeyInfoUnref(pKeyInfo);
+    sqlite3BtreeLeaveAll(db);
+    sqlite3_close(db);
+    removeDb(zDb);
+    return;
+  }
+
+  pCur = sqlite3_malloc(sqlite3BtreeCursorSize());
+  check("seekkey: alloc cursor", pCur!=0);
+  if( !pCur ){
+    sqlite3KeyInfoUnref(pKeyInfo);
+    sqlite3BtreeLeaveAll(db);
+    sqlite3_close(db);
+    removeDb(zDb);
+    return;
+  }
+  memset(pCur, 0, sqlite3BtreeCursorSize());
+
+  check("seekkey: begin write txn", sqlite3BtreeBeginTrans(pBt, 1, 0)==SQLITE_OK);
+  check("seekkey: open cursor",
+        sqlite3BtreeCursor(pBt, root, BTREE_WRCSR, pKeyInfo, pCur)==SQLITE_OK);
+
+  /* ClearCursor must clear cached seek key metadata. */
+  initIntSeekKey(&seekKey, aMem, pKeyInfo, 10, 2, 1);
+  check("seekkey: moveto (10,1)",
+        sqlite3BtreeIndexMoveto(pCur, &seekKey, &res)==SQLITE_OK && res==0);
+  check("seekkey: cached after moveto",
+        pCur->nSeekSortKey>0 && pCur->pSeekSortKey==pCur->aSeekSortKey);
+  sqlite3BtreeClearCursor(pCur);
+  check("seekkey: cleared by ClearCursor",
+        pCur->nSeekSortKey==0 && pCur->nSeekKeyField==0);
+
+  /* Insert overwrites pSeekSortKey scratch; cached seek metadata must clear
+  ** so BTREE_SEEK_EQ compare and BTREE_AUXDELETE use the current row. */
+  sqlite3BtreeCursorHintFlags(pCur, BTREE_SEEK_EQ);
+  initIntSeekKey(&seekKey, aMem, pKeyInfo, 10, 1, 0);
+  check("seekkey: moveto (10)",
+        sqlite3BtreeIndexMoveto(pCur, &seekKey, &res)==SQLITE_OK && res==0);
+  check("seekkey: prefix cached",
+        pCur->nSeekSortKey>0 && pCur->nSeekKeyField==1
+        && pCur->pSeekSortKey==pCur->aSeekSortKey);
+
+  nRec = makeTextIntRecord(aRec, "zz", 9);
+  memset(&payload, 0, sizeof(payload));
+  payload.pKey = aRec;
+  payload.nKey = nRec;
+  check("seekkey: insert 'zz'",
+        sqlite3BtreeInsert(pCur, &payload, BTREE_SAVEPOSITION, 0)==SQLITE_OK);
+  check("seekkey: cleared after insert",
+        pCur->nSeekSortKey==0 && pCur->nSeekKeyField==0);
+
+  cmpRes = 0;
+  check("seekkey: cached compare after insert",
+        sqlite3BtreeProllyCachedIndexKeyCompare(pCur, &seekKey, 0, &cmpRes)==SQLITE_OK
+        && cmpRes>0);
+  check("seekkey: auxdelete after insert",
+        sqlite3BtreeDelete(pCur, BTREE_AUXDELETE)==SQLITE_OK);
+  check("seekkey: cleared after auxdelete",
+        pCur->nSeekSortKey==0 && pCur->nSeekKeyField==0);
+
+  /* Confirm (10,1) survived and ('zz',9) was deleted. */
+  initIntSeekKey(&seekKey, aMem, pKeyInfo, 10, 2, 1);
+  check("seekkey: (10,1) still present",
+        sqlite3BtreeIndexMoveto(pCur, &seekKey, &res)==SQLITE_OK && res==0);
+
+  /* OOM on insert after int seek (pSeekSortKey == aSeekSortKey):
+  ** must not leave pSeekSortKey == NULL with nSeekSortKey > 0. */
+  sqlite3BtreeCloseCursor(pCur);
+  memset(pCur, 0, sqlite3BtreeCursorSize());
+  check("seekkey: reopen cursor for insert OOM",
+        sqlite3BtreeCursor(pBt, root, BTREE_WRCSR, pKeyInfo, pCur)==SQLITE_OK);
+  sqlite3BtreeCursorHintFlags(pCur, BTREE_SEEK_EQ);
+  initIntSeekKey(&seekKey, aMem, pKeyInfo, 10, 1, 0);
+  check("seekkey: moveto (10) before insert OOM",
+        sqlite3BtreeIndexMoveto(pCur, &seekKey, &res)==SQLITE_OK && res==0);
+  check("seekkey: aSeekSortKey active before insert OOM",
+        pCur->pSeekSortKey==pCur->aSeekSortKey && pCur->nSeekSortKey>0);
+
+  nRec = makeTextIntRecord(aRec, "oom_insert", 11);
+  memset(&payload, 0, sizeof(payload));
+  payload.pKey = aRec;
+  payload.nKey = nRec;
+  gFailNextAlloc = 1;
+  rc = sqlite3BtreeInsert(pCur, &payload, BTREE_SAVEPOSITION, 0);
+  gFailNextAlloc = 0;
+  check("seekkey: insert OOM returned NOMEM", rc==SQLITE_NOMEM);
+  check("seekkey: insert OOM cleared seek key",
+        pCur->pSeekSortKey==0 && pCur->nSeekSortKey==0 && pCur->nSeekKeyField==0);
+
+  cmpRes = -1;
+  check("seekkey: compare safe after insert OOM",
+        sqlite3BtreeProllyCachedIndexKeyCompare(pCur, &seekKey, 0, &cmpRes)==SQLITE_OK
+        && cmpRes==0);
+  check("seekkey: auxdelete safe after insert OOM",
+        sqlite3BtreeDelete(pCur, BTREE_AUXDELETE)==SQLITE_OK);
+  check("seekkey: (10,1) deleted by auxdelete",
+        sqlite3BtreeIndexMoveto(pCur, &seekKey, &res)==SQLITE_OK && res!=0);
+
+  /* OOM on delete cached-payload path when pSeekSortKey == aSeekSortKey:
+  ** must not leave pSeekSortKey == NULL with nSeekSortKey > 0. */
+  sqlite3BtreeCloseCursor(pCur);
+  memset(pCur, 0, sqlite3BtreeCursorSize());
+  check("seekkey: reopen cursor for delete OOM",
+        sqlite3BtreeCursor(pBt, root, BTREE_WRCSR, pKeyInfo, pCur)==SQLITE_OK);
+  initIntSeekKey(&seekKey, aMem, pKeyInfo, 20, 1, 0);
+  check("seekkey: moveto (20) before delete OOM",
+        sqlite3BtreeIndexMoveto(pCur, &seekKey, &res)==SQLITE_OK && res==0);
+  check("seekkey: aSeekSortKey active before delete OOM",
+        pCur->pSeekSortKey==pCur->aSeekSortKey && pCur->nSeekSortKey>0
+        && pCur->nSeekKeyField==1);
+
+  nRec = makeTextIntRecord(aRec, "cached_del", 12);
+  pCur->pCachedPayload = sqlite3_malloc(nRec);
+  check("seekkey: alloc cached payload", pCur->pCachedPayload!=0);
+  if( pCur->pCachedPayload ){
+    memcpy(pCur->pCachedPayload, aRec, (size_t)nRec);
+    pCur->nCachedPayload = nRec;
+    pCur->cachedPayloadOwned = 1;
+    prollyCursorClose(&pCur->pCur);
+    pCur->mmActive = 0;
+
+    gFailNextAlloc = 1;
+    rc = sqlite3BtreeDelete(pCur, 0);
+    gFailNextAlloc = 0;
+    check("seekkey: delete OOM returned NOMEM", rc==SQLITE_NOMEM);
+    check("seekkey: delete OOM cleared seek key",
+          pCur->pSeekSortKey==0 && pCur->nSeekSortKey==0 && pCur->nSeekKeyField==0);
+  }
+
+  sqlite3BtreeCloseCursor(pCur);
+  sqlite3_free(pCur);
+  check("seekkey: commit", sqlite3BtreeCommit(pBt)==SQLITE_OK);
+  sqlite3KeyInfoUnref(pKeyInfo);
+  sqlite3BtreeLeaveAll(db);
+  sqlite3_close(db);
+  removeDb(zDb);
+}
+
 int main(void){
+  sqlite3_mem_methods wrapMem;
+  if( sqlite3_config(SQLITE_CONFIG_GETMALLOC, &gRealMem)==SQLITE_OK ){
+    wrapMem = gRealMem;
+    wrapMem.xMalloc = oomMalloc;
+    wrapMem.xRealloc = oomRealloc;
+    sqlite3_config(SQLITE_CONFIG_MALLOC, &wrapMem);
+  }
+
   runNonIntKeySuite(
       "without_rowid",
       "CREATE TABLE t(k TEXT PRIMARY KEY, v INT) WITHOUT ROWID;",
@@ -302,6 +531,8 @@ int main(void){
       "INSERT INTO t2 VALUES(2,'b'),(4,'d'),(6,'f'),(8,'h');",
       "t2",
       "t2_k");
+
+  runCachedSeekKeyTests();
 
   printf("prolly_btree_saveposition_test: %d passed, %d failed\n", nPass, nFail);
   return nFail ? 1 : 0;
