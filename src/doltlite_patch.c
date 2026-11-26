@@ -52,6 +52,8 @@ struct PatchSchema {
   sqlite3 *db;
   DoltliteColInfo col;
   int *aPk;
+  PatchValue *aDflt;
+  u8 **apDfltKeep;
 };
 
 struct PatchValue {
@@ -426,10 +428,81 @@ static int patchBuildTables(
 }
 
 static void patchSchemaClear(PatchSchema *p){
+  int i;
+  if( p->apDfltKeep ){
+    for(i=0; i<p->col.nCol; i++) sqlite3_free(p->apDfltKeep[i]);
+    sqlite3_free(p->apDfltKeep);
+  }
+  sqlite3_free(p->aDflt);
   doltliteFreeColInfo(&p->col);
   sqlite3_free(p->aPk);
   if( p->db ) sqlite3_close(p->db);
   memset(p, 0, sizeof(*p));
+}
+
+static int patchLoadColumnDefault(
+  sqlite3 *db,
+  Table *pTab,
+  int iCol,
+  PatchValue *pOut,
+  u8 **ppKeep
+){
+  Column *pCol;
+  Expr *pDflt;
+  sqlite3_value *pVal = 0;
+  int eType, rc;
+
+  memset(pOut, 0, sizeof(*pOut));
+  pOut->eType = SQLITE_NULL;
+  *ppKeep = 0;
+  if( !db || !pTab || iCol<0 || iCol>=pTab->nCol ) return SQLITE_OK;
+  pCol = &pTab->aCol[iCol];
+  if( !pCol->iDflt || (pCol->colFlags & COLFLAG_GENERATED)!=0 ){
+    return SQLITE_OK;
+  }
+  pDflt = sqlite3ColumnExpr(pTab, pCol);
+  if( !pDflt ) return SQLITE_OK;
+  rc = sqlite3ValueFromExpr(db, pDflt, SQLITE_UTF8, pCol->affinity, &pVal);
+  if( rc!=SQLITE_OK ){
+    sqlite3ValueFree(pVal);
+    return rc;
+  }
+  if( !pVal ) return SQLITE_OK;
+  eType = sqlite3_value_type(pVal);
+  if( eType==SQLITE_INTEGER ){
+#ifndef SQLITE_OMIT_FLOATING_POINT
+    if( pCol->affinity==SQLITE_AFF_REAL ){
+      pOut->eType = SQLITE_FLOAT;
+      pOut->r = sqlite3_value_double(pVal);
+    }else
+#endif
+    {
+      pOut->eType = SQLITE_INTEGER;
+      pOut->i = sqlite3_value_int64(pVal);
+    }
+  }else if( eType==SQLITE_FLOAT ){
+    pOut->eType = SQLITE_FLOAT;
+    pOut->r = sqlite3_value_double(pVal);
+  }else if( eType==SQLITE_TEXT || eType==SQLITE_BLOB ){
+    const void *pSrc = eType==SQLITE_TEXT
+        ? (const void*)sqlite3_value_text(pVal)
+        : sqlite3_value_blob(pVal);
+    int n = sqlite3_value_bytes(pVal);
+    u8 *pCopy = sqlite3_malloc(n ? n : 1);
+    if( !pCopy ){
+      sqlite3ValueFree(pVal);
+      return SQLITE_NOMEM;
+    }
+    if( n>0 && pSrc ) memcpy(pCopy, pSrc, n);
+    *ppKeep = pCopy;
+    pOut->eType = eType;
+    pOut->p = pCopy;
+    pOut->n = n;
+  }else{
+    pOut->eType = SQLITE_NULL;
+  }
+  sqlite3ValueFree(pVal);
+  return SQLITE_OK;
 }
 
 static int patchSchemaLoad(const SchemaEntry *pEntry, PatchSchema *pOut){
@@ -458,6 +531,22 @@ static int patchSchemaLoad(const SchemaEntry *pEntry, PatchSchema *pOut){
     pOut->aPk[i++] = sqlite3_column_int(pStmt, 5);
   }
   if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+  if( rc==SQLITE_OK && pOut->col.nCol>0 ){
+    Table *pTab = sqlite3FindTable(pOut->db, pEntry->zName, "main");
+    pOut->aDflt = sqlite3_malloc64(
+        (sqlite3_uint64)pOut->col.nCol * sizeof(PatchValue));
+    pOut->apDfltKeep = sqlite3_malloc64(
+        (sqlite3_uint64)pOut->col.nCol * sizeof(u8*));
+    if( !pOut->aDflt || !pOut->apDfltKeep ){ rc = SQLITE_NOMEM; goto done; }
+    memset(pOut->aDflt, 0, (size_t)pOut->col.nCol * sizeof(PatchValue));
+    memset(pOut->apDfltKeep, 0, (size_t)pOut->col.nCol * sizeof(u8*));
+    for(i=0; i<pOut->col.nCol; i++){
+      int iTabCol = pTab ? sqlite3ColumnIndex(pTab, pOut->col.azName[i]) : -1;
+      rc = patchLoadColumnDefault(pOut->db, pTab, iTabCol,
+                                  &pOut->aDflt[i], &pOut->apDfltKeep[i]);
+      if( rc!=SQLITE_OK ) goto done;
+    }
+  }
 done:
   sqlite3_finalize(pStmt);
   sqlite3_free(zPragma);
@@ -896,9 +985,21 @@ static void patchGetValue(
     pOut->i = intKey;
     return;
   }
-  if( !pRec || nRec<=0 ) return;
+  if( !pRec || nRec<=0 ){
+    if( pSchema->aDflt && iCol>=0 && iCol<pSchema->col.nCol ){
+      *pOut = pSchema->aDflt[iCol];
+    }
+    return;
+  }
   doltliteParseRecord(pRec, nRec, &ri);
   iField = pSchema->col.aColToRec ? pSchema->col.aColToRec[iCol] : iCol;
+  if( iField>=ri.nField ){
+    if( pSchema->aDflt && iCol>=0 && iCol<pSchema->col.nCol ){
+      *pOut = pSchema->aDflt[iCol];
+    }
+    doltliteRecordInfoClear(&ri);
+    return;
+  }
   if( doltliteSerialValueFromField(pRec, nRec, &ri, iField, &v)!=SQLITE_OK ){
     doltliteRecordInfoClear(&ri);
     return;
@@ -1229,6 +1330,23 @@ static int patchAppendData(
   return rc==SQLITE_DONE ? SQLITE_OK : rc;
 }
 
+static int patchRecordHasExplicitNull(
+  const PatchSchema *pSchema,
+  const u8 *pRec, int nRec,
+  int iCol
+){
+  DoltliteRecordInfo ri = {0};
+  int iField, isNull;
+  if( !pRec || nRec<=0 ) return 0;
+  if( iCol<0 || iCol>=pSchema->col.nCol ) return 0;
+  if( iCol==pSchema->col.iPkCol ) return 0;
+  doltliteParseRecord(pRec, nRec, &ri);
+  iField = pSchema->col.aColToRec ? pSchema->col.aColToRec[iCol] : iCol;
+  isNull = (iField>=0 && iField<ri.nField && ri.aType[iField]==0);
+  doltliteRecordInfoClear(&ri);
+  return isNull;
+}
+
 static int patchAppendDefaultNulls(
   PatchCursor *pCur,
   sqlite3 *db,
@@ -1253,11 +1371,11 @@ static int patchAppendDefaultNulls(
   for(; rc==SQLITE_OK && prollyCursorIsValid(&newCur);
       rc=prollyCursorNext(&newCur)){
     ProllyDiffChange change = {0};
-    PatchValue value;
     int equal;
     prollyCursorValue(&newCur,&change.pNewVal,&change.nNewVal);
-    patchGetValue(pTo,change.pNewVal,change.nNewVal,0,iAdded,&value);
-    if( value.eType!=SQLITE_NULL ) continue;
+    if( !patchRecordHasExplicitNull(pTo,change.pNewVal,change.nNewVal,iAdded) ){
+      continue;
+    }
 
     if( pNew->flags & PROLLY_NODE_INTKEY ){
       change.intKey = prollyCursorIntKey(&newCur);
