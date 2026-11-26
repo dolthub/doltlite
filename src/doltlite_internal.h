@@ -829,23 +829,6 @@ int doltliteResolveBranchEffectiveCatalog(
   ProllyHash *pCatHash
 );
 
-static SQLITE_INLINE int doltliteAppendQuotedColumnList(
-  sqlite3_str *pStr,
-  char *const *azName,
-  int nName,
-  const char *zPrefix,
-  const char *zSep
-){
-  int i;
-  if( !zPrefix ) zPrefix = "";
-  if( !zSep ) zSep = ", ";
-  for(i=0; i<nName; i++){
-    if( i>0 ) sqlite3_str_appendall(pStr, zSep);
-    sqlite3_str_appendf(pStr, "\"%s%w\"", zPrefix, azName[i]);
-  }
-  return sqlite3_str_errcode(pStr);
-}
-
 static SQLITE_INLINE int doltliteVtabColumnNameUsed(
   char *const *azName,
   int nName,

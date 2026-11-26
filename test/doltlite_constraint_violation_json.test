@@ -166,4 +166,91 @@ do_test cv-json-check-info {
 } [list 1 {ck"n\1}]
 execsql ROLLBACK
 
+# 6. User columns colliding with system columns (violation_type, violation_info)
+reset_db
+execsql {
+  CREATE TABLE t(
+    id INTEGER PRIMARY KEY,
+    violation_type TEXT UNIQUE,
+    violation_type_1 TEXT,
+    violation_info TEXT
+  );
+  INSERT INTO t VALUES(1, 'a', 't1_a', 'info_a'), (2, 'b', 't1_b', 'info_b');
+  SELECT dolt_commit('-Am', 'base');
+  SELECT dolt_checkout('-b', 'side');
+  UPDATE t SET violation_type = 'dup', violation_type_1 = 'side_1', violation_info = 'side_info' WHERE id = 2;
+  SELECT dolt_commit('-Am', 'side');
+  SELECT dolt_checkout('main');
+  UPDATE t SET violation_type = 'dup', violation_type_1 = 'main_1', violation_info = 'main_info' WHERE id = 1;
+  SELECT dolt_commit('-Am', 'main');
+}
+execsql BEGIN
+do_test cv-col-collision-merge {
+  set r [catchsql {SELECT dolt_merge('side')}]
+  list [lindex $r 0] [string match {*constraint violations*} [lindex $r 1]]
+} {1 1}
+do_execsql_test cv-col-collision-schema {
+  SELECT name FROM pragma_table_info('dolt_constraint_violations_t') ORDER BY cid;
+} {violation_type id violation_type_2 violation_type_1 violation_info_1 violation_info}
+do_execsql_test cv-col-collision-select {
+  SELECT
+    violation_type,
+    id,
+    violation_type_2,
+    violation_type_1,
+    violation_info_1,
+    json_valid(violation_info)
+  FROM dolt_constraint_violations_t
+  ORDER BY id;
+} {
+  {unique index} 1 dup main_1 main_info 1
+  {unique index} 2 dup side_1 side_info 1
+}
+do_execsql_test cv-col-collision-delete {
+  DELETE FROM dolt_constraint_violations_t WHERE id = 1;
+  SELECT id, violation_type_2, violation_info_1 FROM dolt_constraint_violations_t;
+  DELETE FROM dolt_constraint_violations_t;
+  SELECT count(*) FROM dolt_constraint_violations_t;
+} {2 dup side_info 0}
+execsql ROLLBACK
+
+# 7. Mixed-case user columns colliding with violation_type / violation_info
+reset_db
+execsql {
+  CREATE TABLE t(
+    id INTEGER PRIMARY KEY,
+    VIOLATION_TYPE INT,
+    Violation_Info INT,
+    CHECK(VIOLATION_TYPE <= Violation_Info)
+  );
+  INSERT INTO t VALUES(1, 1, 5);
+  SELECT dolt_commit('-Am', 'base');
+  SELECT dolt_checkout('-b', 'side');
+  UPDATE t SET VIOLATION_TYPE = 4 WHERE id = 1;
+  SELECT dolt_commit('-Am', 'side');
+  SELECT dolt_checkout('main');
+  UPDATE t SET Violation_Info = 2 WHERE id = 1;
+  SELECT dolt_commit('-Am', 'main');
+}
+execsql BEGIN
+do_test cv-col-collision-case-merge {
+  set r [catchsql {SELECT dolt_merge('side')}]
+  list [lindex $r 0] [string match {*constraint violations*} [lindex $r 1]]
+} {1 1}
+do_execsql_test cv-col-collision-case-schema {
+  SELECT name FROM pragma_table_info('dolt_constraint_violations_t') ORDER BY cid;
+} {violation_type id VIOLATION_TYPE_1 Violation_Info_1 violation_info}
+do_execsql_test cv-col-collision-case-select-and-delete {
+  SELECT
+    violation_type,
+    id,
+    VIOLATION_TYPE_1,
+    Violation_Info_1,
+    json_valid(violation_info)
+  FROM dolt_constraint_violations_t;
+  DELETE FROM dolt_constraint_violations_t;
+  SELECT count(*) FROM dolt_constraint_violations_t;
+} {{check constraint} 1 4 2 1 0}
+execsql ROLLBACK
+
 finish_test

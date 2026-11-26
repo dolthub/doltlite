@@ -612,13 +612,18 @@ struct CvRowCur {
 };
 
 static char *cvrBuildSchema(const DoltliteColInfo *ci){
+  static const char *const azReserved[] = {
+    "violation_type", "violation_info"
+  };
   sqlite3_str *pStr = sqlite3_str_new(0);
   char *z;
   if( !pStr ) return 0;
   sqlite3_str_appendall(pStr, "CREATE TABLE x(violation_type TEXT");
   if( ci->nCol>0 ){
     sqlite3_str_appendall(pStr, ", ");
-    if( doltliteAppendQuotedColumnList(pStr, ci->azName, ci->nCol, 0, 0)!=SQLITE_OK ){
+    if( doltliteAppendDisambiguatedColumnList(
+            pStr, ci->azName, ci->nCol, "", ", ",
+            azReserved, ArraySize(azReserved), -1, 0)!=SQLITE_OK ){
       sqlite3_free(sqlite3_str_finish(pStr));
       return 0;
     }
