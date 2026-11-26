@@ -3399,8 +3399,15 @@ static int hardReset(sqlite3 *db, const ProllyHash *catHash, int persist){
   }
   if( rc!=SQLITE_OK ){
     btreeFreeCatalogTables(pBtree);
-    if( oldCatData ){
-      (void)deserializeCatalog(pBtree, oldCatData, nOldCatData);
+    if( oldCatData
+     && deserializeCatalog(pBtree, oldCatData, nOldCatData)!=SQLITE_OK ){
+      btreeFreeCatalogTables(pBtree);
+      memset(&pBtree->committedCatalogHash, 0,
+             sizeof(pBtree->committedCatalogHash));
+      pBtree->bCatalogDropped = 1;
+      pBtree->bForceCatalogReload = 1;
+      pBtree->iLoadedWorkingStateVersion = pBt->iWorkingStateVersion - 1;
+      resetConnectionSchema(pBtree);
     }
     sqlite3_free(oldCatData);
     pBtree->vc.stagedCatalog = oldStagedCatalog;
@@ -3413,13 +3420,7 @@ static int hardReset(sqlite3 *db, const ProllyHash *catHash, int persist){
   if( !bKeepCatalog ){
     pBtree->bMasterRootChangedTxn = 1;
     btreeBumpLocalDataVersion(pBtree);
-
-    if( pBtree->db ){
-      sqlite3ExpirePreparedStatements(pBtree->db, 0);
-      sqlite3ResetAllSchemasOfConnection(pBtree->db);
-    }else{
-      invalidateSchema(pBtree);
-    }
+    resetConnectionSchema(pBtree);
   }
 
   memcpy(&pBtree->vc.stagedCatalog, catHash, sizeof(ProllyHash));
@@ -3450,24 +3451,20 @@ static int hardReset(sqlite3 *db, const ProllyHash *catHash, int persist){
   }
   if( rc!=SQLITE_OK ){
     btreeFreeCatalogTables(pBtree);
-    if( oldCatData ){
-      int rc2 = deserializeCatalog(pBtree, oldCatData, nOldCatData);
-      if( rc2!=SQLITE_OK ){
-        sqlite3_free(oldCatData);
-        chunkStoreRollback(cs);
-        return rc;
-      }
+    if( oldCatData
+     && deserializeCatalog(pBtree, oldCatData, nOldCatData)!=SQLITE_OK ){
+      btreeFreeCatalogTables(pBtree);
+      memset(&pBtree->committedCatalogHash, 0,
+             sizeof(pBtree->committedCatalogHash));
+      pBtree->bCatalogDropped = 1;
+      pBtree->bForceCatalogReload = 1;
+      pBtree->iLoadedWorkingStateVersion = pBt->iWorkingStateVersion - 1;
     }
     pBtree->vc.stagedCatalog = oldStagedCatalog;
     pBtree->vc.isMerging = oldIsMerging;
     pBtree->vc.mergeCommitHash = oldMergeCommitHash;
     pBtree->vc.conflictsCatalogHash = oldConflictsCatalogHash;
-    if( pBtree->db ){
-      sqlite3ExpirePreparedStatements(pBtree->db, 0);
-      sqlite3ResetAllSchemasOfConnection(pBtree->db);
-    }else{
-      invalidateSchema(pBtree);
-    }
+    resetConnectionSchema(pBtree);
     btreeBumpLocalDataVersion(pBtree);
     chunkStoreRollback(cs);
     sqlite3_free(oldCatData);
