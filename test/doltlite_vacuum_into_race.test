@@ -144,6 +144,63 @@ do_test doltlite_vacuum_into_race-2.3 {
 } {7}
 ex2 close
 
+# Reset-database VACUUM must roll back its write transaction and release the
+# exclusive graph lock when commit fails with SQLITE_BUSY.
+forcedelete vir_reset.db .vir_reset.db-lock
+testvfs resetbusyvfs
+resetbusyvfs filter xLock
+set ::vir_reset_busy 0
+proc vir_reset_busy_lock {method file level} {
+  if {$::vir_reset_busy && [string match *vir_reset.db $file] && $level==4} {
+    return SQLITE_BUSY
+  }
+  return SQLITE_OK
+}
+resetbusyvfs script vir_reset_busy_lock
+sqlite3 db vir_reset.db -vfs resetbusyvfs
+db eval {
+  CREATE TABLE t1(id INT PRIMARY KEY, v TEXT);
+  INSERT INTO t1 VALUES(1, 'keep');
+  SELECT dolt_commit('-Am', 'init');
+}
+sqlite3 peer vir_reset.db
+
+set ::vir_reset_busy 1
+do_test doltlite_vacuum_into_race-4.0 {
+  sqlite3_db_config db RESET_DB 1
+  set rc [catch {db eval {VACUUM}} msg]
+  sqlite3_db_config db RESET_DB 0
+  list $rc [db errorcode] $msg
+} {1 5 {database is locked}}
+set ::vir_reset_busy 0
+
+do_test doltlite_vacuum_into_race-4.1 {
+  list [db eval {SELECT id, v FROM t1}] [peer eval {SELECT id, v FROM t1}]
+} {{1 keep} {1 keep}}
+
+do_test doltlite_vacuum_into_race-4.2 {
+  peer eval {INSERT INTO t1 VALUES(2, 'from_peer')}
+  peer eval {SELECT id, v FROM t1 ORDER BY id}
+} {1 keep 2 from_peer}
+
+do_test doltlite_vacuum_into_race-4.3 {
+  db eval {INSERT INTO t1 VALUES(3, 'from_db')}
+  db eval {SELECT id, v FROM t1 ORDER BY id}
+} {1 keep 2 from_peer 3 from_db}
+
+do_test doltlite_vacuum_into_race-4.4 {
+  sqlite3_db_config db RESET_DB 1
+  db eval {VACUUM}
+  sqlite3_db_config db RESET_DB 0
+  list [db eval {SELECT count(*) FROM sqlite_master}] \
+       [peer eval {SELECT count(*) FROM sqlite_master}]
+} {0 0}
+
+peer close
+db close
+resetbusyvfs delete
+forcedelete vir_reset.db .vir_reset.db-lock
+
 forcedelete vir_source.db vir_target.db vir_plain.db vir_busy.db
 forcedelete .vir_source.db-lock .vir_target.db-lock
 forcedelete .vir_plain.db-lock .vir_busy.db-lock

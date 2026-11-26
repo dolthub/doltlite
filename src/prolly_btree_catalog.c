@@ -3515,11 +3515,7 @@ int doltliteVacuumResetCurrentBranch(sqlite3 *db, int iDb, char **pzErrMsg){
   Btree *p;
   struct TableEntry *pMaster;
   Pgno *aDrop = 0;
-  int nDrop = 0;
-  int nCat;
-  int i;
-  int iMoved = 0;
-  int rc;
+  int nDrop = 0, nCat, i, iMoved = 0, rc;
   u32 cacheSize = 0;
 
   if( !db || iDb<0 || iDb>=db->nDb || !db->aDb[iDb].pBt ){
@@ -3586,6 +3582,9 @@ int doltliteVacuumResetCurrentBranch(sqlite3 *db, int iDb, char **pzErrMsg){
   }
 
   rc = sqlite3BtreeCommit(p);
+  if( rc!=SQLITE_OK && p->inTrans==TRANS_WRITE ){
+    sqlite3BtreeRollback(p, rc, 1);
+  }
   sqlite3ExpirePreparedStatements(db, 0);
   sqlite3ResetAllSchemasOfConnection(db);
   if( rc!=SQLITE_OK ){
