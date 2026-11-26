@@ -9,6 +9,63 @@
 void sqlite3_free(void*);
 extern int sqlite3_alloc_stub_fail_after;
 extern int sqlite3_alloc_stub_live;
+extern void (*sqlite3_alloc_stub_on_alloc)(void *p, int n);
+extern void (*sqlite3_alloc_stub_on_free)(const void *p);
+
+static int watch_target_len = -1;
+static const void *watch_ptr = NULL;
+static int watch_saw_alloc = 0;
+static int watch_saw_free = 0;
+static int watch_all_zero = 1;
+
+static void watchOnAlloc(void *p, int n) {
+  if (n == watch_target_len && watch_ptr == NULL) {
+    memset(p, 0xAA, (size_t)n);
+    watch_ptr = p;
+    watch_saw_alloc = 1;
+  }
+}
+
+static void watchOnFree(const void *p) {
+  if (p && p == watch_ptr) {
+    const unsigned char *b = (const unsigned char *)p;
+    int i;
+    watch_saw_free = 1;
+    for (i = 0; i < watch_target_len; i++) {
+      if (b[i] != 0) {
+        watch_all_zero = 0;
+        break;
+      }
+    }
+    watch_ptr = NULL;
+  }
+}
+
+static void watchArm(int targetLen) {
+  watch_target_len = targetLen;
+  watch_ptr = NULL;
+  watch_saw_alloc = 0;
+  watch_saw_free = 0;
+  watch_all_zero = 1;
+  sqlite3_alloc_stub_on_alloc = watchOnAlloc;
+  sqlite3_alloc_stub_on_free = watchOnFree;
+}
+
+static void watchDisarm(void) {
+  sqlite3_alloc_stub_on_alloc = NULL;
+  sqlite3_alloc_stub_on_free = NULL;
+  watch_target_len = -1;
+  watch_ptr = NULL;
+}
+
+static int writeBytes(const char *path, const void *data, size_t len) {
+  FILE *f = fopen(path, "wb");
+  int ok;
+  if (!f) return 0;
+  ok = (len == 0 || fwrite(data, 1, len, f) == len);
+  if (fclose(f) != 0) ok = 0;
+  return ok;
+}
 
 static int failures = 0;
 
@@ -333,6 +390,100 @@ int main(int argc, char **argv) {
       printf("  PASS  creds save/load by kid\n");
     }
     doltliteCredsFree(loaded);
+    sqlite3_free(kid);
+  }
+
+  {
+    const char *dir = (argc > 1) ? argv[1] : NULL;
+    char *kid = doltliteCredsKid(c);
+    char *jwk = doltliteCredsToJwk(c);
+    char *jwkPath = (char *)malloc(strlen(dir) + 1 + strlen(kid) + 5);
+    size_t jwkPathLen = strlen(dir) + 1 + strlen(kid) + 5;
+    DoltliteCreds *loaded = NULL;
+    unsigned char loadedPub[32], loadedSeed[32];
+    unsigned char buf[512];
+    size_t jwkLen = jwk ? strlen(jwk) : 0;
+
+    snprintf(jwkPath, jwkPathLen, "%s/%s.jwk", dir, kid);
+
+    memset(buf, 'X', sizeof(buf));
+    buf[0] = '\0';
+    if (jwk && jwkLen + 1 < sizeof(buf)) {
+      memcpy(buf + 1, jwk, jwkLen);
+    }
+    check_bool("write leading-NUL creds file",
+               writeBytes(jwkPath, buf, sizeof(buf)));
+    watchArm((int)sizeof(buf) + 1);
+    check_bool("creds load rejects leading-NUL file",
+               doltliteCredsLoad(dir, kid, &loaded) != 0 && loaded == NULL);
+    watchDisarm();
+    check_bool("creds load wipes full buffer on leading-NUL file",
+               watch_saw_alloc && watch_saw_free && watch_all_zero);
+
+    memset(buf, 'S', sizeof(buf));
+    if (jwk && jwkLen + 1 < sizeof(buf)) {
+      memcpy(buf, jwk, jwkLen);
+      buf[jwkLen] = '\0';
+    }
+    check_bool("write trailing-NUL creds file",
+               writeBytes(jwkPath, buf, sizeof(buf)));
+    watchArm((int)sizeof(buf) + 1);
+    check_bool("creds load rejects embedded-NUL file",
+               doltliteCredsLoad(dir, kid, &loaded) != 0 && loaded == NULL);
+    watchDisarm();
+    check_bool("creds load wipes bytes after embedded NUL",
+               watch_saw_alloc && watch_saw_free && watch_all_zero);
+    check_bool("creds import rejects embedded-NUL file",
+               doltliteCredsImport(jwkPath, &loaded) != 0 && loaded == NULL);
+
+    check_bool("write empty creds file", writeBytes(jwkPath, "", 0));
+    watchArm(1);
+    check_bool("creds load rejects empty file",
+               doltliteCredsLoad(dir, kid, &loaded) != 0 && loaded == NULL);
+    watchDisarm();
+    check_bool("creds load wipes buffer on empty file",
+               watch_saw_alloc && watch_saw_free && watch_all_zero);
+
+    {
+      const char *trunc = "{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"d\":\"AA";
+      size_t tlen = strlen(trunc);
+      check_bool("write truncated creds file",
+                 writeBytes(jwkPath, trunc, tlen));
+      watchArm((int)tlen + 1);
+      check_bool("creds load rejects truncated file",
+                 doltliteCredsLoad(dir, kid, &loaded) != 0 && loaded == NULL);
+      watchDisarm();
+      check_bool("creds load wipes full buffer on truncated file",
+                 watch_saw_alloc && watch_saw_free && watch_all_zero);
+    }
+
+    remove(jwkPath);
+    check_bool("creds load rejects missing file",
+               doltliteCredsLoad(dir, kid, &loaded) != 0 && loaded == NULL);
+
+    memset(buf, ' ', sizeof(buf));
+    if (jwk && jwkLen <= sizeof(buf)) {
+      memcpy(buf, jwk, jwkLen);
+    }
+    check_bool("write valid padded creds file",
+               writeBytes(jwkPath, buf, sizeof(buf)));
+    watchArm((int)sizeof(buf) + 1);
+    check_bool("creds load succeeds on valid file",
+               doltliteCredsLoad(dir, kid, &loaded) == 0 && loaded != NULL);
+    watchDisarm();
+    check_bool("creds load wipes full buffer on valid load",
+               watch_saw_alloc && watch_saw_free && watch_all_zero);
+    check_bool("creds load round-trip matches pubkey and seed",
+               loaded != NULL &&
+               jwkBytes(loaded, "x", loadedPub) &&
+               memcmp(pub, loadedPub, 32) == 0 &&
+               jwkBytes(loaded, "d", loadedSeed) &&
+               memcmp(jwkSeed, loadedSeed, 32) == 0);
+    doltliteCredsFree(loaded);
+
+    check_bool("restore saved creds file", doltliteCredsSave(c, dir) == 0);
+    free(jwkPath);
+    sqlite3_free(jwk);
     sqlite3_free(kid);
   }
 

@@ -7,6 +7,8 @@
 
 int sqlite3_alloc_stub_fail_after = -1;
 int sqlite3_alloc_stub_live = 0;
+void (*sqlite3_alloc_stub_on_alloc)(void *p, int n) = 0;
+void (*sqlite3_alloc_stub_on_free)(const void *p) = 0;
 
 void *sqlite3_malloc(int n){
   void *p;
@@ -19,7 +21,10 @@ void *sqlite3_malloc(int n){
     sqlite3_alloc_stub_fail_after--;
   }
   p = malloc((size_t)n);
-  if( p ) sqlite3_alloc_stub_live++;
+  if( p ){
+    sqlite3_alloc_stub_live++;
+    if( sqlite3_alloc_stub_on_alloc ) sqlite3_alloc_stub_on_alloc(p, n);
+  }
   return p;
 }
 
@@ -46,6 +51,7 @@ void *sqlite3_realloc(void *p, int n){
 
 void sqlite3_free(void *p){
   if( p ){
+    if( sqlite3_alloc_stub_on_free ) sqlite3_alloc_stub_on_free(p);
     free(p);
     sqlite3_alloc_stub_live--;
   }
