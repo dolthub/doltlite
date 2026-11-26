@@ -1,0 +1,185 @@
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+
+# 1. dolt_merge rejected during interactive rebase (plan phase and edit pause).
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO t VALUES(1, 'base');
+  SELECT dolt_commit('-Am', 'base');
+  SELECT dolt_checkout('-b', 'other');
+  INSERT INTO t VALUES(3, 'other');
+  SELECT dolt_commit('-am', 'other');
+  SELECT dolt_checkout('-b', 'feat', 'main');
+  INSERT INTO t VALUES(2, 'feat');
+  SELECT dolt_commit('-am', 'feat');
+  SELECT dolt_checkout('main');
+  INSERT INTO t VALUES(4, 'main');
+  SELECT dolt_commit('-am', 'main');
+  SELECT dolt_checkout('feat');
+  SELECT dolt_rebase('-i', 'main');
+}
+do_catchsql_test merge-guard-rebase-plan-other {
+  SELECT dolt_merge('other');
+} {1 {cannot merge while a rebase is in progress}}
+do_catchsql_test merge-guard-rebase-plan-head {
+  SELECT dolt_merge('HEAD');
+} {1 {cannot merge while a rebase is in progress}}
+do_execsql_test merge-guard-rebase-plan-edit {
+  SELECT active_branch();
+  UPDATE dolt_rebase SET action = 'edit' WHERE commit_message = 'feat';
+  SELECT dolt_rebase('--continue') LIKE '%edit action paused%';
+} {dolt_rebase_feat 1}
+do_catchsql_test merge-guard-rebase-edit-other {
+  SELECT dolt_merge('other');
+} {1 {cannot merge while a rebase is in progress}}
+do_execsql_test merge-guard-rebase-finish {
+  SELECT dolt_rebase('--continue');
+  SELECT active_branch();
+  SELECT id, v FROM t ORDER BY id;
+} {{Successfully rebased and updated refs/heads/feat} feat 1 base 2 feat 4 main}
+
+# 2a. dolt_merge rejected during a clean --no-commit merge (empty diff).
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO t VALUES(1, 'a');
+  SELECT dolt_commit('-Am', 'init');
+  SELECT dolt_checkout('-b', 'empty_side');
+  SELECT dolt_commit('--allow-empty', '-m', 'empty');
+  SELECT dolt_checkout('main');
+  SELECT dolt_checkout('-b', 'other');
+  INSERT INTO t VALUES(2, 'other');
+  SELECT dolt_commit('-am', 'other');
+  SELECT dolt_checkout('main');
+  SELECT dolt_merge('--no-ff', '--no-commit', 'empty_side');
+}
+do_execsql_test merge-guard-clean-nocommit-pre {
+  SELECT count(*) FROM dolt_status;
+  SELECT is_merging, source FROM dolt_merge_status;
+} {0 1 empty_side}
+do_catchsql_test merge-guard-clean-nocommit-other {
+  SELECT dolt_merge('other');
+} {1 {cannot merge while a merge is in progress}}
+do_catchsql_test merge-guard-clean-nocommit-head {
+  SELECT dolt_merge('HEAD');
+} {1 {cannot merge while a merge is in progress}}
+do_execsql_test merge-guard-clean-nocommit-preserved {
+  SELECT is_merging, source FROM dolt_merge_status;
+  SELECT dolt_commit('-m', 'finish empty merge') IS NOT NULL;
+  SELECT is_merging FROM dolt_merge_status;
+  SELECT count(*) FROM dolt_commit_ancestors
+   WHERE commit_hash = dolt_hashof('HEAD')
+     AND parent_hash IN (dolt_hashof('empty_side'), dolt_hashof('main~1'));
+} {1 empty_side 1 0 2}
+
+# 2b. dolt_merge rejected during a clean active merge after --ours resolution.
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO t VALUES(1, 'base');
+  SELECT dolt_commit('-Am', 'init');
+  SELECT dolt_checkout('-b', 'side');
+  UPDATE t SET v = 'side' WHERE id = 1;
+  SELECT dolt_commit('-am', 'side');
+  SELECT dolt_checkout('main');
+  SELECT dolt_checkout('-b', 'other');
+  INSERT INTO t VALUES(2, 'other');
+  SELECT dolt_commit('-am', 'other');
+  SELECT dolt_checkout('main');
+  UPDATE t SET v = 'main' WHERE id = 1;
+  SELECT dolt_commit('-am', 'main');
+  BEGIN;
+}
+catchsql {SELECT dolt_merge('side')}
+do_execsql_test merge-guard-ours-resolve {
+  SELECT dolt_conflicts_resolve('--ours', 't');
+  SELECT count(*) FROM dolt_conflicts;
+  SELECT count(*) FROM dolt_status;
+  SELECT is_merging, source FROM dolt_merge_status;
+} {0 0 0 1 side}
+do_catchsql_test merge-guard-ours-other {
+  SELECT dolt_merge('other');
+} {1 {cannot merge while a merge is in progress}}
+do_execsql_test merge-guard-ours-commit {
+  SELECT is_merging, source FROM dolt_merge_status;
+  SELECT dolt_commit('-m', 'finish ours merge') IS NOT NULL;
+  COMMIT;
+  SELECT is_merging FROM dolt_merge_status;
+  SELECT id, v FROM t ORDER BY id;
+  SELECT count(*) FROM dolt_commit_ancestors
+   WHERE commit_hash = dolt_hashof('HEAD')
+     AND parent_hash IN (dolt_hashof('side'), dolt_hashof('main~1'));
+} {1 side 1 0 1 main 2}
+
+# 3a. dolt_merge rejected during a pending cherry-pick (conflicted and after --ours).
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO t VALUES(1, 'base');
+  SELECT dolt_commit('-Am', 'init');
+  SELECT dolt_checkout('-b', 'picksrc');
+  UPDATE t SET v = 'pick' WHERE id = 1;
+  SELECT dolt_commit('-am', 'picksrc');
+  SELECT dolt_checkout('main');
+  SELECT dolt_checkout('-b', 'other');
+  INSERT INTO t VALUES(2, 'other');
+  SELECT dolt_commit('-am', 'other');
+  SELECT dolt_checkout('main');
+  UPDATE t SET v = 'main' WHERE id = 1;
+  SELECT dolt_commit('-am', 'main');
+  BEGIN;
+}
+catchsql {SELECT dolt_cherry_pick('picksrc')}
+do_catchsql_test merge-guard-cherry-pick-conflicted {
+  SELECT dolt_merge('other');
+} {1 {a replay is already in progress}}
+do_execsql_test merge-guard-cherry-pick-ours {
+  SELECT dolt_conflicts_resolve('--ours', 't');
+  SELECT count(*) FROM dolt_conflicts;
+  SELECT count(*) FROM dolt_status;
+} {0 0 0}
+do_catchsql_test merge-guard-cherry-pick-clean-pending {
+  SELECT dolt_merge('other');
+} {1 {a replay is already in progress}}
+do_execsql_test merge-guard-cherry-pick-abort {
+  SELECT dolt_cherry_pick('--abort');
+  COMMIT;
+  SELECT id, v FROM t ORDER BY id;
+} {0 1 main}
+
+# 3b. dolt_merge rejected during a pending revert (conflicted and after --ours).
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+  INSERT INTO t VALUES(1, 'v1');
+  SELECT dolt_commit('-Am', 'c1');
+  SELECT dolt_checkout('-b', 'other');
+  INSERT INTO t VALUES(2, 'other');
+  SELECT dolt_commit('-am', 'other');
+  SELECT dolt_checkout('main');
+  UPDATE t SET v = 'v2' WHERE id = 1;
+  SELECT dolt_commit('-am', 'c2');
+  UPDATE t SET v = 'v3' WHERE id = 1;
+  SELECT dolt_commit('-am', 'c3');
+  BEGIN;
+}
+catchsql {SELECT dolt_revert('HEAD~1')}
+do_catchsql_test merge-guard-revert-conflicted {
+  SELECT dolt_merge('other');
+} {1 {a replay is already in progress}}
+do_execsql_test merge-guard-revert-ours {
+  SELECT dolt_conflicts_resolve('--ours', 't');
+  SELECT count(*) FROM dolt_conflicts;
+  SELECT count(*) FROM dolt_status;
+} {0 0 0}
+do_catchsql_test merge-guard-revert-clean-pending {
+  SELECT dolt_merge('other');
+} {1 {a replay is already in progress}}
+do_execsql_test merge-guard-revert-abort {
+  SELECT dolt_revert('--abort');
+  COMMIT;
+  SELECT id, v FROM t ORDER BY id;
+} {0 1 v3}
+
+finish_test
