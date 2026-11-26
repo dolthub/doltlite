@@ -1,5 +1,6 @@
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
 set testprefix doltlite-checkout-dot-view-trigger
 
 # Restoring views and triggers drops each one, then recreates them.
@@ -153,5 +154,99 @@ do_test 2.5-temp-shadow-index-name-holder {
     [db eval {SELECT count(*) FROM dolt_status}] \
     [db eval {PRAGMA integrity_check}]
 } {0 {index ix} temp_ix 0 ok}
+
+# Non-constant argument expression for dolt_checkout('.') and missing table errors.
+do_test 3.1-nonconst-dot-and-missing {
+  reset_db
+  db eval {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT);
+    CREATE TABLE u(id INTEGER PRIMARY KEY, b TEXT);
+    INSERT INTO t VALUES(1,'orig');
+    INSERT INTO u VALUES(1,'keep');
+    SELECT dolt_commit('-Am','base');
+    DROP TABLE u;
+    SELECT dolt_add('u');
+    UPDATE t SET a='dirty' WHERE id=1;
+  }
+  list \
+    [catchsql {SELECT dolt_checkout(col) FROM (SELECT 'no_such_table' AS col)}] \
+    [catchsql {SELECT dolt_checkout('t', col) FROM (SELECT 'no_such_table' AS col)}] \
+    [catchsql {SELECT dolt_checkout('main', col) FROM (SELECT 'no_such_table' AS col)}] \
+    [db eval {SELECT dolt_checkout(col) FROM (SELECT '.' AS col)}] \
+    [db eval {SELECT id, a FROM t ORDER BY id}] \
+    [db eval {SELECT id, b FROM u ORDER BY id}] \
+    [db eval {PRAGMA integrity_check}]
+} [list \
+    {1 {no such branch or table: no_such_table}} \
+    {1 {no such branch or table: no_such_table}} \
+    {1 {no such branch or table: no_such_table}} \
+    0 {1 orig} {1 keep} ok]
+
+# OOM fault injection on dolt_checkout('.') (constant and non-constant arg)
+# and missing-table checkout paths.
+reset_db
+db eval {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT);
+  CREATE TABLE u(id INTEGER PRIMARY KEY, b TEXT);
+  INSERT INTO t VALUES(1,'orig');
+  INSERT INTO u VALUES(1,'keep');
+  SELECT dolt_commit('-Am','base');
+  DROP TABLE u;
+  SELECT dolt_add('u');
+  UPDATE t SET a='dirty' WHERE id=1;
+}
+faultsim_save_and_close
+
+do_faultsim_test 3.2-oom-checkout-dot -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  execsql {SELECT dolt_checkout('.')}
+} -test {
+  faultsim_test_result {0 0} {1 {out of memory}} {1 {disk I/O error}} \
+      {1 {failed to snapshot current branch state}} {1 {checkout failed}}
+  faultsim_integrity_check
+}
+
+do_faultsim_test 3.3-oom-checkout-dot-nonconst -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  execsql {SELECT dolt_checkout(col) FROM (SELECT '.' AS col)}
+} -test {
+  faultsim_test_result {0 0} {1 {out of memory}} {1 {disk I/O error}} \
+      {1 {failed to snapshot current branch state}} {1 {checkout failed}}
+  faultsim_integrity_check
+}
+
+do_faultsim_test 3.4-oom-checkout-missing -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  execsql {SELECT dolt_checkout('t', 'no_such_table')}
+} -test {
+  faultsim_test_result {1 {no such branch or table: no_such_table}} \
+      {1 {no such branch or table}} {1 {out of memory}} {1 {disk I/O error}}
+  faultsim_integrity_check
+}
+
+do_faultsim_test 3.5-oom-checkout-ref-missing -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  execsql {SELECT dolt_checkout('main', 'no_such_table')}
+} -test {
+  faultsim_test_result {1 {no such branch or table: no_such_table}} \
+      {1 {no such branch or table: main}} {1 {no such branch or table}} \
+      {1 {out of memory}} {1 {disk I/O error}}
+  faultsim_integrity_check
+}
+
+do_faultsim_test 3.6-oom-checkout-nonconst-missing -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  execsql {SELECT dolt_checkout(col) FROM (SELECT 'no_such_table' AS col)}
+} -test {
+  faultsim_test_result {1 {no such branch or table: no_such_table}} \
+      {1 {no such branch or table}} {1 {out of memory}} {1 {disk I/O error}} \
+      {1 {failed to snapshot current branch state}} {1 {checkout failed}}
+  faultsim_integrity_check
+}
 
 finish_test

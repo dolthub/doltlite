@@ -1706,7 +1706,7 @@ int doltliteStageNamedTables(
 int doltliteCheckoutTables(
   sqlite3 *db, sqlite3_context *context, const char *zSourceRef,
   sqlite3_value **argv, int iFirstName, int nNames,
-  const char **pzMissing, int bSourceHead, int bDropIfAbsent
+  char **pzMissing, int bSourceHead, int bDropIfAbsent
 );
 int doltliteSuspendForeignKeys(sqlite3 *db, int *pWasOn);
 int doltliteResumeForeignKeys(sqlite3 *db, int wasOn, int rc);
@@ -1718,7 +1718,7 @@ int doltliteCheckoutRebuildTable(sqlite3 *db, const char *zName,
                                  int hasCurrent, const char *zSourceSql);
 int doltliteCheckoutDot(
   sqlite3 *db, sqlite3_context *context, const char *zSourceRef,
-  const char **pzMissing
+  char **pzMissing
 );
 int doltliteCheckoutIndexOwner(sqlite3*, const char*, const char*, int*);
 int doltliteCatalogRenameMate(
