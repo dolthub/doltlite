@@ -6,6 +6,7 @@
 #include "doltlite_ignore.h"
 #include "prolly_cursor.h"
 #include "doltlite_record.h"
+#include "sortkey.h"
 #include <string.h>
 
 typedef struct IgnoreMatch IgnoreMatch;
@@ -260,6 +261,39 @@ void doltliteIgnoreSetFree(DoltliteIgnoreSet *p){
   sqlite3_free(p);
 }
 
+static int ignoreBadSchema(char **pzErr){
+  if( pzErr ){
+    *pzErr = sqlite3_mprintf(
+        "dolt_ignore has an unexpected schema; expected: "
+        "CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, "
+        "ignored TINYINT NOT NULL, PRIMARY KEY(pattern))");
+    if( !*pzErr ) return SQLITE_NOMEM;
+  }
+  return SQLITE_CONSTRAINT;
+}
+
+static int ignoreRecordIsOne(
+  const u8 *pRec,
+  int nRec,
+  const DoltliteRecordInfo *pInfo,
+  int iField
+){
+  int st, off;
+  if( iField>=pInfo->nField ) return 0;
+  st = pInfo->aType[iField];
+  if( st==7 ){
+    u64 bits = 0;
+    double d;
+    int i;
+    off = pInfo->aOffset[iField];
+    if( off<0 || off+8>nRec ) return 0;
+    for(i=0; i<8; i++) bits = (bits<<8) | pRec[off+i];
+    memcpy(&d, &bits, 8);
+    return d==1.0;
+  }
+  return dlRecordIntField(pRec, nRec, pInfo, iField)==1;
+}
+
 static int ignoreSetLoadLive(sqlite3 *db, DoltliteIgnoreSet *p, char **pzErr){
   sqlite3_stmt *pStmt = 0;
   int rc;
@@ -274,13 +308,7 @@ static int ignoreSetLoadLive(sqlite3 *db, DoltliteIgnoreSet *p, char **pzErr){
     return SQLITE_OK;
   }
   if( schemaState!=DOLTLITE_IGNORE_SCHEMA_OK ){
-    if( pzErr ){
-      *pzErr = sqlite3_mprintf(
-          "dolt_ignore has an unexpected schema; expected: "
-          "CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, "
-          "ignored TINYINT NOT NULL, PRIMARY KEY(pattern))");
-    }
-    return SQLITE_CONSTRAINT;
+    return ignoreBadSchema(pzErr);
   }
   rc = sqlite3_prepare_v2(db,
       "SELECT pattern, ignored=1 FROM main.dolt_ignore", -1, &pStmt, 0);
@@ -301,15 +329,61 @@ static int ignoreSetLoadLive(sqlite3 *db, DoltliteIgnoreSet *p, char **pzErr){
   return rc;
 }
 
+static int ignoreCatalogValidateSchema(
+  sqlite3 *db,
+  const ProllyHash *pCatalog,
+  DoltliteColInfo *pCi,
+  char **pzErr
+){
+  SchemaEntry entry;
+  sqlite3 *tmp = 0;
+  int found = 0;
+  int schemaState = DOLTLITE_IGNORE_SCHEMA_ABSENT;
+  int rc;
+
+  memset(&entry, 0, sizeof(entry));
+  rc = loadSchemaEntryFromCatalog(db, doltliteGetChunkStore(db),
+      doltliteGetCache(db), pCatalog, "dolt_ignore", &entry, &found);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !found || !entry.zSql ){
+    clearSchemaEntry(&entry);
+    return SQLITE_CORRUPT;
+  }
+  rc = sqlite3_open(":memory:", &tmp);
+  if( rc==SQLITE_OK ){
+    /* Bypass stock-SQLite dolt_* rejection on the scratch :memory: db. */
+    tmp->mDbFlags |= DBFLAG_DoltliteDump;
+    rc = sqlite3_exec(tmp, entry.zSql, 0, 0, 0);
+    if( rc!=SQLITE_OK ){
+      rc = (rc==SQLITE_NOMEM) ? SQLITE_NOMEM : ignoreBadSchema(pzErr);
+    }
+  }
+  if( rc==SQLITE_OK ){
+    rc = doltliteIgnoreSchemaState(tmp, &schemaState);
+    if( rc==SQLITE_OK && schemaState!=DOLTLITE_IGNORE_SCHEMA_OK ){
+      rc = ignoreBadSchema(pzErr);
+    }
+  }
+  if( rc==SQLITE_OK ){
+    rc = doltliteGetReaderColumnNames(tmp, "dolt_ignore", pCi);
+  }
+  if( tmp ) sqlite3_close(tmp);
+  clearSchemaEntry(&entry);
+  return rc;
+}
+
 static int ignoreSetLoadCatalog(
   sqlite3 *db,
   const ProllyHash *pCatalog,
-  DoltliteIgnoreSet *p
+  DoltliteIgnoreSet *p,
+  char **pzErr
 ){
   struct TableEntry *aTables = 0, *pTable;
+  DoltliteColInfo ci;
   ProllyCursor cur;
   int nTables = 0;
   int res = 0, rc;
+  memset(&ci, 0, sizeof(ci));
   rc = doltliteLoadCatalog(db, pCatalog, &aTables, &nTables, 0);
   if( rc!=SQLITE_OK ) return rc;
   pTable = doltliteFindTableByName(aTables, nTables, "dolt_ignore");
@@ -317,28 +391,63 @@ static int ignoreSetLoadCatalog(
     doltliteFreeCatalog(aTables, nTables);
     return SQLITE_OK;
   }
+  rc = ignoreCatalogValidateSchema(db, pCatalog, &ci, pzErr);
+  if( rc!=SQLITE_OK ){
+    doltliteFreeColInfo(&ci);
+    doltliteFreeCatalog(aTables, nTables);
+    return rc;
+  }
   prollyCursorInit(&cur, doltliteGetChunkStore(db), doltliteGetCache(db),
       &pTable->root, pTable->flags);
   rc = prollyCursorFirst(&cur, &res);
   while( rc==SQLITE_OK && !res && prollyCursorIsValid(&cur) ){
     const u8 *pVal = 0;
+    const u8 *pRec = 0;
+    u8 *pKeyRec = 0;
     int nVal = 0;
+    int nRec = 0;
     DoltliteRecordInfo info = {0};
     char *zPattern = 0;
     prollyCursorValue(&cur, &pVal, &nVal);
-    rc = doltliteParseRecordStrict(pVal, nVal, &info);
-    if( rc==SQLITE_OK && info.nField!=2 ) rc = SQLITE_CORRUPT;
-    if( rc==SQLITE_OK ) rc = dlRecordTextField(pVal, nVal, &info, 0, &zPattern);
-    if( rc==SQLITE_OK && !zPattern ) rc = SQLITE_CORRUPT;
+    if( (!pVal || nVal==0) && !(pTable->flags & PROLLY_NODE_INTKEY) ){
+      const u8 *pKey = 0;
+      int nKey = 0;
+      prollyCursorKey(&cur, &pKey, &nKey);
+      if( !pKey || nKey<=0 ){
+        rc = ignoreBadSchema(pzErr);
+      }else if( !ci.bHasRowid && ci.nPk>0 && ci.aPkSortFlags ){
+        rc = doltliteRecordFromClusteredKeyCols(db, &ci, pKey, nKey,
+            &pKeyRec, &nRec);
+      }else{
+        rc = recordFromSortKey(pKey, nKey, &pKeyRec, &nRec);
+      }
+      pRec = pKeyRec;
+    }else{
+      pRec = pVal;
+      nRec = nVal;
+    }
+    if( rc==SQLITE_OK ) rc = doltliteParseRecordStrict(pRec, nRec, &info);
+    if( rc==SQLITE_OK && info.nField!=2 ) rc = ignoreBadSchema(pzErr);
+    if( rc==SQLITE_OK ){
+      int st = info.aType[0];
+      if( st<13 || (st&1)==0 ){
+        rc = ignoreBadSchema(pzErr);
+      }else{
+        rc = dlRecordTextField(pRec, nRec, &info, 0, &zPattern);
+        if( rc==SQLITE_OK && !zPattern ) rc = ignoreBadSchema(pzErr);
+      }
+    }
     if( rc==SQLITE_OK ){
       rc = ignoreMatchAppend(&p->a, &p->n, &p->nAlloc, zPattern,
-          dlRecordIntField(pVal, nVal, &info, 1)==1);
+          ignoreRecordIsOne(pRec, nRec, &info, 1));
     }
     sqlite3_free(zPattern);
+    sqlite3_free(pKeyRec);
     doltliteRecordInfoClear(&info);
     if( rc==SQLITE_OK ) rc = prollyCursorNext(&cur);
   }
   prollyCursorClose(&cur);
+  doltliteFreeColInfo(&ci);
   doltliteFreeCatalog(aTables, nTables);
   return rc;
 }
@@ -356,7 +465,7 @@ int doltliteIgnoreSetLoad(
   p = sqlite3_malloc64(sizeof(*p));
   if( !p ) return SQLITE_NOMEM;
   memset(p, 0, sizeof(*p));
-  rc = pCatalog ? ignoreSetLoadCatalog(db, pCatalog, p)
+  rc = pCatalog ? ignoreSetLoadCatalog(db, pCatalog, p, pzErr)
                 : ignoreSetLoadLive(db, p, pzErr);
   if( rc!=SQLITE_OK ){
     doltliteIgnoreSetFree(p);
