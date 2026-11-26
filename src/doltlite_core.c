@@ -1416,13 +1416,44 @@ int doltliteDetectConstraintViolationsFiltered(
   int nStrict = 0;
   char *zDetectErrMsg = 0;
   int rc;
+  sqlite3_stmt *pStmt = 0;
   int needsDetection = 0;
   int bOwnBatch = 1;
 
   if( pzErr ) *pzErr = 0;
 
-  rc = schemaNeedsConstraintDetection(db, &needsDetection);
+  rc = sqlite3_prepare_v2(db,
+      "SELECT 1 "
+      "FROM main.sqlite_master "
+      "WHERE (type='table' AND substr(lower(name),1,7)!='sqlite_' "
+      "       AND substr(lower(name),1,5)!='dolt_' "
+      "       AND sql IS NOT NULL "
+      "       AND (instr(upper(sql), 'REFERENCES')>0 "
+      "            OR instr(upper(sql), 'CHECK')>0 "
+      "            OR instr(upper(sql), 'UNIQUE')>0 "
+      "            OR instr(upper(sql), 'NOT NULL')>0 "
+      "            OR instr(upper(sql), 'STRICT')>0)) "
+      "   OR (type='index' AND sql IS NOT NULL "
+      "       AND instr(upper(sql), 'CREATE UNIQUE INDEX')>0) "
+      "LIMIT 1",
+      -1, &pStmt, 0);
   if( rc!=SQLITE_OK ) return rc;
+  rc = sqlite3_step(pStmt);
+  if( rc==SQLITE_ROW ){
+    needsDetection = 1;
+    rc = SQLITE_OK;
+  }else if( rc==SQLITE_DONE ){
+    rc = SQLITE_OK;
+  }
+  {
+    int finalizeRc = sqlite3_finalize(pStmt);
+    if( rc==SQLITE_OK ) rc = finalizeRc;
+  }
+  if( rc!=SQLITE_OK ) return rc;
+  if( !needsDetection ){
+    rc = schemaNeedsConstraintDetection(db, &needsDetection);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   if( !needsDetection ){
     if( pnViolations ) *pnViolations = 0;
     return SQLITE_OK;
