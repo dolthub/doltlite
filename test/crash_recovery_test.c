@@ -2526,6 +2526,145 @@ static void test_36_large_sector_zero_tail_probe(void){
   }
 }
 
+static void test_37_sector_padded_torn_tail_nwaldata(void){
+  char zPath[512];
+  sqlite3 *db = 0;
+  sqlite3 *db2 = 0;
+  sqlite3 *db3 = 0;
+  sqlite3_vfs *pVfs = 0;
+  ChunkStore cs;
+  ChunkStore csRec;
+  i64 expectedNWalData = 0;
+  i64 expectedFileSize = 0;
+  i64 expectedNWalData2 = 0;
+  i64 expectedFileSize2 = 0;
+  u8 tornTail[48];
+  u8 rootTag = 0;
+  FILE *f = 0;
+  int changed = 0;
+  int rc;
+
+  printf("--- Test 37: sector-padded torn tail preserves root-end nWalData ---\n");
+  check("test_37: tracking vfs registered", duraRegister()==SQLITE_OK);
+  pVfs = sqlite3_vfs_find("dura-track");
+  check("test_37: find dura-track vfs", pVfs!=0);
+
+  snprintf(zPath, sizeof(zPath), "%s", fresh_db());
+  gDuraSectorSize = 4096;
+  gDuraDeviceCharOverride = 1;
+  gDuraDeviceChar = 0;
+
+  rc = sqlite3_open_v2(zPath, &db,
+                       SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+                       "dura-track");
+  check("test_37: open db", rc==SQLITE_OK);
+  check("test_37: initial commit", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES (1, 'c1');"
+    "SELECT dolt_commit('-Am', 'c1');")==SQLITE_OK);
+  sqlite3_close(db);
+  db = 0;
+
+  memset(&cs, 0, sizeof(cs));
+  rc = chunkStoreOpen(&cs, pVfs, zPath,
+                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
+  check("test_37: open chunk store", rc==SQLITE_OK);
+  expectedNWalData = cs.wal.nWalData;
+  expectedFileSize = cs.file.iFileSize;
+  check("test_37: have wal data", expectedNWalData >= 1 + CHUNK_MANIFEST_SIZE);
+  check("test_37: file size is sector padded past root end",
+        expectedFileSize > cs.wal.iWalOffset + expectedNWalData
+        && (expectedFileSize % 4096)==0);
+  chunkStoreClose(&cs);
+
+  memset(tornTail, 0x5a, sizeof(tornTail));
+  tornTail[0] = CS_WAL_TAG_CHUNK;
+  CS_WRITE_U32(tornTail + 1 + PROLLY_HASH_SIZE, 256);
+  f = fopen(zPath, "r+b");
+  check("test_37: fopen for torn tail", f!=0);
+  if( f ){
+    check("test_37: fseek to nextOff", fseek(f, (long)expectedFileSize, SEEK_SET)==0);
+    check("test_37: write torn tail", fwrite(tornTail, 1, sizeof(tornTail), f)==sizeof(tornTail));
+    fclose(f);
+    f = 0;
+  }
+
+  memset(&csRec, 0, sizeof(csRec));
+  rc = chunkStoreOpen(&csRec, pVfs, zPath,
+                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
+  check("test_37: reopen after torn tail", rc==SQLITE_OK);
+  check("test_37: not poisoned by torn tail", csRec.corruptMidStream==0);
+  check("test_37: nWalData points to root end not padded nextOff",
+        csRec.wal.nWalData==expectedNWalData);
+  check("test_37: iFileSize preserves sector-padded nextOff",
+        csRec.file.iFileSize==expectedFileSize);
+  rc = sqlite3OsRead(csRec.file.pFile, &rootTag, 1,
+                     csRec.wal.iWalOffset + csRec.wal.nWalData - (1 + CHUNK_MANIFEST_SIZE));
+  check("test_37: root tag at nWalData boundary", rc==SQLITE_OK && rootTag==CS_WAL_TAG_ROOT);
+
+  rc = sqlite3_open_v2(zPath, &db2, SQLITE_OPEN_READWRITE, "dura-track");
+  check("test_37: open db2 after torn tail", rc==SQLITE_OK);
+  check("test_37: db2 sees row 1", queryScalarInt(db2, "SELECT count(*) FROM t", -1)==1);
+  check("test_37: db2 commits after torn tail", execSql(db2,
+    "INSERT INTO t VALUES (2, 'c2');"
+    "SELECT dolt_commit('-am', 'c2');")==SQLITE_OK);
+
+  changed = 0;
+  rc = chunkStoreRefreshIfChanged(&csRec, &changed);
+  check("test_37: incremental refresh after commit succeeds", rc==SQLITE_OK);
+  check("test_37: incremental refresh reports change", changed==1);
+  check("test_37: refreshed nWalData advanced", csRec.wal.nWalData > expectedNWalData);
+  check("test_37: refreshed iFileSize sector padded past root end",
+        csRec.file.iFileSize > csRec.wal.iWalOffset + csRec.wal.nWalData
+        && (csRec.file.iFileSize % 4096)==0);
+  rootTag = 0;
+  rc = sqlite3OsRead(csRec.file.pFile, &rootTag, 1,
+                     csRec.wal.iWalOffset + csRec.wal.nWalData - (1 + CHUNK_MANIFEST_SIZE));
+  check("test_37: refreshed root tag at nWalData boundary",
+        rc==SQLITE_OK && rootTag==CS_WAL_TAG_ROOT);
+
+  expectedNWalData2 = csRec.wal.nWalData;
+  expectedFileSize2 = csRec.file.iFileSize;
+  sqlite3_close(db2);
+  db2 = 0;
+
+  rc = chunkStoreRefreshIfChanged(&csRec, &changed);
+  check("test_37: refresh after db2 close succeeds", rc==SQLITE_OK);
+  expectedNWalData2 = csRec.wal.nWalData;
+  expectedFileSize2 = csRec.file.iFileSize;
+
+  f = fopen(zPath, "r+b");
+  check("test_37: fopen for second torn tail", f!=0);
+  if( f ){
+    check("test_37: fseek to second nextOff", fseek(f, (long)expectedFileSize2, SEEK_SET)==0);
+    check("test_37: write second torn tail",
+          fwrite(tornTail, 1, sizeof(tornTail), f)==sizeof(tornTail));
+    fclose(f);
+    f = 0;
+  }
+
+  changed = 0;
+  rc = chunkStoreRefreshIfChanged(&csRec, &changed);
+  check("test_37: incremental refresh with torn tail succeeds", rc==SQLITE_OK);
+  check("test_37: incremental refresh keeps root-end nWalData",
+        csRec.wal.nWalData==expectedNWalData2);
+  check("test_37: incremental refresh keeps padded iFileSize",
+        csRec.file.iFileSize==expectedFileSize2);
+  chunkStoreClose(&csRec);
+
+  rc = sqlite3_open_v2(zPath, &db3, SQLITE_OPEN_READWRITE, "dura-track");
+  check("test_37: reopen db3", rc==SQLITE_OK);
+  check("test_37: db3 preserves both rows", queryScalarInt(db3, "SELECT count(*) FROM t", -1)==2);
+  check("test_37: db3 integrity_check",
+        strcmp(queryScalarText(db3, "PRAGMA integrity_check"), "ok")==0);
+  sqlite3_close(db3);
+
+  gDuraSectorSize = 0;
+  gDuraDeviceCharOverride = 0;
+  gDuraDeviceChar = 0;
+  removeDbFiles(zPath);
+}
+
 int main(void){
   printf("=== DoltLite Crash Recovery Tests ===\n\n");
 
@@ -2570,6 +2709,7 @@ int main(void){
   test_34_rebase_start_crash();
   test_35_backup_crash_leftovers();
   test_36_large_sector_zero_tail_probe();
+  test_37_sector_padded_torn_tail_nwaldata();
 
   printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
          nPass, nFail, nPass+nFail);
