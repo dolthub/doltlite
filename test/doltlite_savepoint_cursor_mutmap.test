@@ -198,4 +198,93 @@ do_execsql_test doltlite_savepoint_cursor_mutmap-1.6 {
   PRAGMA integrity_check;
 } {ok}
 
+# Lazy statement savepoint capture before ClearTable, DropTable, and CreateTable.
+do_test doltlite_savepoint_cursor_mutmap-2.0 {
+  execsql {
+    CREATE TABLE sp_victim(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO sp_victim VALUES(1, 'a'), (2, 'b');
+    CREATE TABLE sp_other(x INT);
+    CREATE TEMP TABLE sp_driver(x INT CHECK(x > 0));
+  }
+  proc sp_run_clear {} {
+    db eval { DELETE FROM sp_victim }
+    return 1
+  }
+  db function sp_run_clear sp_run_clear
+  execsql {
+    CREATE TEMP TRIGGER sp_tr_clear BEFORE INSERT ON temp.sp_driver BEGIN
+      SELECT sp_run_clear();
+    END;
+    BEGIN;
+    INSERT INTO sp_other VALUES(1);
+    INSERT INTO sp_victim VALUES(3, 'c');
+  }
+  set rc [catch { execsql { INSERT INTO temp.sp_driver VALUES(-1) } } err]
+  set after_abort [execsql { SELECT id, v FROM sp_victim ORDER BY id }]
+  execsql { COMMIT }
+  set after_commit [execsql { SELECT id, v FROM sp_victim ORDER BY id }]
+  set ic [execsql { PRAGMA integrity_check }]
+  execsql { DROP TRIGGER temp.sp_tr_clear }
+  list $rc $after_abort $after_commit $ic
+} {1 {1 a 2 b 3 c} {1 a 2 b 3 c} ok}
+
+do_test doltlite_savepoint_cursor_mutmap-2.1 {
+  proc sp_run_drop {} {
+    db eval { DROP TABLE sp_victim }
+    return 1
+  }
+  db function sp_run_drop sp_run_drop
+  execsql {
+    CREATE TEMP TRIGGER sp_tr_drop BEFORE INSERT ON temp.sp_driver BEGIN
+      SELECT sp_run_drop();
+    END;
+    BEGIN;
+    INSERT INTO sp_other VALUES(2);
+    INSERT INTO sp_victim VALUES(4, 'd');
+  }
+  set rc [catch { execsql { INSERT INTO temp.sp_driver VALUES(-1) } } err]
+  set after_abort [execsql { SELECT id, v FROM sp_victim ORDER BY id }]
+  execsql { COMMIT }
+  set after_commit [execsql { SELECT id, v FROM sp_victim ORDER BY id }]
+  set ic [execsql { PRAGMA integrity_check }]
+  execsql { DROP TRIGGER temp.sp_tr_drop }
+  list $rc $after_abort $after_commit $ic
+} {1 {1 a 2 b 3 c 4 d} {1 a 2 b 3 c 4 d} ok}
+
+do_test doltlite_savepoint_cursor_mutmap-2.2 {
+  proc sp_run_create {} {
+    db eval { CREATE TABLE sp_ephem(k INTEGER PRIMARY KEY, val TEXT) }
+    return 1
+  }
+  db function sp_run_create sp_run_create
+  execsql {
+    CREATE TEMP TRIGGER sp_tr_create BEFORE INSERT ON temp.sp_driver BEGIN
+      SELECT sp_run_create();
+    END;
+    BEGIN;
+    INSERT INTO sp_other VALUES(3);
+  }
+  set rc [catch { execsql { INSERT INTO temp.sp_driver VALUES(-1) } } err]
+  set exists [execsql {
+    SELECT count(*) FROM sqlite_master WHERE name='sp_ephem'
+  }]
+  execsql {
+    SAVEPOINT sp_ddl;
+    CREATE TABLE sp_ephem(k INTEGER PRIMARY KEY, val TEXT);
+    INSERT INTO sp_ephem VALUES(1, 'tmp');
+    ROLLBACK TO sp_ddl;
+    RELEASE sp_ddl;
+    CREATE TABLE sp_real(k INTEGER PRIMARY KEY, val TEXT);
+    INSERT INTO sp_real VALUES(10, 'real');
+    COMMIT;
+  }
+  set real_rows [execsql { SELECT k, val FROM sp_real }]
+  set ephem_cnt [execsql {
+    SELECT count(*) FROM sqlite_master WHERE name='sp_ephem'
+  }]
+  set ic [execsql { PRAGMA integrity_check }]
+  execsql { DROP TRIGGER temp.sp_tr_create }
+  list $rc $exists $ephem_cnt $real_rows $ic
+} {1 0 0 {10 real} ok}
+
 finish_test
