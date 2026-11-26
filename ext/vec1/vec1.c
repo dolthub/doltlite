@@ -5024,7 +5024,7 @@ static void vec1TrainFindResiduals(
 
 static void vec1TrainPrepareLog(Vec1TrainCtx *p){
   if( p->zLogFunction ){
-    char *zSql = sqlite3_mprintf("SELECT %s(?, ?)", p->zLogFunction);
+    char *zSql = sqlite3_mprintf("SELECT \"%w\"(?, ?)", p->zLogFunction);
     if( zSql==0 ){
       sqlite3_result_error_nomem(p->pCtx);
       p->rc = SQLITE_NOMEM;
