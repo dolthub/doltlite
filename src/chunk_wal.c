@@ -962,7 +962,8 @@ static int csReplayWalFrom(
       nRootRecordsSeen++;
 
     } else if( tag == 0 && csWalTailIsZero(cs, recPos, walSize,
-                 bTailMode ? CS_ZERO_TAIL_PROBE+1 : CS_WAL_SCAN_MAX) ){
+                 bTailMode ? (i64)csZeroTailProbeSize(cs->file.pFile)+1
+                           : CS_WAL_SCAN_MAX) ){
       /* SIZE_HINT/prealloc zero-extends past commit; treat as absent. */
       break;
 

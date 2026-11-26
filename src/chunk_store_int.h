@@ -60,6 +60,8 @@ int csDiskStateMatchesMemory(ChunkStore *cs);
 int csOpenFile(sqlite3_vfs *pVfs, const char *zPath, sqlite3_file **ppFile,
                int flags, int *pOutFlags);
 int csSyncFile(ChunkStore *cs);
+int csClampedSectorSize(sqlite3_file *pFile);
+int csZeroTailProbeSize(sqlite3_file *pFile);
 int csTailHasRecord(ChunkStore *cs, i64 physSize, int *pHas);
 int csTailHasRecordAt(ChunkStore *cs, i64 iOff, i64 physSize, int *pHas);
 int csTailHasSealedRoot(ChunkStore *cs, i64 iFrom, i64 physSize,

@@ -129,8 +129,10 @@
 #endif
 #define CS_ZERO_TAIL_BYTES      (1024*1024)
 #define CS_ZERO_TAIL_MAX_COMMIT 65536
-/* Sector-padded batches start within this many bytes of the logical end. */
+/* Minimum zero-tail probe; larger sectors scale up to CS_MAX_SECTOR_SIZE. */
 #define CS_ZERO_TAIL_PROBE      4096
+#define CS_MIN_SECTOR_SIZE      512
+#define CS_MAX_SECTOR_SIZE      65536
 
 /* Scan/replay read window. Heap-allocated by its users: a buffer this size
 ** exceeds the whole stack in small-stack builds (wasm defaults to 64K). */

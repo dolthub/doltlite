@@ -61,7 +61,7 @@ int csReclaimTail(ChunkStore *cs){
   if( !cs->isBuffer ){
     int bSealed = 0;
     rc = csTailHasSealedRoot(cs, cs->file.iFileSize, size,
-                             sqlite3OsSectorSize(cs->file.pFile), &bSealed);
+                             csClampedSectorSize(cs->file.pFile), &bSealed);
     if( rc!=SQLITE_OK ) return rc;
     if( bSealed ) return SQLITE_BUSY_SNAPSHOT;
   }

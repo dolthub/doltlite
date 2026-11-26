@@ -1658,6 +1658,12 @@ static int gDuraSyncCount = 0;
 static int gDuraCrashBefore = 0;
 static int gDuraWriteCount = 0;
 static int gDuraFailWriteAt = 0;
+static int gDuraFailSyncOnce = 0;
+static int gDuraFailRollbackWrite = 0;
+static int gDuraFailRollbackTruncate = 0;
+static int gDuraSectorSize = 0;
+static int gDuraDeviceCharOverride = 0;
+static int gDuraDeviceChar = 0;
 
 static int duraClose(sqlite3_file *pFile){
   DuraFile *p = (DuraFile*)pFile;
@@ -1675,6 +1681,10 @@ static int duraWrite(sqlite3_file *pFile, const void *zBuf, int iAmt,
                      sqlite3_int64 iOfst){
   DuraFile *p = (DuraFile*)pFile;
   int rc;
+  if( p->isMain && gDuraFailRollbackWrite>0 ){
+    gDuraFailRollbackWrite--;
+    return SQLITE_IOERR_WRITE;
+  }
   if( p->isMain && ++gDuraWriteCount==gDuraFailWriteAt ){
     return SQLITE_IOERR_WRITE;
   }
@@ -1713,12 +1723,22 @@ static int duraWrite(sqlite3_file *pFile, const void *zBuf, int iAmt,
 
 static int duraTruncate(sqlite3_file *pFile, sqlite3_int64 size){
   DuraFile *p = (DuraFile*)pFile;
+  if( p->isMain && gDuraFailRollbackTruncate>0 ){
+    gDuraFailRollbackTruncate--;
+    return SQLITE_IOERR_TRUNCATE;
+  }
   return p->pReal->pMethods->xTruncate(p->pReal, size);
 }
 
 static int duraSync(sqlite3_file *pFile, int flags){
   DuraFile *p = (DuraFile*)pFile;
   int rc;
+  if( p->isMain && gDuraFailSyncOnce>0 ){
+    gDuraFailSyncOnce--;
+    gDuraFailRollbackWrite = 10;
+    gDuraFailRollbackTruncate = 10;
+    return SQLITE_IOERR_FSYNC;
+  }
   if( p->isMain && gDuraCrashAt>0 ){
     gDuraSyncCount++;
     if( gDuraCrashBefore && gDuraSyncCount==gDuraCrashAt ) _exit(99);
@@ -1757,11 +1777,13 @@ static int duraFileControl(sqlite3_file *pFile, int op, void *pArg){
 
 static int duraSectorSize(sqlite3_file *pFile){
   DuraFile *p = (DuraFile*)pFile;
+  if( gDuraSectorSize>0 ) return gDuraSectorSize;
   return p->pReal->pMethods->xSectorSize(p->pReal);
 }
 
 static int duraDeviceCharacteristics(sqlite3_file *pFile){
   DuraFile *p = (DuraFile*)pFile;
+  if( gDuraDeviceCharOverride ) return gDuraDeviceChar;
   return p->pReal->pMethods->xDeviceCharacteristics(p->pReal);
 }
 
@@ -2414,6 +2436,96 @@ static void test_35_backup_crash_leftovers(void){
   }
 }
 
+static void test_36_large_sector_zero_tail_probe(void){
+  static const int aSector[] = { 16384, 65536 };
+  int i;
+  printf("--- Test 36: large sectorSize zero-tail probe and replay ---\n");
+  check("test_36: tracking vfs registered", duraRegister()==SQLITE_OK);
+  for(i=0; i<(int)(sizeof(aSector)/sizeof(aSector[0])); i++){
+    int sectorSz = aSector[i];
+    char zPath[512], desc[160];
+    sqlite3 *dbA = 0, *dbB = 0, *dbC = 0;
+    int rc;
+
+    snprintf(zPath, sizeof(zPath), "%s", fresh_db());
+    check("test_36: setup open", sqlite3_open(zPath, &dbA)==SQLITE_OK);
+    check("test_36: setup commit", execSql(dbA,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+      "INSERT INTO t VALUES (1, 'base');"
+      "SELECT dolt_commit('-Am', 'base');")==SQLITE_OK);
+    sqlite3_close(dbA);
+    dbA = 0;
+
+    gDuraSectorSize = sectorSz;
+    gDuraDeviceCharOverride = 1;
+    gDuraDeviceChar = 0;
+
+    rc = sqlite3_open_v2(zPath, &dbA, SQLITE_OPEN_READWRITE, "dura-track");
+    snprintf(desc, sizeof(desc), "sector_%d: open dbA", sectorSz);
+    check(desc, rc==SQLITE_OK);
+    rc = sqlite3_open_v2(zPath, &dbB, SQLITE_OPEN_READWRITE, "dura-track");
+    snprintf(desc, sizeof(desc), "sector_%d: open dbB", sectorSz);
+    check(desc, rc==SQLITE_OK);
+
+    snprintf(desc, sizeof(desc), "sector_%d: initial dbA count", sectorSz);
+    check(desc, queryScalarInt(dbA, "SELECT count(*) FROM t", -1)==1);
+    snprintf(desc, sizeof(desc), "sector_%d: initial dbB count", sectorSz);
+    check(desc, queryScalarInt(dbB, "SELECT count(*) FROM t", -1)==1);
+
+    snprintf(desc, sizeof(desc), "sector_%d: peer commit on dbB", sectorSz);
+    check(desc, execSql(dbB,
+      "INSERT INTO t VALUES (2, 'from_b');"
+      "SELECT dolt_commit('-am', 'peer');")==SQLITE_OK);
+
+    snprintf(desc, sizeof(desc), "sector_%d: dbA sees peer commit across zero gap", sectorSz);
+    check(desc, queryScalarInt(dbA, "SELECT count(*) FROM t", -1)==2);
+
+    snprintf(desc, sizeof(desc), "sector_%d: dbA commits after peer", sectorSz);
+    check(desc, execSql(dbA,
+      "INSERT INTO t VALUES (3, 'from_a');"
+      "SELECT dolt_commit('-am', 'after_peer');")==SQLITE_OK);
+
+    snprintf(desc, sizeof(desc), "sector_%d: dbB sees dbA commit", sectorSz);
+    check(desc, queryScalarInt(dbB, "SELECT count(*) FROM t", -1)==3);
+
+    /* Failed sync on dbA leaves a sealed root at an unaligned tail end;
+    ** dbB adopts it and appends at the next sectorSz boundary, so closing
+    ** dbA must detect dbB's commit across the >4096 zero gap and not scrub
+    ** the adopted root. */
+    gDuraFailSyncOnce = 1;
+    rc = execSql(dbA, "INSERT INTO t VALUES (4, 'sync_fail');");
+    gDuraFailSyncOnce = 0;
+    gDuraFailRollbackWrite = 0;
+    gDuraFailRollbackTruncate = 0;
+    snprintf(desc, sizeof(desc), "sector_%d: injected sync error on dbA", sectorSz);
+    check(desc, rc!=SQLITE_OK);
+
+    snprintf(desc, sizeof(desc), "sector_%d: dbB adopts unaligned root", sectorSz);
+    check(desc, queryScalarInt(dbB, "SELECT count(*) FROM t", -1)==4);
+    snprintf(desc, sizeof(desc), "sector_%d: dbB commits past adopted root", sectorSz);
+    check(desc, execSql(dbB, "INSERT INTO t VALUES (5, 'after_adopt');")==SQLITE_OK);
+
+    sqlite3_close(dbA);
+    dbA = 0;
+    sqlite3_close(dbB);
+    dbB = 0;
+
+    rc = sqlite3_open_v2(zPath, &dbC, SQLITE_OPEN_READWRITE, "dura-track");
+    snprintf(desc, sizeof(desc), "sector_%d: reopen dbC", sectorSz);
+    check(desc, rc==SQLITE_OK);
+    snprintf(desc, sizeof(desc), "sector_%d: reopen preserves all 5 rows", sectorSz);
+    check(desc, queryScalarInt(dbC, "SELECT count(*) FROM t", -1)==5);
+    snprintf(desc, sizeof(desc), "sector_%d: reopen integrity_check", sectorSz);
+    check(desc, strcmp(queryScalarText(dbC, "PRAGMA integrity_check"), "ok")==0);
+    sqlite3_close(dbC);
+
+    gDuraSectorSize = 0;
+    gDuraDeviceCharOverride = 0;
+    gDuraDeviceChar = 0;
+    removeDbFiles(zPath);
+  }
+}
+
 int main(void){
   printf("=== DoltLite Crash Recovery Tests ===\n\n");
 
@@ -2457,6 +2569,7 @@ int main(void){
   test_33_cv_rollback_atomic_sync();
   test_34_rebase_start_crash();
   test_35_backup_crash_leftovers();
+  test_36_large_sector_zero_tail_probe();
 
   printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
          nPass, nFail, nPass+nFail);
