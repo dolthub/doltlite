@@ -30,6 +30,7 @@ void freeMergePkInfo(MergePkInfo *pPk);
 int loadMergePkInfo(sqlite3 *db, const char *zTable, MergePkInfo *pPk);
 int finishConstraintStmt(sqlite3_stmt *pStmt, int rc);
 void setConstraintError(sqlite3 *db, char **pzErrMsg, int rc);
+void doltliteMergeAppendJsonString(sqlite3_str *pJson, const char *z);
 int mergeConstraintStoredField(Table *pTab, int iColumn);
 
 int catalogTableChanged(

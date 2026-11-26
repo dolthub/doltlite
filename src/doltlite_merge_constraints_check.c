@@ -72,22 +72,6 @@ static int nextCheckClause(
   return n;
 }
 
-static void appendCheckJsonString(sqlite3_str *pJson, const char *z){
-  sqlite3_str_appendchar(pJson, 1, '"');
-  for(; *z; z++){
-    unsigned char c = (unsigned char)*z;
-    if( c=='"' || c=='\\' ){
-      sqlite3_str_appendchar(pJson, 1, '\\');
-      sqlite3_str_appendchar(pJson, 1, c);
-    }else if( c<0x20 ){
-      sqlite3_str_appendf(pJson, "\\u%04x", c);
-    }else{
-      sqlite3_str_appendchar(pJson, 1, c);
-    }
-  }
-  sqlite3_str_appendchar(pJson, 1, '"');
-}
-
 static int checkWalkTable(
   sqlite3 *db,
   const char *zTable,
@@ -217,9 +201,9 @@ static int checkWalkTable(
 
         pJson = sqlite3_str_new(db);
         sqlite3_str_appendall(pJson, "{\"Name\": ");
-        appendCheckJsonString(pJson, zCkName ? zCkName : "");
+        doltliteMergeAppendJsonString(pJson, zCkName ? zCkName : "");
         sqlite3_str_appendall(pJson, ", \"Expression\": ");
-        appendCheckJsonString(pJson, zExpr);
+        doltliteMergeAppendJsonString(pJson, zExpr);
         sqlite3_str_appendchar(pJson, 1, '}');
         zInfo = sqlite3_str_finish(pJson);
         if( !zInfo ){
