@@ -329,7 +329,8 @@ struct MergeWinner { const u8 *pRec; RecField *pField; };
 static u8 *buildMergedRecord(MergeWinner *aWinners, int nFields, int *pnOut){
   static const RecField kNullField = { 0, 0, 0 };
   MergeWinner oneNull;
-  int hdrSize = 0, bodySize = 0, pos, i;
+  u64 hdrBody = 0, hdrSize, bodySize = 0, totalSize;
+  int nHdrLen, pos, i;
   u8 *result;
 
   /* A header with no serial types is unreadable: column fetch always
@@ -343,45 +344,28 @@ static u8 *buildMergedRecord(MergeWinner *aWinners, int nFields, int *pnOut){
   }
 
   for(i=0; i<nFields; i++){
-    u64 st = aWinners[i].pField->st;
-    if(st <= 0x7f) hdrSize += 1;
-    else if(st <= 0x3fff) hdrSize += 2;
-    else if(st <= 0x1fffff) hdrSize += 3;
-    else hdrSize += 4;
-    bodySize += aWinners[i].pField->len;
+    hdrBody += (u64)sqlite3VarintLen(aWinners[i].pField->st);
+    bodySize += (u64)aWinners[i].pField->len;
   }
 
-  { int tentative = hdrSize + 1;
-    if(tentative > 0x7f) tentative++;
-    hdrSize = tentative;
+  nHdrLen = sqlite3VarintLen(hdrBody + 1);
+  while( sqlite3VarintLen(hdrBody + (u64)nHdrLen) != nHdrLen ){
+    nHdrLen = sqlite3VarintLen(hdrBody + (u64)nHdrLen);
+  }
+  hdrSize = hdrBody + (u64)nHdrLen;
+
+  totalSize = hdrSize + bodySize;
+  if( totalSize < hdrSize || totalSize > 0x7fffffff ){
+    *pnOut = 0;
+    return 0;
   }
 
-  result = sqlite3_malloc(hdrSize + bodySize);
+  result = sqlite3_malloc64(totalSize);
   if(!result){ *pnOut = 0; return 0; }
 
-  pos = 0;
-  { u64 hs = (u64)hdrSize;
-    if(hs <= 0x7f){ result[pos++] = (u8)hs; }
-    else{ result[pos++] = (u8)(0x80 | (hs>>7)); result[pos++] = (u8)(hs&0x7f); }
-  }
-
+  pos = sqlite3PutVarint(result, hdrSize);
   for(i=0; i<nFields; i++){
-    u64 st = aWinners[i].pField->st;
-    if(st <= 0x7f){
-      result[pos++] = (u8)st;
-    }else if(st <= 0x3fff){
-      result[pos++] = (u8)(0x80 | (st>>7));
-      result[pos++] = (u8)(st&0x7f);
-    }else if(st <= 0x1fffff){
-      result[pos++] = (u8)(0x80 | (st>>14));
-      result[pos++] = (u8)(0x80 | ((st>>7)&0x7f));
-      result[pos++] = (u8)(st&0x7f);
-    }else{
-      result[pos++] = (u8)(0x80 | (st>>21));
-      result[pos++] = (u8)(0x80 | ((st>>14)&0x7f));
-      result[pos++] = (u8)(0x80 | ((st>>7)&0x7f));
-      result[pos++] = (u8)(st&0x7f);
-    }
+    pos += sqlite3PutVarint(result + pos, aWinners[i].pField->st);
   }
 
   for(i=0; i<nFields; i++){
