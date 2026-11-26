@@ -917,9 +917,82 @@ static int csMovedFileIsOursAfterTail(ChunkStore *cs, int *pIsOurs){
   return csMovedFileIsOurs(cs, pIsOurs);
 }
 
+i64 csMinExpectedFileSize(const ChunkStore *cs){
+  if( cs->wal.nWalData > 0 ){
+    return cs->wal.iWalOffset + cs->wal.nWalData;
+  }
+  return cs->file.iFileSize;
+}
+
+#if defined(SQLITE_WASM) || defined(__EMSCRIPTEN__)
+/* WASM replaces the file in place so HAS_MOVED stays 0; verify the committed
+** manifest or tail root still matches memory. */
+int csDiskManifestMatches(ChunkStore *cs, int *pMatches){
+  u8 aBuf[1 + CHUNK_MANIFEST_SIZE];
+  int rc;
+
+  *pMatches = 1;
+  if( cs->isMemory || cs->isBuffer || cs->file.pFile==0 ) return SQLITE_OK;
+  if( cs->file.iFileSize<=0 || cs->wal.iWalOffset<=0 ) return SQLITE_OK;
+  if( cs->staging.nRecentUncommitted>0 ) return SQLITE_OK;
+
+  if( cs->wal.nWalData==0 ){
+    u8 aExpected[CHUNK_MANIFEST_SIZE];
+    rc = sqlite3OsRead(cs->file.pFile, aBuf, CHUNK_MANIFEST_SIZE, 0);
+    if( rc==SQLITE_IOERR_SHORT_READ ){
+      *pMatches = 0;
+      return SQLITE_OK;
+    }
+    if( rc!=SQLITE_OK ) return rc;
+    csSerializeManifest(cs, aExpected);
+    memcpy(aExpected + CS_MANIFEST_REFS_HASH_OFF,
+           cs->refs.committedRefsHash.data, PROLLY_HASH_SIZE);
+    csManifestSeal(aExpected, 0);
+    if( memcmp(aBuf, aExpected, CHUNK_MANIFEST_SIZE)!=0 ){
+      if( csManifestHashStateOffsetless(aBuf)!=CS_MANIFEST_HASH_OK
+       || memcmp(aBuf, aExpected, CS_MANIFEST_SELF_HASH_OFF)!=0 ){
+        *pMatches = 0;
+      }
+    }
+    return SQLITE_OK;
+  }
+
+  {
+    i64 contentEnd = cs->wal.iWalOffset + cs->wal.nWalData;
+    i64 rootOff = contentEnd - (i64)sizeof(aBuf);
+    int hashState;
+    if( rootOff < cs->wal.iWalOffset ){
+      *pMatches = 0;
+      return SQLITE_OK;
+    }
+    rc = sqlite3OsRead(cs->file.pFile, aBuf, (int)sizeof(aBuf), rootOff);
+    if( rc==SQLITE_IOERR_SHORT_READ ){
+      *pMatches = 0;
+      return SQLITE_OK;
+    }
+    if( rc!=SQLITE_OK ) return rc;
+    if( aBuf[0]!=CS_WAL_TAG_ROOT ){
+      *pMatches = 0;
+      return SQLITE_OK;
+    }
+    hashState = csManifestHashState(aBuf+1, rootOff);
+    if( hashState!=CS_MANIFEST_HASH_OK ){
+      hashState = csManifestHashStateOffsetless(aBuf+1);
+    }
+    if( hashState!=CS_MANIFEST_HASH_OK
+     || csValidateWalRootManifest(cs, aBuf+1, rootOff)!=SQLITE_OK
+     || memcmp(aBuf + 1 + CS_MANIFEST_REFS_HASH_OFF,
+               cs->refs.committedRefsHash.data, PROLLY_HASH_SIZE)!=0 ){
+      *pMatches = 0;
+    }
+  }
+  return SQLITE_OK;
+}
+#endif
+
 /* *pMovedAdopt distinguishes "the inode at our path changed and the new
-** file proved to be ours" from same-file growth: adoption must reload
-** by path, never ingest a tail through the stale handle. */
+** file proved to be ours" (or in-place replacement/shrink) from same-file
+** growth: adoption must reload, never ingest a tail through the stale view. */
 static int csDetectExternalChanges(
   ChunkStore *cs,
   int *pChanged,
@@ -985,11 +1058,15 @@ static int csDetectExternalChanges(
 
   {
     i64 fileSize = fileState.iFileSize;
+    i64 minSize = csMinExpectedFileSize(cs);
     if( !haveFileState ){
       rc = sqlite3OsFileSize(cs->file.pFile, &fileSize);
       if( rc!=SQLITE_OK ) return rc;
     }
-    if( fileSize > cs->file.iFileSize && fileSize!=cs->iFailedTailEnd ){
+    if( fileSize < minSize ){
+      *pChanged = 1;
+      if( pMovedAdopt ) *pMovedAdopt = 1;
+    }else if( fileSize > cs->file.iFileSize && fileSize!=cs->iFailedTailEnd ){
       int bRecord = 0;
       rc = csTailHasRecord(cs, fileSize, &bRecord);
       if( rc!=SQLITE_OK ) return rc;
@@ -1000,6 +1077,17 @@ static int csDetectExternalChanges(
         if( !adopted ) *pChanged = 1;
       }
     }
+#if defined(SQLITE_WASM) || defined(__EMSCRIPTEN__)
+    if( !*pChanged ){
+      int bMatch = 1;
+      rc = csDiskManifestMatches(cs, &bMatch);
+      if( rc!=SQLITE_OK ) return rc;
+      if( !bMatch ){
+        *pChanged = 1;
+        if( pMovedAdopt ) *pMovedAdopt = 1;
+      }
+    }
+#endif
     if( !*pChanged && csDamageFingerDiffers(cs) ) *pChanged = 1;
   }
   return SQLITE_OK;
@@ -1014,10 +1102,13 @@ static int csFileSnapshotUnchanged(ChunkStore *cs){
   state.bMoved = 0;
   rc = sqlite3OsDoltliteFileState(cs->file.pFile, &state);
   if( rc!=SQLITE_OK || state.bMoved || state.iFileSize<0 ) return 0;
+  if( state.iFileSize < csMinExpectedFileSize(cs) ) return 0;
 #if defined(SQLITE_WASM) || defined(__EMSCRIPTEN__)
   {
     int pending = 0;
+    int bMatch = 0;
     if( csWasmReplacementPending(cs, &pending)!=SQLITE_OK || pending ) return 0;
+    if( csDiskManifestMatches(cs, &bMatch)!=SQLITE_OK || !bMatch ) return 0;
   }
 #endif
   if( state.iFileSize>cs->file.iFileSize ){

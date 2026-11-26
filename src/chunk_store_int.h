@@ -39,7 +39,9 @@ int csReadLock(ChunkStore *cs, CsReadLock *pLock);
 int csWasmReplaceLockedFile(ChunkStore *cs, const char *zTmp, int *pRetainTmp);
 int csWasmReplacementPending(ChunkStore *cs, int *pPending);
 int csWasmRecoverReplacement(ChunkStore *cs);
+int csDiskManifestMatches(ChunkStore *cs, int *pMatches);
 #endif
+i64 csMinExpectedFileSize(const ChunkStore *cs);
 int csReadUnlock(ChunkStore *cs, CsReadLock *pLock);
 int csReclaimTail(ChunkStore *cs);
 int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize,
