@@ -6505,13 +6505,15 @@ static int vec1CheckIdxSize(Vec1Tab *p, const u8 *aBlob, i64 nBlob){
     i64 nEntry = (int)vec1GetU32(&aBlob[4]);
     const i64 szRowid = ((flags & VEC1_LIST_64BIT) ? 8 : 4);
 
-    if( p->mod.hdr.nCodebook>0 ){
-      const i64 nBlk = ((nEntry+VEC1_PQ_BLOCKSIZE-1) / VEC1_PQ_BLOCKSIZE);
-      const i64 szBlk = VEC1_PQ_BLOCKSIZE * vec1EncodedVectorSize(&p->mod);
-      bRet = (nBlob!=(VEC1_LIST_SZHDR + nEntry*szRowid + nBlk*szBlk));
-    }else{
-      const i64 szVec = p->cfg.nElem*sizeof_f32;
-      bRet = (nBlob!=(VEC1_LIST_SZHDR + nEntry*szRowid + nEntry*szVec));
+    if( nEntry>=0 ){
+      if( p->mod.hdr.nCodebook>0 ){
+        const i64 nBlk = ((nEntry+VEC1_PQ_BLOCKSIZE-1) / VEC1_PQ_BLOCKSIZE);
+        const i64 szBlk = VEC1_PQ_BLOCKSIZE * vec1EncodedVectorSize(&p->mod);
+        bRet = (nBlob!=(VEC1_LIST_SZHDR + nEntry*szRowid + nBlk*szBlk));
+      }else{
+        const i64 szVec = (i64)p->cfg.nElem*sizeof_f32;
+        bRet = (nBlob!=(VEC1_LIST_SZHDR + nEntry*szRowid + nEntry*szVec));
+      }
     }
   }
   return bRet;
@@ -9382,11 +9384,22 @@ static int vec1FindByRowid(
     );
     if( rc==SQLITE_OK ){
       u8 a[VEC1_LIST_SZHDR];
-      rc = sqlite3_blob_read(pBlob, a, VEC1_LIST_SZHDR, 0);
-      flags = vec1GetU32(&a[0]);
-      nEntry = (int)vec1GetU32(&a[4]);
-      nTombstone = vec1GetU32(&a[8]);
-      if( flags & VEC1_LIST_64BIT ) szRowid = 8;
+      int nBlob = sqlite3_blob_bytes(pBlob);
+      if( nBlob<VEC1_LIST_SZHDR ){
+        rc = VEC1_CORRUPT;
+      }else{
+        rc = sqlite3_blob_read(pBlob, a, VEC1_LIST_SZHDR, 0);
+      }
+      if( rc==SQLITE_OK ){
+        if( vec1CheckIdxSize(pTab, a, nBlob) ){
+          rc = VEC1_CORRUPT;
+        }else{
+          flags = vec1GetU32(&a[0]);
+          nEntry = (int)vec1GetU32(&a[4]);
+          nTombstone = vec1GetU32(&a[8]);
+          if( flags & VEC1_LIST_64BIT ) szRowid = 8;
+        }
+      }
     }
 
     /* Now scan through the array of rowids at the start of the %_idx entry

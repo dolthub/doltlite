@@ -622,4 +622,49 @@ do_execsql_test 7.7 {
   SELECT rowid FROM v1(random_vector(8), 5);
 } {1}
 
+#-------------------------------------------------------------------------
+# Corrupt %_idx.val headers triggering vec1FindByRowid() (truncated header,
+# nEntry larger than blob, 32-bit int overflow in szRowid*nEntry, negative
+# nEntry, and truncated vector payload).
+#
+reset_db
+vec1_load db
+
+do_execsql_test 8.0 {
+  CREATE VIRTUAL TABLE v1 USING vec1;
+  INSERT INTO v1(rowid, vector) VALUES
+    (1, vec1_from_json('[1,0,0,0]')),
+    (2, vec1_from_json('[0,1,0,0]'));
+  INSERT INTO v1(cmd, arg) VALUES('rebuild', '{index:"flat"}');
+}
+set orig_idx [db one {SELECT val FROM v1_idx WHERE id=1}]
+set orig_hex [db one {SELECT hex(val) FROM v1_idx WHERE id=1}]
+
+foreach {tn newhex} [list \
+  1 "" \
+  2 "000000020000" \
+  3 "[string range $orig_hex 0 7]00001000[string range $orig_hex 16 end]" \
+  4 "0000000240000001[string range $orig_hex 16 end]" \
+  5 "0000000320000001[string range $orig_hex 16 end]" \
+  6 "0000000280000001[string range $orig_hex 16 end]" \
+  7 "00000002FFFFFFFF[string range $orig_hex 16 end]" \
+  8 "[string range $orig_hex 0 39]" \
+] {
+  do_execsql_test 8.$tn.1 "
+    UPDATE v1_idx SET val = X'$newhex' WHERE id=1;
+  "
+  do_catchsql_test 8.$tn.2 {
+    SELECT vector FROM v1 WHERE rowid=1;
+  } {1 {database disk image is malformed}}
+  do_catchsql_test 8.$tn.3 {
+    DELETE FROM v1 WHERE rowid=1;
+  } {1 {database disk image is malformed}}
+}
+
+do_execsql_test 8.9 {
+  UPDATE v1_idx SET val = $orig_idx WHERE id=1;
+  DELETE FROM v1 WHERE rowid=1;
+  SELECT rowid FROM v1;
+} {2}
+
 finish_test
