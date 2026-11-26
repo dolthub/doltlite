@@ -215,6 +215,12 @@ static int loadNode(ProllyCursor *cur, const ProllyHash *hash,
   rc = prollyLoadNodeMaybeSparse(cur, hash, ppEntry);
   if( rc!=SQLITE_OK ) return rc;
   pNode = &(*ppEntry)->node;
+  if( (pNode->flags & (PROLLY_NODE_INTKEY | PROLLY_NODE_BLOBKEY))
+      != (cur->flags & (PROLLY_NODE_INTKEY | PROLLY_NODE_BLOBKEY)) ){
+    prollyCacheRelease(cur->pCache, *ppEntry);
+    *ppEntry = 0;
+    return SQLITE_CORRUPT;
+  }
   if( pNode->level==0 || !cur->pStore->pChunkSource ) return SQLITE_OK;
 
   aHash = (ProllyHash*)sqlite3_malloc64(
@@ -277,6 +283,11 @@ static int descendToChild(ProllyCursor *cur, int childSlot,
   if( rc!=SQLITE_OK ){
     prollyCursorReleaseAll(cur);
     return rc;
+  }
+  if( pChild->node.level!=pParent->node.level-1 ){
+    prollyCacheRelease(cur->pCache, pChild);
+    prollyCursorReleaseAll(cur);
+    return SQLITE_CORRUPT;
   }
 
   cur->aLevel[cur->iLevel].pEntry = pChild;
