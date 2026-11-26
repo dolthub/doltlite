@@ -605,15 +605,15 @@ static int doltliteBuildIndexEntry(
   }
 
   {
-    int i, hdrLen = 0, bodyLen = 0;
-    int nTotal;
+    int i, nHdrLen;
+    u64 hdrBody = 0, hdrSize, bodyLen = 0, totalSize;
     u8 *p;
 
     int nOrderAlloc;
     int *aFieldOrder;
     nOrderAlloc = nIdxCol + 1;
-    if( pIdx && pIdx->nColumn>nOrderAlloc ) nOrderAlloc = pIdx->nColumn + 1;
-    aFieldOrder = sqlite3_malloc(nOrderAlloc * sizeof(int));
+    if( pIdx && pIdx->nColumn+1>nOrderAlloc ) nOrderAlloc = pIdx->nColumn + 1;
+    aFieldOrder = sqlite3_malloc64((sqlite3_uint64)nOrderAlloc * sizeof(int));
     if( !aFieldOrder ){ doltliteRecordInfoClear(&info); return SQLITE_NOMEM; }
 
     {
@@ -661,21 +661,31 @@ static int doltliteBuildIndexEntry(
 
     for(i=0; i<nOutField; i++){
       int col = aFieldOrder[i];
-      int st = (useIpk && col==iPKey) ? (int)ipkType
-             : (col<info.nField ? info.aType[col] : 0);
-      int flen = st>0 ? dlSerialTypeLen((u64)st) : 0;
-      hdrLen += sqlite3VarintLen(st);
-      bodyLen += flen;
+      u64 st = (useIpk && col==iPKey) ? (u64)ipkType
+             : (col>=0 && col<info.nField ? (u64)(u32)info.aType[col] : 0);
+      int flen = st>0 ? dlSerialTypeLen(st) : 0;
+      if( flen<0 ){
+        sqlite3_free(aFieldOrder);
+        doltliteRecordInfoClear(&info);
+        return SQLITE_CORRUPT;
+      }
+      hdrBody += (u64)sqlite3VarintLen(st);
+      bodyLen += (u64)flen;
     }
 
-    {
-      int tentative = hdrLen + 1;
-      if( tentative > 126 ) tentative++;
-      hdrLen = tentative;
+    nHdrLen = sqlite3VarintLen(hdrBody + 1);
+    while( sqlite3VarintLen(hdrBody + (u64)nHdrLen) != nHdrLen ){
+      nHdrLen = sqlite3VarintLen(hdrBody + (u64)nHdrLen);
     }
+    hdrSize = hdrBody + (u64)nHdrLen;
 
-    nTotal = hdrLen + bodyLen;
-    pIdxRec = sqlite3_malloc(nTotal);
+    totalSize = hdrSize + bodyLen;
+    if( totalSize < hdrSize || totalSize > 0x7fffffff ){
+      sqlite3_free(aFieldOrder);
+      doltliteRecordInfoClear(&info);
+      return SQLITE_TOOBIG;
+    }
+    pIdxRec = sqlite3_malloc64(totalSize);
     if( !pIdxRec ){
       sqlite3_free(aFieldOrder);
       doltliteRecordInfoClear(&info);
@@ -683,24 +693,19 @@ static int doltliteBuildIndexEntry(
     }
 
     p = pIdxRec;
-    {
-      int hs = hdrLen;
-      if( hs <= 0x7f ){ *p++ = (u8)hs; }
-      else{ *p++ = (u8)(0x80|(hs>>7)); *p++ = (u8)(hs&0x7f); }
-    }
+    p += sqlite3PutVarint(p, hdrSize);
     for(i=0; i<nOutField; i++){
       int col = aFieldOrder[i];
-      int st = (useIpk && col==iPKey) ? (int)ipkType
-             : (col<info.nField ? info.aType[col] : 0);
+      u64 st = (useIpk && col==iPKey) ? (u64)ipkType
+             : (col>=0 && col<info.nField ? (u64)(u32)info.aType[col] : 0);
       p += sqlite3PutVarint(p, st);
     }
 
     for(i=0; i<nOutField; i++){
       int col = aFieldOrder[i];
-      int st;
+      u64 st;
       int flen;
       if( useIpk && col==iPKey ){
-        st = (int)ipkType;
         flen = (int)ipkLen;
         if( flen>0 ){
           dlIpkWriteBE(p, intKey, flen);
@@ -708,9 +713,9 @@ static int doltliteBuildIndexEntry(
         }
         continue;
       }
-      if( col>=info.nField ) continue;
-      st = info.aType[col];
-      flen = st>0 ? dlSerialTypeLen((u64)st) : 0;
+      if( col<0 || col>=info.nField ) continue;
+      st = (u64)(u32)info.aType[col];
+      flen = st>0 ? dlSerialTypeLen(st) : 0;
       if( flen>0 ){
         memcpy(p, pRec + info.aOffset[col], flen);
         p += flen;

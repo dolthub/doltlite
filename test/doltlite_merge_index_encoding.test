@@ -302,4 +302,49 @@ foreach {kind oldtype newtype values insert probe} {
   }
 }
 
+# Wide multi-column indexes across the 1-byte / 2-byte header-size varint
+# boundary and multi-byte serial type varints during merge.
+do_test merge-index-encoding-wide-header-varint {
+  reset_db
+  set coldefs {}
+  set col125 {}
+  set col130 {}
+  set vals1 {}
+  set vals2 {}
+  set vals3 {}
+  for {set i 1} {$i <= 130} {incr i} {
+    lappend coldefs "c$i INT"
+    if {$i <= 125} { lappend col125 "c$i" }
+    lappend col130 "c$i"
+    lappend vals1 $i
+    lappend vals2 [expr {$i + 1000}]
+    lappend vals3 [expr {$i + 2000}]
+  }
+  execsql "CREATE TABLE w(id INTEGER PRIMARY KEY, [join $coldefs ,], big TEXT)"
+  execsql "CREATE INDEX iw125 ON w([join $col125 ,])"
+  execsql "CREATE INDEX iw130 ON w([join $col130 ,], big)"
+  execsql "INSERT INTO w VALUES(1, [join $vals1 ,], printf('%.*c', 10000, 'a'))"
+  execsql {
+    SELECT dolt_commit('-Am', 'base');
+    SELECT dolt_checkout('-b', 'side');
+  }
+  execsql "INSERT INTO w VALUES(2, [join $vals2 ,], printf('%.*c', 10000, 'b'))"
+  execsql {
+    SELECT dolt_commit('-Am', 'side');
+    SELECT dolt_checkout('main');
+  }
+  execsql "INSERT INTO w VALUES(3, [join $vals3 ,], printf('%.*c', 10000, 'c'))"
+  execsql {
+    SELECT dolt_commit('-Am', 'main');
+    SELECT dolt_merge('side');
+  }
+  execsql {
+    SELECT id FROM w INDEXED BY iw125 WHERE c1 = 1001;
+    SELECT id, length(big) FROM w INDEXED BY iw130 WHERE c1 = 1001;
+    SELECT count(*) FROM w INDEXED BY iw125;
+    SELECT count(*) FROM w INDEXED BY iw130;
+    PRAGMA integrity_check;
+  }
+} {2 2 10000 3 3 ok}
+
 finish_test
