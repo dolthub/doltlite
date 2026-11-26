@@ -191,6 +191,51 @@ int csWasmReplaceLockedFile(
   return rc;
 }
 
+static int csWasmOpenVerifiedSource(
+  ChunkStore *cs,
+  const u8 *record,
+  i64 size,
+  u8 *aBuf,
+  sqlite3_file **ppIn,
+  char **pzTmp
+){
+  static const char *const azSuffix[] = { "-gc-tmp", "-backup-tmp" };
+  int i;
+  *ppIn = 0;
+  *pzTmp = 0;
+  for(i=0; i<(int)(sizeof(azSuffix)/sizeof(azSuffix[0])); i++){
+    sqlite3_file *pCand = 0;
+    char *zCand = 0;
+    i64 actual = 0;
+    ProllyHash hash;
+    int rc = csWasmOpenSidecar(cs, azSuffix[i], SQLITE_OPEN_READONLY,
+                               &pCand, &zCand);
+    if( rc!=SQLITE_OK ){
+      if( pCand ) sqlite3OsCloseFree(pCand);
+      sqlite3_free(zCand);
+      return rc;
+    }
+    if( !pCand ){
+      sqlite3_free(zCand);
+      continue;
+    }
+    rc = sqlite3OsFileSize(pCand, &actual);
+    if( rc==SQLITE_OK && actual==size ){
+      rc = csWasmImageHash(pCand, size, aBuf, &hash);
+      if( rc==SQLITE_OK
+       && memcmp(hash.data, record+CS_REPLACE_IMAGE_OFF, PROLLY_HASH_SIZE)==0 ){
+        *ppIn = pCand;
+        *pzTmp = zCand;
+        return SQLITE_OK;
+      }
+    }
+    sqlite3OsCloseFree(pCand);
+    sqlite3_free(zCand);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  return SQLITE_CORRUPT;
+}
+
 int csWasmRecoverReplacement(ChunkStore *cs){
   CsFileLock lock = CS_FILE_LOCK_INIT;
   sqlite3_file *pIn = 0;
@@ -200,8 +245,7 @@ int csWasmRecoverReplacement(ChunkStore *cs){
   char *zTmp = 0;
   u8 record[CS_REPLACE_RECORD_SIZE];
   u8 *aBuf = 0;
-  ProllyHash hash;
-  i64 size = 0, actual = 0;
+  i64 size = 0;
   int rc, locked = 0;
 
   rc = csFileLock(cs->file.pVfs, cs->file.zFilename, SQLITE_OPEN_READONLY,
@@ -215,18 +259,10 @@ int csWasmRecoverReplacement(ChunkStore *cs){
   }
   if( rc==SQLITE_OK ) rc = csWasmRecordRead(cs, pJournal, record, &size);
   if( rc==SQLITE_OK && size>0 ){
-    rc = csWasmOpenSidecar(cs, "-gc-tmp", SQLITE_OPEN_READONLY, &pIn, &zTmp);
-    if( rc==SQLITE_OK && !pIn ) rc = SQLITE_CORRUPT;
-    if( rc==SQLITE_OK ) rc = sqlite3OsFileSize(pIn, &actual);
-    if( rc==SQLITE_OK && actual!=size ) rc = SQLITE_CORRUPT;
+    aBuf = sqlite3_malloc(CS_SCAN_WINDOW);
+    if( !aBuf ) rc = SQLITE_NOMEM;
     if( rc==SQLITE_OK ){
-      aBuf = sqlite3_malloc(CS_SCAN_WINDOW);
-      if( !aBuf ) rc = SQLITE_NOMEM;
-    }
-    if( rc==SQLITE_OK ) rc = csWasmImageHash(pIn, size, aBuf, &hash);
-    if( rc==SQLITE_OK
-     && memcmp(hash.data, record+CS_REPLACE_IMAGE_OFF, PROLLY_HASH_SIZE)!=0 ){
-      rc = SQLITE_CORRUPT;
+      rc = csWasmOpenVerifiedSource(cs, record, size, aBuf, &pIn, &zTmp);
     }
     /* The first publisher may have written the seal but failed to sync it. */
     if( rc==SQLITE_OK ) rc = sqlite3OsSync(pJournal, SQLITE_SYNC_FULL);
@@ -236,6 +272,7 @@ int csWasmRecoverReplacement(ChunkStore *cs){
   if( pJournal ) sqlite3OsCloseFree(pJournal);
   if( rc==SQLITE_OK && size>0 ){
     (void)sqlite3OsDelete(cs->file.pVfs, zTmp, 0);
+    (void)csLockSidecarDelete(cs->file.pVfs, zTmp);
     (void)sqlite3OsDelete(cs->file.pVfs, zJournal, 0);
   }
   if( locked ) sqlite3OsUnlock(cs->file.pFile, SQLITE_LOCK_NONE);
