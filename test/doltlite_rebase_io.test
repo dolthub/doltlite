@@ -163,6 +163,191 @@ foreach length {63 64} {
   }
   db close
 }
+
+# Interactive rebase paused on conflict: commit error in --continue must
+# preserve customized plan actions and messages in dolt_rebase.
+forcedelete test.db
+sqlite3 db test.db -vfs rebaseio
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+  INSERT INTO t VALUES(1, 1);
+  SELECT dolt_commit('-Am', 'base');
+  SELECT dolt_checkout('-b', 'feat');
+  UPDATE t SET v = 2 WHERE id = 1;
+  SELECT dolt_commit('-am', 'f1');
+  INSERT INTO t VALUES(2, 20);
+  SELECT dolt_commit('-am', 'f2');
+  INSERT INTO t VALUES(3, 30);
+  SELECT dolt_commit('-am', 'f3');
+  INSERT INTO t VALUES(4, 40);
+  SELECT dolt_commit('-am', 'f4');
+  INSERT INTO t VALUES(5, 50);
+  SELECT dolt_commit('-am', 'f5');
+  SELECT dolt_checkout('main');
+  UPDATE t SET v = 9 WHERE id = 1;
+  SELECT dolt_commit('-am', 'main diverge');
+  SELECT dolt_checkout('feat');
+  SELECT dolt_rebase('-i', 'main');
+  UPDATE dolt_rebase SET action = 'reword', commit_message = 'f2 custom' WHERE commit_message = 'f2';
+  UPDATE dolt_rebase SET action = 'squash' WHERE commit_message = 'f3';
+  UPDATE dolt_rebase SET action = 'fixup' WHERE commit_message = 'f4';
+  UPDATE dolt_rebase SET action = 'drop' WHERE commit_message = 'f5';
+  BEGIN;
+}
+do_test paused.commit_err.pause {
+  set res [catchsql {SELECT dolt_rebase('--continue')}]
+  list [lindex $res 0] [db one {SELECT count(*) FROM dolt_conflicts}]
+} {1 1}
+set expected_plan [db eval {
+  SELECT rebase_order, action, commit_hash, commit_message
+  FROM dolt_rebase ORDER BY rebase_order
+}]
+execsql {
+  SELECT dolt_conflicts_resolve('--theirs', 't');
+  SELECT dolt_add('.');
+}
+set written 0
+set limit 0
+set persistent 0
+set armed 1
+do_test paused.commit_err.fail {
+  set caught [catch {db eval {SELECT dolt_rebase('--continue')}} message]
+  list $caught [sqlite3_errcode db]
+} {1 SQLITE_IOERR}
+set armed 0
+do_test paused.commit_err.plan_preserved {
+  set actual_plan [db eval {
+    SELECT rebase_order, action, commit_hash, commit_message
+    FROM dolt_rebase ORDER BY rebase_order
+  }]
+  list [expr {$actual_plan eq $expected_plan}] \
+       [db eval {SELECT action, commit_message FROM dolt_rebase ORDER BY rebase_order}]
+} {1 {pick f1 reword {f2 custom} squash f3 fixup f4 drop f5}}
+do_test paused.commit_err.retry {
+  db eval {
+    ROLLBACK;
+    BEGIN;
+    UPDATE t SET v = 2 WHERE id = 1;
+    SELECT dolt_add('t');
+  }
+  set res [catchsql {SELECT dolt_rebase('--continue')}]
+  db eval {COMMIT}
+  list [lindex $res 0] \
+       [string match {*Successfully rebased*} [lindex $res 1]] \
+       [db one {SELECT active_branch()}] \
+       [db eval {SELECT id, v FROM t ORDER BY id}] \
+       [db eval {SELECT message FROM dolt_log WHERE message NOT LIKE 'Initialize%'}] \
+       [db one {PRAGMA integrity_check}]
+} [list 0 1 feat {1 2 2 20 3 30 4 40} [list "f2 custom\n\nf3" f1 {main diverge} base] ok]
+db close
+
+# Paused rebase: error in rebaseFinishPaused must keep dolt_rebase intact
+# so a subsequent --continue succeeds once the error clears.
+forcedelete test.db
+sqlite3 db test.db -vfs rebaseio
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+  INSERT INTO t VALUES(1, 1);
+  SELECT dolt_commit('-Am', 'base');
+  SELECT dolt_checkout('-b', 'feat');
+  UPDATE t SET v = 2 WHERE id = 1;
+  SELECT dolt_commit('-am', 'f1');
+  SELECT dolt_checkout('main');
+  UPDATE t SET v = 9 WHERE id = 1;
+  SELECT dolt_commit('-am', 'main diverge');
+  SELECT dolt_checkout('feat');
+  BEGIN;
+}
+do_test paused.finish_err.pause {
+  set res [catchsql {SELECT dolt_rebase('main')}]
+  list [lindex $res 0] [db one {SELECT count(*) FROM dolt_conflicts}]
+} {1 1}
+execsql {
+  SELECT dolt_conflicts_resolve('--ours', 't');
+  SELECT dolt_add('.');
+}
+set written 0
+set limit 0
+set persistent 0
+set armed 1
+do_test paused.finish_err.fail {
+  set caught [catch {db eval {SELECT dolt_rebase('--continue')}} message]
+  list $caught [sqlite3_errcode db]
+} {1 SQLITE_IOERR}
+set armed 0
+do_test paused.finish_err.plan_present {
+  list [db one {SELECT active_branch()}] \
+       [db one {SELECT count(*) FROM sqlite_schema WHERE name='dolt_rebase'}] \
+       [db one {SELECT count(*) FROM dolt_rebase}]
+} {dolt_rebase_feat 1 0}
+do_test paused.finish_err.retry {
+  set res [catchsql {SELECT dolt_rebase('--continue')}]
+  db eval {COMMIT}
+  list [lindex $res 0] \
+       [string match {*Successfully rebased*} [lindex $res 1]] \
+       [db one {SELECT active_branch()}] \
+       [db one {SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat'}] \
+       [db one {SELECT count(*) FROM sqlite_schema WHERE name='dolt_rebase'}] \
+       [db eval {SELECT id, v FROM t ORDER BY id}] \
+       [db one {PRAGMA integrity_check}]
+} {0 1 feat 0 0 {1 9} ok}
+db close
+
+# Paused rebase: CAS failure (SQLITE_BUSY) in rebaseFinishPaused when peer
+# advances original branch must keep dolt_rebase intact for retry or --abort.
+forcedelete test.db
+sqlite3 db test.db -vfs rebaseio
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+  INSERT INTO t VALUES(1, 1);
+  SELECT dolt_commit('-Am', 'base');
+  SELECT dolt_checkout('-b', 'feat');
+  UPDATE t SET v = 2 WHERE id = 1;
+  SELECT dolt_commit('-am', 'f1');
+  SELECT dolt_checkout('main');
+  UPDATE t SET v = 9 WHERE id = 1;
+  SELECT dolt_commit('-am', 'main diverge');
+  SELECT dolt_checkout('feat');
+  SELECT dolt_rebase('-i', 'main');
+}
+sqlite3 peer "[file normalize test.db]/feat"
+peer eval {
+  INSERT INTO t VALUES(99, 99);
+  SELECT dolt_commit('-am', 'peer commit');
+}
+peer close
+execsql {BEGIN}
+do_test paused.finish_cas.pause {
+  set res [catchsql {SELECT dolt_rebase('--continue')}]
+  list [lindex $res 0] [db one {SELECT count(*) FROM dolt_conflicts}]
+} {1 1}
+execsql {
+  SELECT dolt_conflicts_resolve('--theirs', 't');
+  SELECT dolt_add('.');
+}
+do_test paused.finish_cas.busy {
+  set caught [catch {db eval {SELECT dolt_rebase('--continue')}} message]
+  list $caught [sqlite3_errcode db] \
+       [db one {SELECT count(*) FROM sqlite_schema WHERE name='dolt_rebase'}] \
+       [db one {SELECT count(*) FROM dolt_rebase}]
+} {1 SQLITE_BUSY 1 0}
+do_test paused.finish_cas.retry_still_busy {
+  set caught [catch {db eval {SELECT dolt_rebase('--continue')}} message]
+  list $caught [sqlite3_errcode db] \
+       [db one {SELECT count(*) FROM sqlite_schema WHERE name='dolt_rebase'}]
+} {1 SQLITE_BUSY 1}
+do_test paused.finish_cas.abort {
+  set res [catchsql {SELECT dolt_rebase('--abort')}]
+  db eval {COMMIT}
+  list [lindex $res 0] \
+       [string match {*aborted*} [lindex $res 1]] \
+       [db one {SELECT active_branch()}] \
+       [db one {SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat'}] \
+       [db eval {SELECT id, v FROM t ORDER BY id}] \
+       [db one {PRAGMA integrity_check}]
+} {0 1 feat 0 {1 2 99 99} ok}
+db close
+
 rebaseio delete
 forcedelete rebase-io-base.db
 finish_test

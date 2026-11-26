@@ -2460,26 +2460,6 @@ static int rebaseAbortPausedSession(sqlite3 *db){
   return rc;
 }
 
-static int rebaseHashesFromPlan(
-  const RebasePlanRow *aPlan,
-  int iStart,
-  int nPlan,
-  ProllyHash **pa,
-  int *pn
-){
-  int n;
-  int i;
-  *pa = 0;
-  *pn = 0;
-  if( iStart>=nPlan ) return SQLITE_OK;
-  n = nPlan - iStart;
-  *pa = sqlite3_malloc(n * (int)sizeof(ProllyHash));
-  if( !*pa ) return SQLITE_NOMEM;
-  for(i=0; i<n; i++) (*pa)[i] = aPlan[iStart + i].commitHash;
-  *pn = n;
-  return SQLITE_OK;
-}
-
 static int rebaseStripPlanFromCatalog(
   sqlite3 *db,
   const ProllyHash *pWorkingCat,
@@ -2913,14 +2893,7 @@ static void doltliteRebasePausedContinue(
   }
   if( rc!=SQLITE_OK ){
     if( bDropped ){
-      ProllyHash *aLeft = 0;
-      int nLeft = 0;
-      int prc = rebaseHashesFromPlan(
-          aPlan, idx<nPlan ? idx : nPlan, nPlan, &aLeft, &nLeft);
-      if( prc==SQLITE_OK && nLeft>0 ){
-        (void)rebaseCreateAndPopulatePlanTable(db, aLeft, nLeft);
-      }
-      sqlite3_free(aLeft);
+      (void)rebaseWritePlanRows(db, aPlan, nPlan);
     }
     rebaseFreePlan(aPlan, nPlan);
     sqlite3_free(zOrig);
@@ -2962,6 +2935,9 @@ static void doltliteRebasePausedContinue(
   rc = rebaseFinishPaused(db, zOrig, zPauseReturn, zWorking);
   rebaseFreePlan(aPlan, nPlan);
   if( rc!=SQLITE_OK ){
+    if( rebaseSessionIsPaused(db) ){
+      (void)rebaseWritePlanRows(db, 0, 0);
+    }
     sqlite3_free(zOrig);
     sqlite3_free(zWorking);
     sqlite3_result_error_code(context, rc);
