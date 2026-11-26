@@ -19,6 +19,8 @@ set expected_table_hash [db one {SELECT dolt_hashof_table('t1')}]
 set expected_table_head [db one {SELECT dolt_hashof_table('t1', 'HEAD')}]
 set expected_index_hash [db one {SELECT dolt_hashof_index('idx_bc')}]
 set expected_ref_hash   [db one {SELECT dolt_hashof('HEAD')}]
+set expected_db_hash    [db one {SELECT dolt_hashof_db()}]
+set expected_db_head    [db one {SELECT dolt_hashof_db('HEAD')}]
 
 faultsim_save_and_close
 
@@ -57,6 +59,28 @@ do_faultsim_test 1.4 -faults oom-transient -prep {
 } -test {
   faultsim_test_result [list 0 $::expected_ref_hash] \
       {1 {out of memory}} {1 {disk I/O error}}
+}
+
+do_faultsim_test 1.5 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db one {SELECT dolt_hashof_db()}
+} -test {
+  faultsim_test_result [list 0 $::expected_db_hash] \
+      {1 {out of memory}} {1 {disk I/O error}} \
+      {1 {dolt_hashof_db: catalog flush failed}} \
+      {1 {dolt_hashof_db: catalog hash failed}}
+}
+
+do_faultsim_test 1.6 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db one {SELECT dolt_hashof_db('HEAD')}
+} -test {
+  faultsim_test_result [list 0 $::expected_db_head] \
+      {1 {out of memory}} {1 {disk I/O error}} \
+      {1 {dolt_hashof_db: catalog hash failed}} \
+      {1 {dolt_hashof_db: commit load failed}}
 }
 
 finish_test

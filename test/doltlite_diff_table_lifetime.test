@@ -1,5 +1,6 @@
 set testdir [file dirname $argv0]
 source $testdir/tester.tcl
+source $testdir/malloc_common.tcl
 
 foreach {layout key constraint suffix} {
   rowid {id INTEGER PRIMARY KEY} {} {}
@@ -130,6 +131,48 @@ foreach order {main side} {
   do_execsql_test diff-lifetime-merge-$order {
     SELECT DISTINCT to_id,from_id,diff_type FROM dolt_diff_t;
   } {2 {} added}
+}
+
+reset_db
+do_execsql_test diff-history-oom-setup {
+  CREATE TABLE t_oom(
+    id INTEGER PRIMARY KEY,
+    a INT,
+    b TEXT,
+    to_commit TEXT,
+    commit_hash TEXT
+  );
+  INSERT INTO t_oom VALUES(1, 10, 'alpha', 'x', 'y');
+  SELECT length(dolt_commit('-Am', 'seed'));
+} {40}
+
+set expected_diff_oom [execsql {
+  SELECT to_id, to_a, to_b, diff_type FROM dolt_diff_t_oom
+}]
+set expected_hist_oom [execsql {
+  SELECT id, a, b FROM dolt_history_t_oom
+}]
+
+faultsim_save_and_close
+
+do_faultsim_test diff-table-connect-oom -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  execsql {SELECT to_id, to_a, to_b, diff_type FROM dolt_diff_t_oom}
+} -test {
+  faultsim_test_result [list 0 $::expected_diff_oom] \
+      {1 {out of memory}} {1 {disk I/O error}} \
+      {1 {no such table: dolt_diff_t_oom}}
+}
+
+do_faultsim_test history-table-connect-oom -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  execsql {SELECT id, a, b FROM dolt_history_t_oom}
+} -test {
+  faultsim_test_result [list 0 $::expected_hist_oom] \
+      {1 {out of memory}} {1 {disk I/O error}} \
+      {1 {no such table: dolt_history_t_oom}}
 }
 
 finish_test

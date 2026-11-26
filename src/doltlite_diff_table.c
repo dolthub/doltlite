@@ -25,7 +25,7 @@ static char *buildDiffSchema(const DoltliteColInfo *ci){
   if( doltliteAppendDisambiguatedColumnList(
           pStr,ci->azName,ci->nCol,"to_",", ",
           azReserved,ArraySize(azReserved),-1,ci->azDecl)!=SQLITE_OK ){
-    sqlite3_str_reset(pStr);
+    sqlite3_free(sqlite3_str_finish(pStr));
     return 0;
   }
   sqlite3_str_appendall(pStr, ", to_commit TEXT, to_commit_date TEXT");
@@ -34,7 +34,7 @@ static char *buildDiffSchema(const DoltliteColInfo *ci){
     if( doltliteAppendDisambiguatedColumnList(
             pStr,ci->azName,ci->nCol,"from_",", ",
             azReserved,ArraySize(azReserved),-1,ci->azDecl)!=SQLITE_OK ){
-      sqlite3_str_reset(pStr);
+      sqlite3_free(sqlite3_str_finish(pStr));
       return 0;
     }
   }

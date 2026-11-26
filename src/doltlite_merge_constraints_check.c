@@ -573,7 +573,7 @@ static int dlSpliceChecks(const char *zSql, DlCheck *a, int n, char **pzOut){
     sqlite3_str_appendall(pAdd, a[i].zRaw ? a[i].zRaw : "");
   }
   if( sqlite3_str_errcode(pAdd) ){
-    sqlite3_str_finish(pAdd);
+    sqlite3_free(sqlite3_str_finish(pAdd));
     return SQLITE_NOMEM;
   }
   zAdd = sqlite3_str_finish(pAdd);

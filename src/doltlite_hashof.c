@@ -644,7 +644,7 @@ char *doltliteCanonicalizeSchemaSql(const char *zSql, const char *zName){
 
   rc = sqlite3_str_errcode(pStr);
   if( rc!=SQLITE_OK ){
-    sqlite3_str_finish(pStr);
+    sqlite3_free(sqlite3_str_finish(pStr));
     return 0;
   }
   return sqlite3_str_finish(pStr);
@@ -751,7 +751,7 @@ static int canonicalizeCatalogForDbHash(
     const char *zTbl = aSorted[i].zTblName ? aSorted[i].zTblName : "";
     zCanon = doltliteCanonicalizeSchemaSql(aSorted[i].zSql, aSorted[i].zName);
     if( !zCanon ){
-      sqlite3_str_finish(pStr);
+      sqlite3_free(sqlite3_str_finish(pStr));
       sqlite3_free(aSorted);
       freeSchemaEntries(aSchema, nSchema);
       return SQLITE_NOMEM;
@@ -760,7 +760,7 @@ static int canonicalizeCatalogForDbHash(
     sqlite3_free(zCanon);
     zCanon = 0;
     if( sqlite3_str_errcode(pStr)!=SQLITE_OK ){
-      sqlite3_str_finish(pStr);
+      sqlite3_free(sqlite3_str_finish(pStr));
       sqlite3_free(aSorted);
       freeSchemaEntries(aSchema, nSchema);
       return SQLITE_NOMEM;
@@ -881,7 +881,7 @@ static int hashofDbInCatalog(
         zSchema,
         aSorted[i].zName ? aSorted[i].zName : "");
     if( sqlite3_str_errcode(pStr)!=SQLITE_OK ){
-      sqlite3_str_finish(pStr);
+      sqlite3_free(sqlite3_str_finish(pStr));
       sqlite3_free(aSorted);
       doltliteFreeCatalog(aTables, nTables);
       return SQLITE_NOMEM;
