@@ -170,28 +170,43 @@ static int prollyLoadNodeMaybeSparse(
   return SQLITE_OK;
 }
 
-int prollySubtreeCount(ChunkStore *pStore, ProllyCache *pCache,
-                       const ProllyHash *pHash, u64 *pCount){
+static int prollySubtreeCountRec(ChunkStore *pStore, ProllyCache *pCache,
+                                 const ProllyHash *pHash, int depth,
+                                 int expectedLevel, int expectedKeyType,
+                                 u64 *pCount){
   ProllyCacheEntry *pEntry = 0;
+  ProllyNode *pNode;
+  int keyType;
   int rc;
   int i;
   u64 sum = 0;
 
+  if( depth>=PROLLY_CURSOR_MAX_DEPTH ) return SQLITE_CORRUPT;
+
   rc = prollyLoadNode(pStore, pCache, pHash, &pEntry);
   if( rc!=SQLITE_OK ) return rc;
 
-  if( pEntry->node.level==0 ){
-    sum = (u64)pEntry->node.nItems;
-  }else if( prollyNodeHasSubtreeCounts(&pEntry->node) ){
-    for( i=0; i<(int)pEntry->node.nItems; i++ ){
-      sum += prollyNodeChildSubtreeCount(&pEntry->node, i);
+  pNode = &pEntry->node;
+  keyType = pNode->flags & (PROLLY_NODE_INTKEY | PROLLY_NODE_BLOBKEY);
+  if( (expectedLevel>=0 && (int)pNode->level!=expectedLevel)
+   || (expectedKeyType>=0 && keyType!=expectedKeyType) ){
+    prollyCacheRelease(pCache, pEntry);
+    return SQLITE_CORRUPT;
+  }
+
+  if( pNode->level==0 ){
+    sum = (u64)pNode->nItems;
+  }else if( prollyNodeHasSubtreeCounts(pNode) ){
+    for( i=0; i<(int)pNode->nItems; i++ ){
+      sum += prollyNodeChildSubtreeCount(pNode, i);
     }
   }else{
-    for( i=0; i<(int)pEntry->node.nItems; i++ ){
+    for( i=0; i<(int)pNode->nItems; i++ ){
       ProllyHash childHash;
       u64 childCount = 0;
-      prollyNodeChildHash(&pEntry->node, i, &childHash);
-      rc = prollySubtreeCount(pStore, pCache, &childHash, &childCount);
+      prollyNodeChildHash(pNode, i, &childHash);
+      rc = prollySubtreeCountRec(pStore, pCache, &childHash, depth+1,
+                                 (int)pNode->level - 1, keyType, &childCount);
       if( rc!=SQLITE_OK ){
         prollyCacheRelease(pCache, pEntry);
         return rc;
@@ -203,6 +218,11 @@ int prollySubtreeCount(ChunkStore *pStore, ProllyCache *pCache,
   prollyCacheRelease(pCache, pEntry);
   *pCount = sum;
   return SQLITE_OK;
+}
+
+int prollySubtreeCount(ChunkStore *pStore, ProllyCache *pCache,
+                       const ProllyHash *pHash, u64 *pCount){
+  return prollySubtreeCountRec(pStore, pCache, pHash, 0, -1, -1, pCount);
 }
 
 static int loadNode(ProllyCursor *cur, const ProllyHash *hash,

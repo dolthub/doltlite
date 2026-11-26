@@ -18664,6 +18664,158 @@ static void run_prolly_cursor_descend_error(void){
   chunkStoreClose(&cs);
 }
 
+static int cache_one_child_internal(ProllyCache *pCache,
+                                    const ProllyHash *pKeyHash,
+                                    u8 level,
+                                    const ProllyHash *pChild){
+  int n = 8 + 16 + 1 + PROLLY_HASH_SIZE;
+  u8 *buf = (u8*)sqlite3_malloc(n + PROLLY_NODE_BUFFER_SLOP);
+  ProllyCacheEntry *pEntry;
+  int rc = SQLITE_OK;
+  int pos = 0;
+  if( !buf ) return SQLITE_NOMEM;
+  memset(buf, 0, (size_t)(n + PROLLY_NODE_BUFFER_SLOP));
+  memcpy(buf, "DONP", 4);              pos = 4;
+  buf[pos++] = level;
+  buf[pos++] = 1;
+  buf[pos++] = 0;
+  buf[pos++] = PROLLY_NODE_BLOBKEY;
+  putU32le(buf + pos, 0);              pos += 4;
+  putU32le(buf + pos, 1);              pos += 4;
+  putU32le(buf + pos, 0);              pos += 4;
+  putU32le(buf + pos, PROLLY_HASH_SIZE); pos += 4;
+  buf[pos++] = 'b';
+  memcpy(buf + pos, pChild->data, PROLLY_HASH_SIZE);
+  pEntry = prollyCachePutOwned(pCache, pKeyHash, buf, n, &rc);
+  if( !pEntry ) return rc!=SQLITE_OK ? rc : SQLITE_ERROR;
+  prollyCacheRelease(pCache, pEntry);
+  return SQLITE_OK;
+}
+
+static void run_prolly_subtree_count_validation(void){
+  ChunkStore cs;
+  ProllyCache cache;
+  ProllyHash leaf1, leaf2, intLeaf, mid1, mid2, validRoot;
+  ProllyHash wrongSkipRoot, wrongSameRoot, wrongTypeRoot;
+  ProllyHash selfHash, cycleA, cycleB;
+  ProllyHash chainHash, deepRoot;
+  u64 count = 999;
+  int rc, i;
+
+  static const u8 blobLeaf1[] = {
+    'D','O','N','P',
+    0,
+    1, 0,
+    PROLLY_NODE_BLOBKEY,
+    0,0,0,0,
+    1,0,0,0,
+    0,0,0,0,
+    1,0,0,0,
+    'a',
+    'A'
+  };
+  static const u8 blobLeaf2[] = {
+    'D','O','N','P',
+    0,
+    2, 0,
+    PROLLY_NODE_BLOBKEY,
+    0,0,0,0,
+    1,0,0,0,
+    2,0,0,0,
+    0,0,0,0,
+    1,0,0,0,
+    2,0,0,0,
+    'b','c',
+    'B','C'
+  };
+  static const u8 intKeyLeaf[] = {
+    'D','O','N','P',
+    0,
+    1, 0,
+    PROLLY_NODE_INTKEY,
+    0,0,0,0,
+    8,0,0,0,
+    0,0,0,0,
+    1,0,0,0,
+    1,0,0,0,0,0,0,0,
+    'X'
+  };
+
+  printf("=== Prolly Subtree Count Validation Test ===\n\n");
+
+  check("subtree_count_open_store",
+        chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
+  check("subtree_count_init_cache",
+        prollyCacheInit(&cache, 64*4096)==SQLITE_OK);
+  check("subtree_count_put_leaf1",
+        chunkStorePut(&cs, blobLeaf1, (int)sizeof(blobLeaf1), &leaf1)==SQLITE_OK);
+  check("subtree_count_put_leaf2",
+        chunkStorePut(&cs, blobLeaf2, (int)sizeof(blobLeaf2), &leaf2)==SQLITE_OK);
+  check("subtree_count_put_int_leaf",
+        chunkStorePut(&cs, intKeyLeaf, (int)sizeof(intKeyLeaf), &intLeaf)==SQLITE_OK);
+
+  check("subtree_count_put_mid1",
+        put_two_child_internal(&cs, 1, &leaf1, &leaf2, &mid1)==SQLITE_OK);
+  check("subtree_count_put_mid2",
+        put_one_child_internal(&cs, 1, &leaf2, &mid2)==SQLITE_OK);
+  check("subtree_count_put_valid_root",
+        put_two_child_internal(&cs, 2, &mid1, &mid2, &validRoot)==SQLITE_OK);
+
+  rc = prollySubtreeCount(&cs, &cache, &validRoot, &count);
+  check("subtree_count_valid_multilevel_ok", rc==SQLITE_OK);
+  check("subtree_count_valid_multilevel_exact", count==5);
+
+  memset(selfHash.data, 0x11, PROLLY_HASH_SIZE);
+  check("subtree_count_cache_self_cycle",
+        cache_one_child_internal(&cache, &selfHash, 1, &selfHash)==SQLITE_OK);
+  rc = prollySubtreeCount(&cs, &cache, &selfHash, &count);
+  check("subtree_count_self_cycle_corrupt", rc==SQLITE_CORRUPT);
+
+  memset(cycleA.data, 0x22, PROLLY_HASH_SIZE);
+  memset(cycleB.data, 0x33, PROLLY_HASH_SIZE);
+  check("subtree_count_cache_cycle_a",
+        cache_one_child_internal(&cache, &cycleA, 2, &cycleB)==SQLITE_OK);
+  check("subtree_count_cache_cycle_b",
+        cache_one_child_internal(&cache, &cycleB, 1, &cycleA)==SQLITE_OK);
+  rc = prollySubtreeCount(&cs, &cache, &cycleA, &count);
+  check("subtree_count_two_node_cycle_corrupt", rc==SQLITE_CORRUPT);
+
+  check("subtree_count_put_wrong_skip_level",
+        put_one_child_internal(&cs, 2, &leaf1, &wrongSkipRoot)==SQLITE_OK);
+  rc = prollySubtreeCount(&cs, &cache, &wrongSkipRoot, &count);
+  check("subtree_count_wrong_skip_level_corrupt", rc==SQLITE_CORRUPT);
+
+  check("subtree_count_put_wrong_same_level",
+        put_one_child_internal(&cs, 1, &mid1, &wrongSameRoot)==SQLITE_OK);
+  rc = prollySubtreeCount(&cs, &cache, &wrongSameRoot, &count);
+  check("subtree_count_wrong_same_level_corrupt", rc==SQLITE_CORRUPT);
+
+  check("subtree_count_put_wrong_key_type",
+        put_one_child_internal(&cs, 1, &intLeaf, &wrongTypeRoot)==SQLITE_OK);
+  rc = prollySubtreeCount(&cs, &cache, &wrongTypeRoot, &count);
+  check("subtree_count_wrong_key_type_corrupt", rc==SQLITE_CORRUPT);
+
+  chainHash = leaf1;
+  for(i=1; i<PROLLY_CURSOR_MAX_DEPTH; i++){
+    ProllyHash nextHash;
+    rc = put_one_child_internal(&cs, (u8)i, &chainHash, &nextHash);
+    check("subtree_count_depth_chain_put", rc==SQLITE_OK);
+    chainHash = nextHash;
+  }
+  count = 0;
+  rc = prollySubtreeCount(&cs, &cache, &chainHash, &count);
+  check("subtree_count_max_valid_depth_ok", rc==SQLITE_OK && count==1);
+
+  check("subtree_count_put_too_deep_root",
+        put_one_child_internal(&cs, (u8)PROLLY_CURSOR_MAX_DEPTH,
+                               &chainHash, &deepRoot)==SQLITE_OK);
+  rc = prollySubtreeCount(&cs, &cache, &deepRoot, &count);
+  check("subtree_count_too_deep_corrupt", rc==SQLITE_CORRUPT);
+
+  prollyCacheFree(&cache);
+  chunkStoreClose(&cs);
+}
+
 /* Offsets must start at 0; a nonzero first offset makes offset-array and stride readers disagree. */
 static void run_prolly_node_first_offset_validation(void){
   ProllyNode node;
@@ -24018,6 +24170,7 @@ static const RegressionCase aCases[] = {
   { "prolly_cursor_node_type_and_level_validation", "Prolly Cursor Node Type And Level Validation Test", run_prolly_cursor_node_type_and_level_validation },
   { "prolly_cursor_empty_leaf_under_internal", "Prolly Cursor Empty Leaf Under Internal Test", run_prolly_cursor_empty_leaf_under_internal },
   { "prolly_cursor_descend_error", "Prolly Cursor Descend Error Test", run_prolly_cursor_descend_error },
+  { "prolly_subtree_count_validation", "Prolly Subtree Count Validation Test", run_prolly_subtree_count_validation },
   { "prolly_node_first_offset_validation", "Prolly Node First Offset Validation Test", run_prolly_node_first_offset_validation },
   { "prolly_diff_iter_copies_blob_keys", "Prolly Diff Iterator Blob Key Copy Test", run_prolly_diff_iter_copies_blob_keys },
   { "prolly_diff_leaf_record_corruption", "Prolly Diff Leaf Corruption Test", run_prolly_diff_leaf_surfaces_record_corruption },
