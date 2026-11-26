@@ -702,6 +702,7 @@ static int detectUniqueViolationsForIndexWithoutRowid(
   Index *pPkIdx = sqlite3PrimaryKeyIndex(pIdx->pTable);
   KeyInfo *pKeyInfo = 0;
   DoltliteColInfo cols;
+  DoltliteRecordInfo info;
   ProllyCursor cursor;
   UniqueIndexEntry *aEntry = 0;
   int nEntry = 0;
@@ -712,6 +713,7 @@ static int detectUniqueViolationsForIndexWithoutRowid(
   int res = 0;
 
   memset(&cols, 0, sizeof(cols));
+  doltliteRecordInfoInit(&info);
   if( !cs || !pCache || !pCurrent || !pPkIdx ) return SQLITE_ERROR;
   rc = doltliteGetColumnNames(db, zTable, &cols);
   if( rc!=SQLITE_OK ) goto without_rowid_done;
@@ -733,7 +735,6 @@ static int detectUniqueViolationsForIndexWithoutRowid(
     int nKey = 0;
     int nValue = 0;
     int nRecord;
-    DoltliteRecordInfo info = {0};
     UniqueIndexEntry entry;
     int hasNull = 0;
     int partialMatch = 1;
@@ -798,6 +799,7 @@ static int detectUniqueViolationsForIndexWithoutRowid(
   }
 
 without_rowid_done:
+  doltliteRecordInfoClear(&info);
   sqlite3_free(zPartWhere);
   if( cursorOpen ) prollyCursorClose(&cursor);
   uniqueIndexEntriesFree(db, aEntry, nEntry);

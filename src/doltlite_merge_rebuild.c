@@ -1306,6 +1306,7 @@ int normalizeSideToMergedLayout(
   MergeColDefaults theirsDefaults;
   DoltliteColInfo sideCi;
   int sideCiInit = 0;
+  DoltliteRecordInfo info, kinfo;
   u8 *pKeyRec = 0;
   ProllyCursor oursCur;
   int oursCurInit = 0;
@@ -1327,6 +1328,8 @@ int normalizeSideToMergedLayout(
   memset(&oursDefaults, 0, sizeof(oursDefaults));
   memset(&theirsDefaults, 0, sizeof(theirsDefaults));
   memset(&sideCi, 0, sizeof(sideCi));
+  doltliteRecordInfoInit(&info);
+  doltliteRecordInfoInit(&kinfo);
 
   memset(pOutRoot, 0, sizeof(*pOutRoot));
   /* Reading an int-key tree with a clustered-key cursor (or the reverse)
@@ -1591,7 +1594,6 @@ mapped:
   while( prollyCursorIsValid(&cur) ){
     const u8 *pVal = 0; int nVal = 0;
     const u8 *pKey = 0; int nKey = 0; i64 intKey = 0;
-    DoltliteRecordInfo info = {0};
     int nEmit = 0, k;
     int rowOnlyTheirs;
     u8 *pNew = 0; int nNew = 0;
@@ -1670,7 +1672,6 @@ mapped:
     /* A PK-covering row stores an empty record; once a filled default
     ** makes the record non-empty its key columns must be spelled out too. */
     if( nEmit>0 && nVal==0 && sideCiInit ){
-      DoltliteRecordInfo kinfo = {0};
       int nKeyRec = 0;
       rc = doltliteRecordFromClusteredKeyCols(db, &sideCi, pKey, nKey,
                                               &pKeyRec, &nKeyRec);
@@ -1690,10 +1691,7 @@ mapped:
           if( affTo!=affFrom ){
             u8 *pOwned = 0;
             rc = relayoutApplyAffinity(db, &aMem[tgt], affTo, &pOwned);
-            if( rc!=SQLITE_OK ){
-              doltliteRecordInfoClear(&kinfo);
-              goto done;
-            }
+            if( rc!=SQLITE_OK ) goto done;
             sqlite3_free(apOwned[tgt]);
             apOwned[tgt] = pOwned;
           }
@@ -1760,6 +1758,8 @@ mapped:
   }
 
 done:
+  doltliteRecordInfoClear(&info);
+  doltliteRecordInfoClear(&kinfo);
   clearOwnedFields(apOwned, nMergedRecord);
   sqlite3_free(apOwned);
   sqlite3_free(aSupplied);
