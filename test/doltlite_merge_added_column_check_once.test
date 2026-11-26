@@ -103,4 +103,99 @@ do_test revert-keeps-one {
   list [count_checks] [db eval {SELECT name FROM pragma_table_info('t') ORDER BY cid}]
 } {1 {id a c k}}
 
+# Deferred CHECK and FOREIGN KEY clauses must be installed into sqlite_master
+# and reset the connection schema so they are enforced immediately on the same connection.
+foreach {dir first} {forward main reverse br} {
+  do_test deferred-check-immediate-$dir {
+    reset_db
+    db eval {
+      CREATE TABLE Items(id INTEGER PRIMARY KEY, a INT);
+      INSERT INTO Items VALUES(1, 10);
+      SELECT dolt_commit('-Am', 'base');
+      SELECT dolt_branch('br');
+      ALTER TABLE Items ADD COLUMN c INT DEFAULT 0;
+      SELECT dolt_commit('-Am', 'main-col');
+      SELECT dolt_checkout('br');
+      DROP TABLE Items;
+      CREATE TABLE Items(id INTEGER PRIMARY KEY, a INT, b INT DEFAULT 1, CONSTRAINT ck_b CHECK(b > 0));
+      INSERT INTO Items VALUES(1, 10, 5);
+      SELECT dolt_commit('-Am', 'br-check');
+    }
+    db eval "SELECT dolt_checkout('$first')"
+    set other [expr {$first eq "main" ? "br" : "main"}]
+    set merged [db one "SELECT length(dolt_merge('$other'))"]
+    set hasCheck [db one {
+      SELECT count(*) FROM sqlite_master
+       WHERE type='table' AND name='Items' COLLATE NOCASE
+         AND sql LIKE '%CONSTRAINT ck_b CHECK(b > 0)%'
+    }]
+    set badRc [catch {db eval {INSERT INTO Items(id, a, b) VALUES(2, 20, -1)}} badMsg]
+    db eval {INSERT INTO Items(id, a, b) VALUES(2, 20, 7)}
+    set ic [db one {PRAGMA integrity_check}]
+    list $merged $hasCheck $badRc [string match {*CHECK constraint failed: ck_b*} $badMsg] $ic
+  } {40 1 1 1 ok}
+
+  do_test deferred-fk-immediate-$dir {
+    reset_db
+    db eval {
+      PRAGMA foreign_keys = ON;
+      CREATE TABLE Parents(pid INTEGER PRIMARY KEY);
+      INSERT INTO Parents VALUES(1);
+      CREATE TABLE Items(id INTEGER PRIMARY KEY, a INT);
+      INSERT INTO Items VALUES(1, 10);
+      SELECT dolt_commit('-Am', 'base');
+      SELECT dolt_branch('br');
+      ALTER TABLE Items ADD COLUMN c INT DEFAULT 0;
+      SELECT dolt_commit('-Am', 'main-col');
+      SELECT dolt_checkout('br');
+      DROP TABLE Items;
+      CREATE TABLE Items(id INTEGER PRIMARY KEY, a INT, pid INT DEFAULT 1, FOREIGN KEY(pid) REFERENCES Parents(pid));
+      INSERT INTO Items VALUES(1, 10, 1);
+      SELECT dolt_commit('-Am', 'br-fk');
+    }
+    db eval "SELECT dolt_checkout('$first')"
+    set other [expr {$first eq "main" ? "br" : "main"}]
+    set merged [db one "SELECT length(dolt_merge('$other'))"]
+    set hasFk [db one {
+      SELECT count(*) FROM sqlite_master
+       WHERE type='table' AND name='Items' COLLATE NOCASE
+         AND sql LIKE '%FOREIGN KEY(pid) REFERENCES Parents(pid)%'
+    }]
+    set fkCols [db eval {SELECT "from" FROM pragma_foreign_key_list('Items')}]
+    set badRc [catch {db eval {INSERT INTO Items(id, a, pid) VALUES(2, 20, 999)}} badMsg]
+    db eval {INSERT INTO Items(id, a, pid) VALUES(2, 20, 1)}
+    set ic [db one {PRAGMA integrity_check}]
+    list $merged $hasFk $fkCols $badRc [string match {*FOREIGN KEY constraint failed*} $badMsg] $ic
+  } {40 1 pid 1 1 ok}
+
+  do_test deferred-check-rename-$dir {
+    reset_db
+    db eval {
+      CREATE TABLE Items(id INTEGER PRIMARY KEY, a INT);
+      INSERT INTO Items VALUES(1, 10);
+      SELECT dolt_commit('-Am', 'base');
+      SELECT dolt_branch('br');
+      ALTER TABLE Items RENAME TO Products;
+      SELECT dolt_commit('-Am', 'main-rename');
+      SELECT dolt_checkout('br');
+      DROP TABLE Items;
+      CREATE TABLE Items(id INTEGER PRIMARY KEY, a INT, b INT DEFAULT 1, CONSTRAINT ck_b CHECK(b > 0));
+      INSERT INTO Items VALUES(1, 10, 5);
+      SELECT dolt_commit('-Am', 'br-check');
+    }
+    db eval "SELECT dolt_checkout('$first')"
+    set other [expr {$first eq "main" ? "br" : "main"}]
+    set merged [db one "SELECT length(dolt_merge('$other'))"]
+    set hasCheck [db one {
+      SELECT count(*) FROM sqlite_master
+       WHERE type='table' AND name='products' COLLATE NOCASE
+         AND sql LIKE '%CONSTRAINT ck_b CHECK(b > 0)%'
+    }]
+    set badRc [catch {db eval {INSERT INTO products(id, a, b) VALUES(2, 20, -1)}} badMsg]
+    db eval {INSERT INTO products(id, a, b) VALUES(2, 20, 7)}
+    set ic [db one {PRAGMA integrity_check}]
+    list $merged $hasCheck $badRc [string match {*CHECK constraint failed: ck_b*} $badMsg] $ic
+  } {40 1 1 1 ok}
+}
+
 finish_test

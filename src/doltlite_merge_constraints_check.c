@@ -1397,10 +1397,11 @@ int schemaInstallDeferredClauses(
   const char *zSql;
   char *zNew = 0;
   u64 savedFlags;
-  int i, nAdd = 0, rc;
+  int i, nAdd = 0, nChange = 0, rc;
   if( nClauses<=0 || !zTable ) return SQLITE_OK;
   rc = sqlite3_prepare_v2(db,
-      "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+      "SELECT sql FROM sqlite_master"
+      " WHERE type='table' AND name=? COLLATE NOCASE",
       -1, &pSel, 0);
   if( rc!=SQLITE_OK ) return rc;
   sqlite3_bind_text(pSel, 1, zTable, -1, SQLITE_STATIC);
@@ -1442,14 +1443,18 @@ int schemaInstallDeferredClauses(
   savedFlags = db->flags;
   db->flags = (savedFlags & ~(u64)SQLITE_Defensive) | SQLITE_WriteSchema;
   rc = sqlite3_prepare_v2(db,
-      "UPDATE sqlite_master SET sql=? WHERE type='table' AND name=?",
+      "UPDATE sqlite_master SET sql=?"
+      " WHERE type='table' AND name=? COLLATE NOCASE",
       -1, &pUp, 0);
   if( rc==SQLITE_OK ){
     char *zKeep = 0;
     sqlite3_bind_text(pUp, 1, zNew, -1, SQLITE_STATIC);
     sqlite3_bind_text(pUp, 2, zTable, -1, SQLITE_STATIC);
     rc = sqlite3_step(pUp);
-    if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+    if( rc==SQLITE_DONE ){
+      rc = SQLITE_OK;
+      nChange = sqlite3_changes(db);
+    }
     if( rc!=SQLITE_OK ) zKeep = sqlite3_mprintf("%s", sqlite3_errmsg(db));
     sqlite3_finalize(pUp);
     if( zKeep ){
@@ -1459,6 +1464,9 @@ int schemaInstallDeferredClauses(
   }
   db->flags = savedFlags;
   sqlite3_free(zNew);
+  if( rc==SQLITE_OK && nChange ){
+    sqlite3ResetAllSchemasOfConnection(db);
+  }
   return rc;
 }
 
