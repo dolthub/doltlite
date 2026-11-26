@@ -741,6 +741,43 @@ static int appendUndoRec(ProllyMutMap *mm, int idx){
   return SQLITE_OK;
 }
 
+static void popUndoRec(ProllyMutMap *mm){
+  ProllyMutMapUndoRec *rec;
+  assert( mm->nUndo > 0 );
+  mm->nUndo--;
+  rec = &mm->aUndo[mm->nUndo];
+  sqlite3_free(rec->prevVal);
+  rec->prevVal = 0;
+}
+
+static int replaceExistingEntry(
+  ProllyMutMap *mm,
+  int phys,
+  const u8 *pVal,
+  int nVal,
+  i64 nZeroTail
+){
+  ProllyMutMapEntry *e = &mm->aEntries[phys];
+  int pushedUndo = 0;
+  int rc;
+
+  if( mm->currentSavepointLevel > 0
+   && decodeLevel(mm, e->bornAt) < mm->currentSavepointLevel ){
+    rc = appendUndoRec(mm, phys);
+    if( rc!=SQLITE_OK ) return rc;
+    pushedUndo = 1;
+  }
+  rc = replaceEntryValue(mm, e, pVal, nVal);
+  if( rc!=SQLITE_OK ){
+    if( pushedUndo ) popUndoRec(mm);
+    return rc;
+  }
+  e->op = PROLLY_EDIT_INSERT;
+  e->nZeroTail = nZeroTail;
+  e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
+  return SQLITE_OK;
+}
+
 int prollyMutMapInsert(
   ProllyMutMap *mm,
   const u8 *pKey, int nKey, i64 intKey,
@@ -779,18 +816,9 @@ int prollyMutMapInsertGetEntry(
   }
 
   if( found ){
-    ProllyMutMapEntry *e = &mm->aEntries[phys];
-
-    if( mm->currentSavepointLevel > 0
-     && decodeLevel(mm, e->bornAt) < mm->currentSavepointLevel ){
-      rc = appendUndoRec(mm, phys);
-      if( rc!=SQLITE_OK ) return rc;
-    }
-    e->op = PROLLY_EDIT_INSERT;
-    rc = replaceEntryValue(mm, e, pVal, nVal);
+    rc = replaceExistingEntry(mm, phys, pVal, nVal, 0);
     if( rc!=SQLITE_OK ) return rc;
-    e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
-    if( ppEntry ) *ppEntry = e;
+    if( ppEntry ) *ppEntry = &mm->aEntries[phys];
     return SQLITE_OK;
   }
 
@@ -845,19 +873,7 @@ int prollyMutMapInsertZeroTail(
   }
 
   if( found ){
-    ProllyMutMapEntry *e = &mm->aEntries[phys];
-
-    if( mm->currentSavepointLevel > 0
-     && decodeLevel(mm, e->bornAt) < mm->currentSavepointLevel ){
-      rc = appendUndoRec(mm, phys);
-      if( rc!=SQLITE_OK ) return rc;
-    }
-    e->op = PROLLY_EDIT_INSERT;
-    rc = replaceEntryValue(mm, e, pVal, nValPrefix);
-    if( rc!=SQLITE_OK ) return rc;
-    e->nZeroTail = nZeroTail;
-    e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
-    return SQLITE_OK;
+    return replaceExistingEntry(mm, phys, pVal, nValPrefix, nZeroTail);
   }
 
   return appendEntry(mm, pKey, nKey, pVal, nValPrefix, idx,
@@ -870,21 +886,11 @@ int prollyMutMapReplaceEntry(
   const u8 *pVal,
   int nVal
 ){
-  int rc;
   int phys;
   if( !mm || !e ) return SQLITE_MISUSE;
   phys = (int)(e - mm->aEntries);
   if( phys<0 || phys>=mm->nEntries ) return SQLITE_CORRUPT_BKPT;
-  if( mm->currentSavepointLevel > 0
-   && decodeLevel(mm, e->bornAt) < mm->currentSavepointLevel ){
-    rc = appendUndoRec(mm, phys);
-    if( rc!=SQLITE_OK ) return rc;
-  }
-  e->op = PROLLY_EDIT_INSERT;
-  rc = replaceEntryValue(mm, e, pVal, nVal);
-  if( rc!=SQLITE_OK ) return rc;
-  e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
-  return SQLITE_OK;
+  return replaceExistingEntry(mm, phys, pVal, nVal, 0);
 }
 
 int prollyMutMapDelete(
