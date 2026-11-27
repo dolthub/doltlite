@@ -485,31 +485,12 @@ struct StatusConflictCtx {
   const char *zFilter;
 };
 
-static int statusAddConflict(void *pArg, const char *zTable, int nConflicts){
-  StatusConflictCtx *p = (StatusConflictCtx*)pArg;
-  int i;
-  if( p->zFilter && sqlite3_stricmp(p->zFilter, zTable)!=0 ) return SQLITE_OK;
-  if( nConflicts>0 ) return addRow(p->pCur, zTable, 0, "conflict");
-  for(i=0; i<p->pCur->nRows; i++){
-    if( p->pCur->aRows[i].zName
-     && sqlite3_stricmp(p->pCur->aRows[i].zName, zTable)==0 ){
-      p->pCur->aRows[i].staged = 0;
-      p->pCur->aRows[i].zStatus = "schema conflict";
-      return SQLITE_OK;
-    }
-  }
-  return addRow(p->pCur, zTable, 0, "schema conflict");
-}
-
-/* A table holding constraint violations is reported once, unstaged, as a
-** constraint violation, in place of its staged and unstaged changes. */
-static int statusAddConstraintViolation(void *pArg, const char *zTable,
-                                        int nRows){
-  StatusConflictCtx *p = (StatusConflictCtx*)pArg;
-  DoltliteStatusCursor *pCur = p->pCur;
+static int statusReplaceTableRows(
+  DoltliteStatusCursor *pCur,
+  const char *zTable,
+  const char *zStatus
+){
   int i, j;
-  (void)nRows;
-  if( p->zFilter && sqlite3_stricmp(p->zFilter, zTable)!=0 ) return SQLITE_OK;
   for(i=j=0; i<pCur->nRows; i++){
     if( pCur->aRows[i].zName
      && sqlite3_stricmp(pCur->aRows[i].zName, zTable)==0 ){
@@ -519,7 +500,24 @@ static int statusAddConstraintViolation(void *pArg, const char *zTable,
     pCur->aRows[j++] = pCur->aRows[i];
   }
   pCur->nRows = j;
-  return addRow(pCur, zTable, 0, "constraint violation");
+  return addRow(pCur, zTable, 0, zStatus);
+}
+
+static int statusAddConflict(void *pArg, const char *zTable, int nConflicts){
+  StatusConflictCtx *p = (StatusConflictCtx*)pArg;
+  if( p->zFilter && sqlite3_stricmp(p->zFilter, zTable)!=0 ) return SQLITE_OK;
+  if( nConflicts>0 ) return addRow(p->pCur, zTable, 0, "conflict");
+  return statusReplaceTableRows(p->pCur, zTable, "schema conflict");
+}
+
+/* A table holding constraint violations is reported once, unstaged, as a
+** constraint violation, in place of its staged and unstaged changes. */
+static int statusAddConstraintViolation(void *pArg, const char *zTable,
+                                        int nRows){
+  StatusConflictCtx *p = (StatusConflictCtx*)pArg;
+  (void)nRows;
+  if( p->zFilter && sqlite3_stricmp(p->zFilter, zTable)!=0 ) return SQLITE_OK;
+  return statusReplaceTableRows(p->pCur, zTable, "constraint violation");
 }
 
 static int statusMaybeAddParentSchemaChange(
