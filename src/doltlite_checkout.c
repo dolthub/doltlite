@@ -567,6 +567,7 @@ void doltConnectBranchFunc(
 
   (void)argc;
   memset(&m, 0, sizeof(m));
+  if( doltliteCmdRejectInWriteStatement(ctx, "connect_branch") ) return;
   if( doltliteCmdRejectDetached(ctx) ) return;
   if( doltliteCmdRejectReadOnly(ctx) ) return;
   if( !cs ){
