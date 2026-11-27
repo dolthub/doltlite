@@ -255,7 +255,9 @@ int csIndexSpoolGet(ChunkIndexSpool *p, int i, ChunkIndexEntry *e){
   a = &p->aBuffer[slot*CS_SPOOL_BLOCK];
   if( p->aCache[slot]!=block ){
     int n = MIN(p->nEntry-first, CS_SPOOL_BLOCK);
-    int rc = sqlite3OsRead(p->pFile, a, n*sizeof(*a), 8+(i64)first*sizeof(*a));
+    int rc;
+    p->aCache[slot] = -1;
+    rc = sqlite3OsRead(p->pFile, a, n*sizeof(*a), 8+(i64)first*sizeof(*a));
     if( rc!=SQLITE_OK ) return rc;
     p->aCache[slot] = block;
   }

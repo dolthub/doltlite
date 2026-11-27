@@ -476,9 +476,15 @@ static sqlite3_vfs *pSpoolVfs;
 static sqlite3_io_methods spoolMethods;
 static int (*xSpoolRead)(sqlite3_file*, void*, int, sqlite3_int64);
 static int nSpoolRead;
+static int failNextSpoolRead;
 
 static int spoolRead(sqlite3_file *f, void *buf, int n, sqlite3_int64 off){
   nSpoolRead++;
+  if( failNextSpoolRead ){
+    failNextSpoolRead = 0;
+    if( n>0 ) memset(buf, 0xA5, n>64 ? 64 : n);
+    return SQLITE_IOERR_READ;
+  }
   return xSpoolRead(f, buf, n, off);
 }
 
@@ -588,6 +594,54 @@ static void test_index_spool_bounds(void){
     csIndexSpoolFree(p);
     sqlite3_hard_heap_limit64(oldLimit);
   }
+}
+
+static void test_index_spool_read_error(void){
+  ChunkIndexSpool *p = 0;
+  ChunkIndexEntry e;
+  ProllyHash h;
+  sqlite3_vfs vfs;
+  int i, before, rc;
+  const int nEntries = 8192 + 128;
+  pSpoolVfs = sqlite3_vfs_find(0);
+  vfs = *pSpoolVfs;
+  vfs.xOpen = spoolOpen;
+  failNextSpoolRead = 0;
+  rc = csIndexSpoolInit(&vfs, &p);
+  for(i=0; rc==SQLITE_OK && i<nEntries; i++){
+    indexTestHash(&e.hash, i);
+    e.offset = i + CHUNK_MANIFEST_SIZE;
+    e.size = i;
+    rc = csIndexSpoolAdd(p, &e);
+  }
+  if( rc==SQLITE_OK ) rc = csIndexSpoolFinish(p);
+  check("spool_read_err_setup", rc==SQLITE_OK && csIndexSpoolCount(p)==nEntries);
+  if( rc==SQLITE_OK ){
+    rc = csIndexSpoolGet(p, 0, &e);
+    indexTestHash(&h, 0);
+    check("spool_read_err_prime_slot0",
+          rc==SQLITE_OK && memcmp(&e.hash, &h, sizeof(h))==0
+          && e.offset==CHUNK_MANIFEST_SIZE && e.size==0);
+
+    failNextSpoolRead = 1;
+    rc = csIndexSpoolGet(p, 8192, &e);
+    check("spool_read_err_injected_failure", rc==SQLITE_IOERR_READ);
+
+    before = nSpoolRead;
+    rc = csIndexSpoolGet(p, 0, &e);
+    check("spool_read_err_reloads_evicted_slot",
+          rc==SQLITE_OK && nSpoolRead==before+1
+          && memcmp(&e.hash, &h, sizeof(h))==0
+          && e.offset==CHUNK_MANIFEST_SIZE && e.size==0);
+
+    rc = csIndexSpoolGet(p, 8192, &e);
+    indexTestHash(&h, 8192);
+    check("spool_read_err_subsequent_read_ok",
+          rc==SQLITE_OK && memcmp(&e.hash, &h, sizeof(h))==0
+          && e.offset==8192+CHUNK_MANIFEST_SIZE && e.size==8192);
+  }
+  failNextSpoolRead = 0;
+  csIndexSpoolFree(p);
 }
 
 #define LARGE_INDEX_COUNT (67108864+129)
@@ -736,6 +790,7 @@ int main(void){
   test_gc_live_allocation_budget();
   test_index_spool();
   test_index_spool_bounds();
+  test_index_spool_read_error();
   test_index_over_2gib();
 
   printf("\ngc_tip_survival_test: %d passed, %d failed\n", nPass, nFail);
