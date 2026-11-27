@@ -110,6 +110,14 @@ setup_db "$DB"
 res=$("$DOLTLITE" "$DB" "SELECT dolt_connect_branch('feat'); SELECT staged FROM dolt_status WHERE table_name='t';")
 check_eq "reconnect_preserves_unstaged_state" $'0\n0' "$res"
 
+setup_db "$DB"
+res=$("$DOLTLITE" "$DB" "INSERT INTO t VALUES(10, dolt_connect_branch('feat'));" 2>&1 || true)
+check_match "connect_inside_insert_values_rejected" "cannot connect_branch while a write statement is active" "$res"
+res=$("$DOLTLITE" "$DB" "INSERT INTO t SELECT 10, dolt_connect_branch('feat');" 2>&1 || true)
+check_match "connect_inside_insert_select_rejected" "cannot connect_branch while a write statement is active" "$res"
+res=$("$DOLTLITE" "$DB" "SELECT active_branch(); SELECT id, v FROM t ORDER BY id;")
+check_eq "connect_inside_dml_leaves_branch_and_table_intact" $'main\n1|main' "$res"
+
 rm -f "$DB"
 
 echo ""
