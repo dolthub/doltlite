@@ -605,4 +605,43 @@ run_test_error_match "patch_tvf_arg_nul_still_errors" \
   "contains a NUL byte" "$PPD"
 rm -f "$PPD"
 
+UBD=/tmp/test_diff_unborn_$$.db
+rm -f "$UBD"
+run_test "diff_unborn_empty_unfiltered" \
+  "SELECT count(*) FROM dolt_diff;" "0" "$UBD"
+run_test "diff_unborn_empty_working" \
+  "SELECT count(*) FROM dolt_diff WHERE commit_hash='WORKING';" "0" "$UBD"
+run_test "diff_unborn_empty_staged" \
+  "SELECT count(*) FROM dolt_diff WHERE commit_hash='STAGED';" "0" "$UBD"
+
+dltest_require "diff_unborn_create_table" "$UBD" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+"
+run_test "diff_unborn_working_unfiltered" \
+  "SELECT commit_hash||'|'||table_name||'|'||data_change||'|'||schema_change FROM dolt_diff;" \
+  "WORKING|t|0|1" "$UBD"
+run_test "diff_unborn_working_filtered_commit" \
+  "SELECT commit_hash||'|'||table_name||'|'||data_change||'|'||schema_change FROM dolt_diff WHERE commit_hash='WORKING';" \
+  "WORKING|t|0|1" "$UBD"
+run_test "diff_unborn_working_filtered_table" \
+  "SELECT commit_hash||'|'||table_name||'|'||data_change||'|'||schema_change FROM dolt_diff WHERE table_name='t';" \
+  "WORKING|t|0|1" "$UBD"
+
+dltest_require "diff_unborn_stage_and_working" "$UBD" "
+INSERT INTO t VALUES(1);
+SELECT dolt_add('t');
+CREATE TABLE u(id INTEGER PRIMARY KEY);
+"
+run_test "diff_unborn_staged_and_working_unfiltered" \
+  "SELECT commit_hash||'|'||table_name||'|'||data_change||'|'||schema_change FROM dolt_diff ORDER BY commit_hash, table_name;" \
+  "STAGED|t|1|1
+WORKING|u|0|1" "$UBD"
+run_test "diff_unborn_staged_filtered" \
+  "SELECT commit_hash||'|'||table_name||'|'||data_change||'|'||schema_change FROM dolt_diff WHERE commit_hash='STAGED';" \
+  "STAGED|t|1|1" "$UBD"
+run_test "diff_unborn_working_after_stage_filtered" \
+  "SELECT commit_hash||'|'||table_name||'|'||data_change||'|'||schema_change FROM dolt_diff WHERE commit_hash='WORKING';" \
+  "WORKING|u|0|1" "$UBD"
+rm -f "$UBD"
+
 dltest_finish
