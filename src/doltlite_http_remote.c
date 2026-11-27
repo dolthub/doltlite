@@ -273,6 +273,18 @@ static int httpHeaderNameEquals(
       && sqlite3_strnicmp((const char*)zName, zExpected, nExpected)==0;
 }
 
+char *doltliteHttpFormatHostHeader(const char *zHost, int port, int useTls){
+  int isDefaultPort;
+  int needsBrackets;
+  if( !zHost ) return 0;
+  isDefaultPort = useTls ? (port == 443) : (port == 80);
+  needsBrackets = strchr(zHost, ':') != 0 && zHost[0] != '[';
+  if( isDefaultPort ){
+    return sqlite3_mprintf(needsBrackets ? "[%s]" : "%s", zHost);
+  }
+  return sqlite3_mprintf(needsBrackets ? "[%s]:%d" : "%s:%d", zHost, port);
+}
+
 #ifdef DOLTLITE_HAVE_AUTH
 #define httpConnOpen(H,P,T,M) doltliteConnOpenTimeout((H),(P),(T),(M))
 #define httpConnWriteAll(C,B,N) doltliteConnWriteAll((C),(B),(N))
@@ -958,6 +970,7 @@ static int httpRequestOnce(
   int *pTransportError
 ){
   char *zAuth = 0;
+  char *zHost = 0;
   char *zHdr;
   u8 *pRaw = 0;
   int nRaw = 0;
@@ -1004,6 +1017,12 @@ static int httpRequestOnce(
   }
 #endif
 
+  zHost = doltliteHttpFormatHostHeader(p->zHost, p->port, p->useTls);
+  if( !zHost ){
+    sqlite3_free(zAuth);
+    return SQLITE_NOMEM;
+  }
+
   if( pBody && nBody > 0 ){
     zHdr = sqlite3_mprintf(
       "%s %s HTTP/1.1\r\n"
@@ -1013,7 +1032,7 @@ static int httpRequestOnce(
       "Content-Type: application/octet-stream\r\n"
       "Connection: keep-alive\r\n"
       "\r\n",
-      zMethod, zPath, p->zHost, zAuth ? zAuth : "", nBody);
+      zMethod, zPath, zHost, zAuth ? zAuth : "", nBody);
   }else{
     zHdr = sqlite3_mprintf(
       "%s %s HTTP/1.1\r\n"
@@ -1022,9 +1041,10 @@ static int httpRequestOnce(
       "%s"
       "Connection: keep-alive\r\n"
       "\r\n",
-      zMethod, zPath, p->zHost, zAuth ? zAuth : "",
+      zMethod, zPath, zHost, zAuth ? zAuth : "",
       sqlite3_stricmp(zMethod, "GET")==0 ? "" : "Content-Length: 0\r\n");
   }
+  sqlite3_free(zHost);
   sqlite3_free(zAuth);
   if( !zHdr ) return SQLITE_NOMEM;
 

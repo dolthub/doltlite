@@ -147,6 +147,14 @@ class Handler(socketserver.BaseRequestHandler):
                 if ":" in line:
                     k, v = line.split(":", 1)
                     headers[k.strip().lower()] = v.strip()
+            expected_host = f"127.0.0.1:{self.server.server_address[1]}"
+            if headers.get("host") != expected_host:
+                self.request.sendall(
+                    b"HTTP/1.1 400 Bad Request\r\n"
+                    b"Content-Length: 15\r\nConnection: close\r\n\r\n"
+                    b"Bad Host Header"
+                )
+                return
             if method == "POST" and "content-length" not in headers:
                 self.request.sendall(
                     b"HTTP/1.1 411 Length Required\r\n"

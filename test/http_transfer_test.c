@@ -47,7 +47,7 @@ static int reply(DoltliteConn *c, int status, const void *body, int size){
 }
 static void handle(TransferServer *s, DoltliteConn *c){
   while( !stopped(s) ){
-    char header[8192], method[16], path[128];
+    char header[8192], method[16], path[128], expectedHost[64];
     const char *length;
     unsigned char *body = 0;
     int n = 0, size = 0, offset = 0, isUpload;
@@ -58,6 +58,8 @@ static void handle(TransferServer *s, DoltliteConn *c){
     }
     header[n] = 0;
     if( sscanf(header, "%15s %127s", method, path)!=2 ){ s->bad++; return; }
+    snprintf(expectedHost, sizeof(expectedHost), "\r\nHost: localhost:%d\r\n", s->port);
+    if( !strstr(header, expectedHost) ){ s->bad++; return; }
     length = strstr(header, "Content-Length:");
     if( length ) size = atoi(length+15);
     if( size<0 || size>40*1024*1024 ){ s->bad++; return; }
@@ -258,12 +260,51 @@ static void runCase(int mode, const char *name, DoltliteTlsServer *tls){
   free(s.body);
   printf("%s %s: %s\n", tls ? "HTTPS" : "HTTP", name, failures==before ? "PASS" : "FAIL");
 }
+static void testHostHeaderFormat(void){
+  static const struct {
+    const char *zHost;
+    int port;
+    int useTls;
+    const char *zExpected;
+  } cases[] = {
+    { "example.com", 80,   0, "example.com" },
+    { "example.com", 8080, 0, "example.com:8080" },
+    { "example.com", 443,  0, "example.com:443" },
+    { "example.com", 443,  1, "example.com" },
+    { "example.com", 8443, 1, "example.com:8443" },
+    { "example.com", 80,   1, "example.com:80" },
+    { "127.0.0.1",   80,   0, "127.0.0.1" },
+    { "127.0.0.1",   8080, 0, "127.0.0.1:8080" },
+    { "::1",         80,   0, "[::1]" },
+    { "::1",         8080, 0, "[::1]:8080" },
+    { "::1",         443,  1, "[::1]" },
+    { "::1",         8443, 1, "[::1]:8443" },
+    { "[::1]",       8080, 0, "[::1]:8080" },
+  };
+  int i;
+  int before = failures;
+  for(i=0; i<(int)(sizeof(cases)/sizeof(cases[0])); i++){
+    char *zGot = doltliteHttpFormatHostHeader(
+        cases[i].zHost, cases[i].port, cases[i].useTls);
+    int ok = zGot!=0 && strcmp(zGot, cases[i].zExpected)==0;
+    if( !ok ){
+      fprintf(stderr, "Host format mismatch for %s:%d (tls=%d): got '%s', expected '%s'\n",
+              cases[i].zHost, cases[i].port, cases[i].useTls,
+              zGot ? zGot : "(null)", cases[i].zExpected);
+    }
+    check("format Host header", ok);
+    sqlite3_free(zGot);
+  }
+  printf("Host header formatting: %s\n", failures==before ? "PASS" : "FAIL");
+}
+
 int main(int argc, char **argv){
   DoltliteTlsServer *tls = 0;
   int i;
   const char *names[] = {"slow response", "stalled response", "slow upload", "stalled upload", "stale upload connection",
       "dropped upload", "lost upload acknowledgement", "repeated disconnect",
       "ambiguous refs", "ambiguous refs CAS", "ambiguous commit", "HTTP rejection"};
+  testHostHeaderFormat();
   if( argc==3 ){
     tls = doltliteTlsServerNew(argv[1], argv[2]);
     if( !tls ){ fprintf(stderr, "cannot initialize test TLS server\n"); return 1; }
