@@ -162,4 +162,81 @@ foreach layout {table column multiple duplicate several} {
   }
 }
 
+# Dropping a column-level CHECK when another column follows, or dropping a
+# table-level CHECK that is followed by another constraint, must leave valid
+# comma separation in CREATE TABLE.
+foreach {case_name anc_ddl drop_ddl other_sql check_sql expected_rows} {
+  col-mid-add-col
+    {CREATE TABLE t(id INTEGER PRIMARY KEY, v INT CHECK(v > 0), w INT)}
+    {CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT)}
+    {ALTER TABLE t ADD COLUMN extra INT DEFAULT 9}
+    {SELECT id, v, w, extra FROM t ORDER BY id}
+    {1 10 20 9}
+  col-mid-row-edit
+    {CREATE TABLE t(id INTEGER PRIMARY KEY, v INT CHECK(v > 0), w INT)}
+    {CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT)}
+    {UPDATE t SET w = 25 WHERE id = 1}
+    {SELECT id, v, w FROM t ORDER BY id}
+    {1 10 25}
+  tbl-first-check
+    {CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT, CHECK(v > 0), CHECK(w > 0))}
+    {CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT, CHECK(w > 0))}
+    {ALTER TABLE t ADD COLUMN extra INT DEFAULT 9}
+    {SELECT id, v, w, extra FROM t ORDER BY id}
+    {1 10 20 9}
+} {
+  foreach direction {forward reverse} {
+    reset_db
+    execsql $anc_ddl
+    execsql {
+      INSERT INTO t VALUES(1, 10, 20);
+      SELECT dolt_commit('-Am', 'base');
+      SELECT dolt_branch('side');
+      SELECT dolt_checkout('side');
+      DROP TABLE t;
+    }
+    execsql $drop_ddl
+    execsql {
+      INSERT INTO t VALUES(1, 10, 20);
+      SELECT dolt_commit('-Am', 'drop check');
+      SELECT dolt_checkout('main');
+    }
+    execsql $other_sql
+    execsql {SELECT dolt_commit('-Am', 'main change')}
+    if {$direction eq "forward"} {
+      set target side
+      set connection test.db
+    } else {
+      execsql {SELECT dolt_checkout('side')}
+      set target main
+      set connection test.db/side
+    }
+    set tag cut-check-$case_name-$direction
+    do_test $tag-merge {
+      set result [catchsql "SELECT dolt_merge('$target')"]
+      if {[lindex $result 0] == 0} {set result {0 merged}}
+      set result
+    } {0 merged}
+    do_execsql_test $tag-conflicts {
+      SELECT count(*) FROM dolt_schema_conflicts;
+      SELECT count(*) FROM dolt_conflicts;
+    } {0 0}
+    do_execsql_test $tag-rows $check_sql $expected_rows
+    do_execsql_test $tag-dropped-check {
+      SELECT count(*) FROM sqlite_master
+       WHERE name='t' AND sql LIKE '%v > 0%';
+    } {0}
+    do_execsql_test $tag-allow-neg {
+      INSERT INTO t(id, v, w) VALUES(2, -1, 30);
+    } {}
+    execsql {SELECT dolt_commit('-Am', 'after merge')}
+    db close
+    sqlite3 db $connection
+    do_execsql_test $tag-reopen {
+      SELECT count(*) FROM t WHERE id = 2 AND v = -1;
+      PRAGMA integrity_check;
+    } {1 ok}
+  }
+}
+
 finish_test

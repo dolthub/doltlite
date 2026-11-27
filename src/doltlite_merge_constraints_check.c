@@ -781,6 +781,9 @@ static int dlCutCheck(char **pzSql, const DlCheck *p){
   while( start>zSql && sqlite3Isspace(start[-1]) ) start--;
   if( start>zSql && start[-1]==',' ){
     start--;
+  }else if( start>zSql && start[-1]=='(' ){
+    while( *end && sqlite3Isspace(*end) ) end++;
+    if( *end==',' ) end++;
   }else{
     start = zSql + p->iOffset;
   }
