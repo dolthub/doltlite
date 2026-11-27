@@ -206,4 +206,34 @@ do_faultsim_test 6.1 -faults oom-transient -prep {
   faultsim_integrity_check
 }
 
+faultsim_restore_and_reopen
+do_test 7.0 {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+    INSERT INTO t VALUES(1, 'a'), (2, 'b');
+    SELECT dolt_commit('-Am', 'c1');
+    INSERT INTO t VALUES(3, 'c');
+    UPDATE t SET v = 'b2' WHERE id = 2;
+    DELETE FROM t WHERE id = 1;
+    SELECT dolt_commit('-Am', 'c2');
+  }
+  set {} {}
+} {}
+faultsim_save_and_close
+
+do_faultsim_test 7.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db eval {
+    SELECT table_name, rows_added, rows_modified, rows_deleted
+    FROM dolt_diff_stat('HEAD~1', 'HEAD')
+  }
+} -test {
+  faultsim_test_result {0 {t 1 1 1}} \
+      {1 {out of memory}} {1 {disk I/O error}}
+  catchsql ROLLBACK
+  faultsim_integrity_check
+}
+
 finish_test

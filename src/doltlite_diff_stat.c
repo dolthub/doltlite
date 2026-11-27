@@ -743,6 +743,10 @@ static int dsComputeTableStats(
 
   pOut->zTableName     = sqlite3_mprintf("%s",
                              (hasTo && zToName) ? zToName : zFromName);
+  if( !pOut->zTableName ){
+    rc = SQLITE_NOMEM;
+    goto done;
+  }
   pOut->schemaChanged  = schemaChanged;
   pOut->schemaInPlace  = schemaChanged && !pkChanged
       && dsInPlaceColumnChange(&fromCi, &toCi);
@@ -1298,7 +1302,7 @@ static int dstFilter(sqlite3_vtab_cursor *cur,
                                c->fctx.zTblFilter) ){
     sqlite3_free(v->base.zErrMsg);
     v->base.zErrMsg = sqlite3_mprintf("table not found: %s", c->fctx.zTblFilter);
-    rc = SQLITE_ERROR;
+    rc = v->base.zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
     goto done;
   }
   if( !c->fctx.zTblFilter ){
