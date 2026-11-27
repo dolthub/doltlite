@@ -11,6 +11,7 @@
 
 /* Fast merge could not prove the result; fall back to the full row-wise path. */
 #define FM_FALLBACK  SQLITE_DONE
+#define FM_KEY_FLAGS (PROLLY_NODE_INTKEY | PROLLY_NODE_BLOBKEY)
 
 typedef struct FmCtx {
   ChunkStore *pStore;
@@ -46,7 +47,8 @@ static int fmEmitSubtreeRows(
   rc = prollyFetchNode(fm->pStore, pSubtreeRoot, &node, &pData);
   if( rc != SQLITE_OK ) return rc;
 
-  if( (int)node.level != expectedLevel ){
+  if( (int)node.level != expectedLevel
+   || (node.flags & FM_KEY_FLAGS) != (fm->flags & FM_KEY_FLAGS) ){
     sqlite3_free(pData);
     return SQLITE_CORRUPT;
   }
@@ -406,7 +408,10 @@ static int fmEmitChild(
 
   if( (int)ancNode.level != parentLevel - 1
    || (int)oursNode.level != parentLevel - 1
-   || (int)theirsNode.level != parentLevel - 1 ){
+   || (int)theirsNode.level != parentLevel - 1
+   || (ancNode.flags & FM_KEY_FLAGS) != (fm->flags & FM_KEY_FLAGS)
+   || (oursNode.flags & FM_KEY_FLAGS) != (fm->flags & FM_KEY_FLAGS)
+   || (theirsNode.flags & FM_KEY_FLAGS) != (fm->flags & FM_KEY_FLAGS) ){
     rc = SQLITE_CORRUPT;
     goto done;
   }
