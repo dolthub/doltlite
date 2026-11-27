@@ -601,16 +601,16 @@ static SQLITE_NOINLINE const void *prollyBtCursorPayloadFetchSlow(
     if( rc!=SQLITE_OK ){
       pCur->eState = CURSOR_FAULT;
       pCur->skipNext = rc;
+      if( pAmt ) *pAmt = 0;
       return 0;
-    }
-    if( e && e->nZeroTail>0 && e->nVal>0 ){
-      if( pAmt ) *pAmt = (u32)e->nVal;
-      return (const void*)e->pVal;
     }
     if( e && e->nVal>0 ){
       if( pAmt ) *pAmt = (u32)e->nVal;
       return (const void*)e->pVal;
     }
+    /* Never fall through to pCur->pCur: BOTH landings hold a stale tree row. */
+    if( pAmt ) *pAmt = 0;
+    return e ? (const void*)"" : 0;
   }
   if( (pCur->curIntKey || cursorHasTreePrefix(pCur))
    && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
