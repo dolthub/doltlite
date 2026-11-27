@@ -9082,8 +9082,9 @@ static int vec1SetupKANNQuery(
   const int nElem = pTab->cfg.nElem;
   const int nSpace = MAX(pTab->cfg.nElem, pTab->nTmpVec);
   int nMax = 0;                   /* Max possible meta-data filters */
-  int nVec = sqlite3_value_bytes(argv[0]);
-  const u8 *aVec = sqlite3_value_blob(argv[0]);
+  int eType = sqlite3_value_type(argv[0]);
+  int nVec;
+  const u8 *aVec;
 
   int iArg = 1;
   int iIdxStr = 0;
@@ -9092,6 +9093,13 @@ static int vec1SetupKANNQuery(
 
   int bTransform = vec1TransformRequired(&pTab->mod);
   int nBit = 0;
+
+  if( eType!=SQLITE_BLOB ){
+    *ppOut = 0;
+    return vec1VectorTypeError(pTab, eType);
+  }
+  nVec = sqlite3_value_bytes(argv[0]);
+  aVec = sqlite3_value_blob(argv[0]);
 
   if( pTab->mod.hdr.flags & VEC1_MODEL_BITQUANT ){
     nBit = sizeof_f32 + pTab->mod.hdr.nCodebook;
