@@ -97,12 +97,12 @@ static int mergePass1CollectIndexes(
       }
       mi->iPKey = pTab->iPKey;
       mi->pIdx = pIdx;
+      nIdxInfo++;
       rc = doltlitePartialIndexLoad(c->db, pIdx, &mi->part);
       if( rc!=SQLITE_OK ){
         mergePass1FreeIdxInfo(aIdxInfo, nIdxInfo);
         return rc;
       }
-      nIdxInfo++;
     }
   }
 

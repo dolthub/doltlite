@@ -223,4 +223,30 @@ do_faultsim_test 6.1 -faults oom-transient -prep {
   faultsim_test_result {*}$::merge_conflict_oom_results
 }
 
+# Three-way merge of a table with a partial index under OOM fault injection.
+reset_db
+do_execsql_test 7.0 {
+  CREATE TABLE tp(id INTEGER PRIMARY KEY, a INT, b TEXT);
+  CREATE INDEX idx_tp_part ON tp(a) WHERE a > 0;
+  INSERT INTO tp VALUES(1, 10, 'base1'), (2, -5, 'base2');
+  SELECT length(dolt_commit('-Am', 'base'));
+  SELECT dolt_branch('side');
+  INSERT INTO tp VALUES(3, 30, 'main3');
+  SELECT length(dolt_commit('-am', 'main insert'));
+  SELECT dolt_checkout('side');
+  INSERT INTO tp VALUES(4, 40, 'side4');
+  SELECT length(dolt_commit('-am', 'side insert'));
+  SELECT dolt_checkout('main');
+} {40 0 40 0 40 0}
+
+faultsim_save_and_close
+
+do_faultsim_test 7.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db one {SELECT length(dolt_merge('side'))}
+} -test {
+  faultsim_test_result {*}$::merge_oom_results
+}
+
 finish_test
