@@ -1039,13 +1039,13 @@ static int mergeFastForward(
     return rc;
   }
   if( !squash || db->autoCommit ) rc = doltliteVcSealEnclosingTxn(db);
+  doltliteTxnStateClear(&savedState);
   if( rc!=SQLITE_OK ){
     doltliteCommitClear(&theirCommit);
     sqlite3_result_error_code(context, rc);
     return rc;
   }
   if( xTestMergeInstall ) xTestMergeInstall(pTestMergeInstallArg);
-  doltliteTxnStateClear(&savedState);
   doltliteCommitClear(&theirCommit);
   /* The advance completed and is durable. An interrupt that arrived while it
   ** ran cannot be honoured any more, and letting it stand would report a
@@ -1585,11 +1585,11 @@ static int mergeRefCreateMergeCommit(
     return SQLITE_ERROR;
   }
   rc = doltliteVcSealEnclosingTxn(db);
+  doltliteTxnStateClear(pSaved);
   if( rc!=SQLITE_OK ){
     doltliteVcResultSealError(context, db, rc);
     return SQLITE_ERROR;
   }
-  doltliteTxnStateClear(pSaved);
   doltliteHashToHex(&commitHash, hexBuf);
   sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
   return SQLITE_OK;
@@ -1649,11 +1649,11 @@ static int mergeRefLeaveUncommitted(
     return SQLITE_ERROR;
   }
   if( db->autoCommit ) rc = doltliteVcSealEnclosingTxn(db);
+  doltliteTxnStateClear(pSaved);
   if( rc!=SQLITE_OK ){
     doltliteVcResultSealError(context, db, rc);
     return SQLITE_ERROR;
   }
-  doltliteTxnStateClear(pSaved);
   sqlite3_result_int(context, 0);
   return SQLITE_OK;
 }
