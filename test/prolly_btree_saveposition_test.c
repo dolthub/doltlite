@@ -926,6 +926,181 @@ static void runIntKeySavePosTests(void){
   removeDb(zDb);
 }
 
+static void runPayloadFetchSlowTests(void){
+  sqlite3 *db = 0;
+  Btree *pBt;
+  BtCursor *pCur = 0;
+  Table *pTab;
+  Pgno root = 0;
+  BtreePayload payload;
+  const char *zStale = "STALE_TREE_DATA";
+  const void *pFetched;
+  u32 amt;
+  u8 aBuf[64];
+  int rc;
+  int res = 0;
+  int i;
+  int allZero;
+  const char *zDb = "savepos_payload_fetch.db";
+
+  removeDb(zDb);
+  rc = sqlite3_open(zDb, &db);
+  check("pfetch: open", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ){ sqlite3_close(db); return; }
+
+  if( execSql(db,
+        "CREATE TABLE t_pf(id INTEGER PRIMARY KEY, v BLOB);"
+        "SELECT count(*) FROM t_pf;")!=SQLITE_OK ){
+    nFail++;
+    sqlite3_close(db);
+    removeDb(zDb);
+    return;
+  }
+
+  sqlite3BtreeEnterAll(db);
+  pBt = db->aDb[0].pBt;
+  pTab = sqlite3FindTable(db, "t_pf", "main");
+  if( pTab ) root = pTab->tnum;
+  check("pfetch: resolved table", pBt!=0 && root>1);
+  if( !pBt || root<=1 ){
+    sqlite3BtreeLeaveAll(db);
+    sqlite3_close(db);
+    removeDb(zDb);
+    return;
+  }
+
+  pCur = sqlite3_malloc(sqlite3BtreeCursorSize());
+  check("pfetch: alloc cursor", pCur!=0);
+  if( !pCur ){
+    sqlite3BtreeLeaveAll(db);
+    sqlite3_close(db);
+    removeDb(zDb);
+    return;
+  }
+
+  /* Commit a zero-tailed tree row so nAvail (15) < nLogical (4111). */
+  memset(pCur, 0, sqlite3BtreeCursorSize());
+  check("pfetch: begin seed txn", sqlite3BtreeBeginTrans(pBt, 1, 0)==SQLITE_OK);
+  check("pfetch: open seed cursor",
+        sqlite3BtreeCursor(pBt, root, BTREE_WRCSR, 0, pCur)==SQLITE_OK);
+  memset(&payload, 0, sizeof(payload));
+  payload.nKey = 20;
+  payload.pData = zStale;
+  payload.nData = (int)strlen(zStale);
+  payload.nZero = 4096;
+  check("pfetch: seed zero-tailed tree row",
+        sqlite3BtreeInsert(pCur, &payload, 0, 0)==SQLITE_OK);
+  sqlite3BtreeCloseCursor(pCur);
+  check("pfetch: commit seed", sqlite3BtreeCommit(pBt)==SQLITE_OK);
+
+  /* Case 1: Overwrite committed row 20 with pure zero-tail (nVal==0, nZero==64).
+  ** MERGE_SRC_BOTH keeps pCur->pCur valid on the committed zero-tailed tree row;
+  ** PayloadFetch must not fall through to the stale tree span. */
+  memset(pCur, 0, sqlite3BtreeCursorSize());
+  check("pfetch: begin write txn", sqlite3BtreeBeginTrans(pBt, 1, 0)==SQLITE_OK);
+  check("pfetch: open write cursor",
+        sqlite3BtreeCursor(pBt, root, BTREE_WRCSR, 0, pCur)==SQLITE_OK);
+
+  memset(&payload, 0, sizeof(payload));
+  payload.nKey = 20;
+  payload.pData = 0;
+  payload.nData = 0;
+  payload.nZero = 64;
+  check("pfetch case1: insert pure zero-tail",
+        sqlite3BtreeInsert(pCur, &payload, 0, 0)==SQLITE_OK);
+  check("pfetch case1: First lands on row 20",
+        sqlite3BtreeFirst(pCur, &res)==SQLITE_OK && res==0);
+  check("pfetch case1: cursor at MERGE_SRC_BOTH with valid tree cursor",
+        pCur->mmActive && pCur->mergeSrc==MERGE_SRC_BOTH
+        && pCur->pCur.eState==PROLLY_CURSOR_VALID
+        && pCur->pCachedPayload==0);
+
+  amt = 0xdeadbeefU;
+  pFetched = sqlite3BtreePayloadFetch(pCur, &amt);
+  check("pfetch case1: non-null return and amt==0", pFetched!=0 && amt==0);
+  check("pfetch case1: PayloadSize is 64", sqlite3BtreePayloadSize(pCur)==64);
+  memset(aBuf, 0xaa, sizeof(aBuf));
+  check("pfetch case1: Payload reads 64 zero bytes",
+        sqlite3BtreePayload(pCur, 0, 64, aBuf)==SQLITE_OK);
+  allZero = 1;
+  for(i=0; i<64; i++){
+    if( aBuf[i]!=0 ){ allZero = 0; break; }
+  }
+  check("pfetch case1: all bytes zero", allZero);
+
+  /* Case 2: Overwrite committed row 20 with 0-byte payload (nVal==0, nZero==0). */
+  sqlite3BtreeClearCursor(pCur);
+  memset(&payload, 0, sizeof(payload));
+  payload.nKey = 20;
+  payload.pData = "";
+  payload.nData = 0;
+  payload.nZero = 0;
+  check("pfetch case2: insert empty payload",
+        sqlite3BtreeInsert(pCur, &payload, 0, 0)==SQLITE_OK);
+  check("pfetch case2: First lands on row 20",
+        sqlite3BtreeFirst(pCur, &res)==SQLITE_OK && res==0);
+  check("pfetch case2: cursor at MERGE_SRC_BOTH with valid tree cursor",
+        pCur->mmActive && pCur->mergeSrc==MERGE_SRC_BOTH
+        && pCur->pCur.eState==PROLLY_CURSOR_VALID
+        && pCur->pCachedPayload==0);
+
+  amt = 0xdeadbeefU;
+  pFetched = sqlite3BtreePayloadFetch(pCur, &amt);
+  check("pfetch case2: non-null return and amt==0", pFetched!=0 && amt==0);
+  check("pfetch case2: PayloadSize is 0", sqlite3BtreePayloadSize(pCur)==0);
+
+  sqlite3BtreeCloseCursor(pCur);
+  check("pfetch: rollback case1-2", sqlite3BtreeRollback(pBt, SQLITE_OK, 0)==SQLITE_OK);
+
+  /* Case 3: currentMutMapEntry OOM failure must initialize *pAmt to 0 and
+  ** fault the cursor. */
+  memset(pCur, 0, sqlite3BtreeCursorSize());
+  check("pfetch case3: begin write txn", sqlite3BtreeBeginTrans(pBt, 1, 0)==SQLITE_OK);
+  check("pfetch case3: open write cursor",
+        sqlite3BtreeCursor(pBt, root, BTREE_WRCSR, 0, pCur)==SQLITE_OK);
+
+  memset(&payload, 0, sizeof(payload));
+  payload.nKey = 30;
+  payload.pData = "row30";
+  payload.nData = 5;
+  check("pfetch case3: insert 30",
+        sqlite3BtreeInsert(pCur, &payload, 0, 0)==SQLITE_OK);
+  payload.nKey = 10;
+  payload.pData = "row10";
+  payload.nData = 5;
+  check("pfetch case3: insert 10 (out of order)",
+        sqlite3BtreeInsert(pCur, &payload, 0, 0)==SQLITE_OK);
+  check("pfetch case3: mutmap unsorted with no scratch",
+        pCur->pMutMap!=0 && !pCur->pMutMap->keepSorted
+        && pCur->pMutMap->orderDirty && !pCur->pMutMap->appendSorted
+        && pCur->pMutMap->nSortScratchBytes==0);
+
+  pCur->eState = CURSOR_VALID;
+  pCur->mmActive = 1;
+  pCur->mmPhysActive = 0;
+  pCur->mmIdx = 0;
+  pCur->mergeSrc = MERGE_SRC_MUT;
+  pCur->deferredMergedSeek = 0;
+  pCur->pCachedPayload = 0;
+  pCur->nCachedPayload = 0;
+
+  amt = 0xdeadbeefU;
+  gFailNextAlloc = 1;
+  pFetched = sqlite3BtreePayloadFetch(pCur, &amt);
+  gFailNextAlloc = 0;
+  check("pfetch case3: returns NULL on OOM", pFetched==0);
+  check("pfetch case3: *pAmt initialized to 0 on OOM", amt==0);
+  check("pfetch case3: cursor faulted with NOMEM",
+        pCur->eState==CURSOR_FAULT && pCur->skipNext==SQLITE_NOMEM);
+
+  sqlite3BtreeCloseCursor(pCur);
+  sqlite3_free(pCur);
+  check("pfetch: rollback case3", sqlite3BtreeRollback(pBt, SQLITE_OK, 0)==SQLITE_OK);
+  sqlite3BtreeLeaveAll(db);
+  sqlite3_close(db);
+  removeDb(zDb);
+}
+
 int main(void){
   sqlite3_mem_methods wrapMem;
   if( sqlite3_config(SQLITE_CONFIG_GETMALLOC, &gRealMem)==SQLITE_OK ){
@@ -953,6 +1128,7 @@ int main(void){
   runCachedSeekKeyTests();
   runAtLastSeekClearTests();
   runIntKeySavePosTests();
+  runPayloadFetchSlowTests();
 
   printf("prolly_btree_saveposition_test: %d passed, %d failed\n", nPass, nFail);
   return nFail ? 1 : 0;
