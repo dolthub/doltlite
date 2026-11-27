@@ -75,7 +75,7 @@ static int connIoResult(DoltliteConn *c, int n) {
 static int connSend(void *pCtx, const unsigned char *pBuf, size_t nBuf) {
   DoltliteConn *c = (DoltliteConn*)pCtx;
   int flags = 0, n;
-  if (c->idleTimeoutMs && connApplyDeadline(c)) return MBEDTLS_ERR_SSL_TIMEOUT;
+  if (connApplyDeadline(c)) return MBEDTLS_ERR_SSL_TIMEOUT;
 #ifdef MSG_NOSIGNAL
   flags = MSG_NOSIGNAL;
 #endif
@@ -96,7 +96,7 @@ static int connSend(void *pCtx, const unsigned char *pBuf, size_t nBuf) {
 static int connRecv(void *pCtx, unsigned char *pBuf, size_t nBuf) {
   DoltliteConn *c = (DoltliteConn*)pCtx;
   int n;
-  if (c->idleTimeoutMs && connApplyDeadline(c)) return MBEDTLS_ERR_SSL_TIMEOUT;
+  if (connApplyDeadline(c)) return MBEDTLS_ERR_SSL_TIMEOUT;
   n = mbedtls_net_recv(&c->net, pBuf, nBuf);
 #ifdef _WIN32
   if (n == MBEDTLS_ERR_NET_RECV_FAILED && WSAGetLastError() == WSAEINTR) {

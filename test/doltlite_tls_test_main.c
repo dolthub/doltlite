@@ -11,6 +11,7 @@
 #include <string.h>
 #ifndef _WIN32
 #include <signal.h>
+#include <sys/wait.h>
 #endif
 
 #ifdef _WIN32
@@ -744,6 +745,119 @@ cleanup:
   if (fds[1] >= 0) close(fds[1]);
   return rc;
 }
+
+static int testSlowDripHandshakeDeadline(const char *caFile) {
+  int listenFd = -1;
+  int one = 1;
+  struct sockaddr_in addr;
+  socklen_t addrLen = (socklen_t)sizeof(addr);
+  int port;
+  pid_t pid = -1;
+  long long start, elapsed;
+  DoltliteConn *c = NULL;
+  int rc = 1;
+
+  if (doltliteNetInit() != 0) {
+    printf("FAIL  testSlowDripHandshakeDeadline: doltliteNetInit failed\n");
+    return 1;
+  }
+  listenFd = (int)socket(AF_INET, SOCK_STREAM, 0);
+  if (listenFd < 0) {
+    printf("FAIL  testSlowDripHandshakeDeadline: socket failed\n");
+    return 1;
+  }
+  setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof(one));
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port = 0;
+  if (bind(listenFd, (struct sockaddr *)&addr, sizeof(addr)) != 0
+   || listen(listenFd, 1) != 0
+   || getsockname(listenFd, (struct sockaddr *)&addr, &addrLen) != 0) {
+    printf("FAIL  testSlowDripHandshakeDeadline: listen failed\n");
+    goto cleanup;
+  }
+  port = (int)ntohs(addr.sin_port);
+
+  fflush(stdout);
+  pid = fork();
+  if (pid < 0) {
+    printf("FAIL  testSlowDripHandshakeDeadline: fork failed\n");
+    goto cleanup;
+  }
+  if (pid == 0) {
+    static const unsigned char hdr[5] = { 0x16, 0x03, 0x03, 0x01, 0x00 };
+    int srvFd = (int)accept(listenFd, NULL, NULL);
+    int i;
+    doltliteCloseSocket(listenFd);
+    if (srvFd < 0) _exit(1);
+    signal(SIGPIPE, SIG_IGN);
+    {
+      doltlite_pollfd pfd;
+      unsigned char drain[1024];
+      pfd.fd = srvFd;
+      pfd.events = POLLIN;
+      pfd.revents = 0;
+      if (doltlitePoll(&pfd, 1, 500) > 0) {
+        ssize_t ignored = recv(srvFd, drain, sizeof(drain), 0);
+        (void)ignored;
+      }
+    }
+    for (i = 0; i < 20; i++) {
+      struct timespec ts;
+      unsigned char b = (i < 5) ? hdr[i] : 0;
+      int flags = 0;
+#ifdef MSG_NOSIGNAL
+      flags = MSG_NOSIGNAL;
+#endif
+      ts.tv_sec = 0;
+      ts.tv_nsec = 100 * 1000000L;
+      nanosleep(&ts, NULL);
+      if (send(srvFd, &b, 1, flags) <= 0) break;
+    }
+    doltliteCloseSocket(srvFd);
+    _exit(0);
+  }
+
+  doltliteCloseSocket(listenFd);
+  listenFd = -1;
+
+  if (caFile && caFile[0] != '\0') {
+    setenv("DOLTLITE_CA_FILE", caFile, 1);
+  }
+
+  start = doltliteMonotonicMs();
+  c = doltliteConnOpenTimeout("127.0.0.1", port, 1, 400);
+  elapsed = doltliteMonotonicMs() - start;
+
+  if (caFile && caFile[0] != '\0') {
+    unsetenv("DOLTLITE_CA_FILE");
+  }
+
+  if (c != NULL) {
+    printf("FAIL  testSlowDripHandshakeDeadline: handshake unexpectedly succeeded\n");
+    doltliteConnClose(c);
+    goto cleanup;
+  }
+  if (elapsed < 250 || elapsed > 1200) {
+    printf("FAIL  testSlowDripHandshakeDeadline: elapsed=%lldms (expected 250..1200ms)\n",
+           elapsed);
+    goto cleanup;
+  }
+
+  printf("  PASS  slow-drip TLS handshake enforces overall deadline (%lldms)\n",
+         elapsed);
+  rc = 0;
+
+cleanup:
+  if (listenFd >= 0) doltliteCloseSocket(listenFd);
+  if (pid > 0) {
+    int status = 0;
+    kill(pid, SIGTERM);
+    waitpid(pid, &status, 0);
+  }
+  return rc;
+}
 #endif
 
 static const char *testHost(void) {
@@ -761,6 +875,9 @@ int main(int argc, char **argv) {
 
 #ifndef _WIN32
   if (testPollUntilEintr() != 0) {
+    fails++;
+  }
+  if (testSlowDripHandshakeDeadline(argc > 1 ? argv[1] : NULL) != 0) {
     fails++;
   }
 #endif
