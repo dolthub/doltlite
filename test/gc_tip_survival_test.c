@@ -778,6 +778,187 @@ static void test_gc_active_statements(void){
   }
 }
 
+static void test_moved_file_probe_no_mutate(void){
+  const char *path = "test_moved_probe_no_mutate.db";
+  const char *foreignPath = "test_moved_probe_foreign.db";
+  sqlite3 *db = 0;
+  ChunkStore cs;
+  ProllyHash origRefsHash, origCommittedRefsHash, origTip, curTip;
+  i64 origFileSize, origWalData;
+  int origRecent;
+  u32 origReloadGen;
+  u64 origRefreshGen;
+  int changed = 0;
+  int has = 0;
+  int rc;
+
+  printf("--- Moved-file probe: tail inspection does not mutate ChunkStore ---\n");
+  removeDbFiles(path);
+  removeDbFiles(foreignPath);
+
+  check("probe_seed_open", sqlite3_open(path, &db)==SQLITE_OK);
+  check("probe_seed_sql", execSql(db,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+      "INSERT INTO t VALUES(1,'a');"
+      "SELECT dolt_commit('-Am','c1');")==SQLITE_OK);
+  sqlite3_close(db);
+  db = 0;
+
+  rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), path,
+                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
+  check("probe_cs_open", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto probe_done;
+
+  origRefsHash = cs.refs.refsHash;
+  origCommittedRefsHash = cs.refs.committedRefsHash;
+  origFileSize = cs.file.iFileSize;
+  origWalData = cs.wal.nWalData;
+  origRecent = cs.staging.nRecent;
+  origReloadGen = cs.reloadGen;
+  origRefreshGen = cs.refreshGen;
+  check("probe_orig_tip", chunkStoreFindBranch(&cs, "main", &origTip)==SQLITE_OK);
+
+  /* Peer amends on the old inode and GCs, sweeping origTip. */
+  check("probe_peer_open", sqlite3_open(path, &db)==SQLITE_OK);
+  check("probe_peer_amend", execSql(db,
+      "INSERT INTO t VALUES(2,'b');"
+      "SELECT dolt_commit('-A','--amend','-m','c1-amend');")==SQLITE_OK);
+  check("probe_peer_gc",
+        strstr(queryScalarText(db, "SELECT dolt_gc()"), "error")==0);
+  sqlite3_close(db);
+  db = 0;
+
+  check("probe_orig_tip_swept",
+        storeHasChunk(path, &origTip, &has)==SQLITE_OK && !has);
+
+  changed = 0;
+  rc = chunkStoreHasExternalChanges(&cs, &changed);
+  check("probe_detects_our_compacted_file",
+        rc==SQLITE_OK && changed==1 && cs.movedReadOnly==0);
+  check("probe_no_mutate_refs_hash",
+        prollyHashCompare(&cs.refs.refsHash, &origRefsHash)==0
+        && prollyHashCompare(&cs.refs.committedRefsHash,
+                             &origCommittedRefsHash)==0);
+  check("probe_no_mutate_file_and_wal",
+        cs.file.iFileSize==origFileSize
+        && cs.wal.nWalData==origWalData
+        && cs.staging.nRecent==origRecent
+        && cs.reloadGen==origReloadGen
+        && cs.refreshGen==origRefreshGen);
+  check("probe_no_mutate_branch_tip",
+        chunkStoreFindBranch(&cs, "main", &curTip)==SQLITE_OK
+        && prollyHashCompare(&curTip, &origTip)==0);
+
+  /* Now replace the path with a foreign database while cs still holds the
+  ** grown old inode. Probe must report foreign and leave cs untouched. */
+  check("probe_foreign_open", sqlite3_open(foreignPath, &db)==SQLITE_OK);
+  check("probe_foreign_seed", execSql(db,
+      "CREATE TABLE other(k INTEGER PRIMARY KEY);"
+      "INSERT INTO other VALUES(99);"
+      "SELECT dolt_commit('-Am','foreign');")==SQLITE_OK);
+  sqlite3_close(db);
+  db = 0;
+  check("probe_foreign_replace", rename(foreignPath, path)==0);
+
+  changed = 1;
+  rc = chunkStoreHasExternalChanges(&cs, &changed);
+  check("probe_foreign_rejected",
+        rc==SQLITE_OK && changed==0 && cs.movedReadOnly==1);
+  check("probe_foreign_no_mutate_refs_hash",
+        prollyHashCompare(&cs.refs.refsHash, &origRefsHash)==0
+        && prollyHashCompare(&cs.refs.committedRefsHash,
+                             &origCommittedRefsHash)==0);
+  check("probe_foreign_no_mutate_file_and_wal",
+        cs.file.iFileSize==origFileSize
+        && cs.wal.nWalData==origWalData
+        && cs.staging.nRecent==origRecent
+        && cs.reloadGen==origReloadGen
+        && cs.refreshGen==origRefreshGen);
+  check("probe_foreign_no_mutate_branch_tip",
+        chunkStoreFindBranch(&cs, "main", &curTip)==SQLITE_OK
+        && prollyHashCompare(&curTip, &origTip)==0);
+
+  chunkStoreClose(&cs);
+
+probe_done:
+  if( db ) sqlite3_close(db);
+  removeDbFiles(path);
+  removeDbFiles(foreignPath);
+}
+
+static void test_pinned_snapshot_survives_peer_amend_gc(void){
+  const char *path = "test_pinned_snap_amend_gc.db";
+  sqlite3 *reader = 0;
+  sqlite3 *peer = 0;
+  ProllyHash origTip;
+  char origHead[64];
+  char peerHead[64];
+  int has = 0;
+  int rc;
+
+  printf("--- Pinned snapshot: write upgrade after peer amend + GC preserves snapshot ---\n");
+  removeDbFiles(path);
+
+  check("pinned_open_reader", sqlite3_open(path, &reader)==SQLITE_OK);
+  check("pinned_open_peer", sqlite3_open(path, &peer)==SQLITE_OK);
+  check("pinned_seed", execSql(reader,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+      "INSERT INTO t VALUES(1,'v1');"
+      "SELECT dolt_commit('-Am','c1');"
+      "INSERT INTO t VALUES(2,'v2');"
+      "SELECT dolt_commit('-Am','c2');")==SQLITE_OK);
+  check("pinned_capture_tip", captureTip(reader, "main", &origTip)==SQLITE_OK);
+  sqlite3_snprintf(sizeof(origHead), origHead, "%s",
+                   queryScalarText(reader, "SELECT dolt_hashof('HEAD')"));
+
+  /* Pin a read snapshot on reader. */
+  check("pinned_begin", execSql(reader, "BEGIN;")==SQLITE_OK);
+  check("pinned_read",
+        strcmp(queryScalarText(reader, "SELECT v FROM t WHERE id=2"), "v2")==0);
+
+  /* Peer amends c2 on the old inode and GCs, sweeping origTip. */
+  check("pinned_peer_amend", execSql(peer,
+      "UPDATE t SET v='amended' WHERE id=2;"
+      "SELECT dolt_commit('-A','--amend','-m','c2-amend');")==SQLITE_OK);
+  check("pinned_peer_gc",
+        strstr(queryScalarText(peer, "SELECT dolt_gc()"), "error")==0);
+  sqlite3_snprintf(sizeof(peerHead), peerHead, "%s",
+                   queryScalarText(peer, "SELECT dolt_hashof('HEAD')"));
+  check("pinned_head_changed", strcmp(origHead, peerHead)!=0);
+  check("pinned_orig_tip_swept",
+        storeHasChunk(path, &origTip, &has)==SQLITE_OK && !has);
+
+  /* Write upgrade must fail with SQLITE_BUSY_SNAPSHOT and NOT mutate the
+  ** pinned snapshot's refs or visible data. */
+  rc = execSql(reader, "INSERT INTO t VALUES(3,'v3');");
+  check("pinned_upgrade_busy_snapshot",
+        rc!=SQLITE_OK && sqlite3_extended_errcode(reader)==SQLITE_BUSY_SNAPSHOT);
+  check("pinned_head_intact",
+        strcmp(queryScalarText(reader, "SELECT dolt_hashof('HEAD')"),
+               origHead)==0);
+  check("pinned_branch_intact",
+        strcmp(queryScalarText(reader,
+               "SELECT hash FROM dolt_branches WHERE name='main'"),
+               origHead)==0);
+  check("pinned_row_intact",
+        strcmp(queryScalarText(reader, "SELECT v FROM t WHERE id=2"), "v2")==0);
+
+  /* Ending the pinned transaction lets reader adopt the peer's compacted DB. */
+  check("pinned_rollback", execSql(reader, "ROLLBACK;")==SQLITE_OK);
+  check("pinned_after_rollback_head",
+        strcmp(queryScalarText(reader, "SELECT dolt_hashof('HEAD')"),
+               peerHead)==0);
+  check("pinned_after_rollback_row",
+        strcmp(queryScalarText(reader, "SELECT v FROM t WHERE id=2"),
+               "amended")==0);
+  check("pinned_integrity",
+        strcmp(queryScalarText(reader, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(peer);
+  sqlite3_close(reader);
+  removeDbFiles(path);
+}
+
 int main(void){
   printf("=== GC Tip Survival Contract Tests ===\n\n");
 
@@ -785,6 +966,8 @@ int main(void){
   test_stale_tip_survives_peer_advance_and_gc();
   test_tip_survives_vacuum();
   test_branch_tips_across_gc();
+  test_moved_file_probe_no_mutate();
+  test_pinned_snapshot_survives_peer_amend_gc();
   test_gc_active_statements();
   test_gc_allocation_budget();
   test_gc_live_allocation_budget();

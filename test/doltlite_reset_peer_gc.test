@@ -130,4 +130,53 @@ foreach maintenance {gc vacuum} {
   }
 }
 
+foreach maintenance {gc vacuum} {
+  foreach rewrite {amend reset} {
+    set prefix doltlite_reset_peer_gc-pinned-rewrite.$maintenance.$rewrite
+    reset_db
+    db eval {
+      CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+      INSERT INTO t VALUES(1,'a');
+      SELECT dolt_commit('-Am','c1');
+      INSERT INTO t VALUES(2,'b');
+      SELECT dolt_commit('-Am','c2');
+    }
+    set origHead [db one {SELECT dolt_hashof('HEAD')}]
+    sqlite3 peer test.db
+    db eval {BEGIN}
+    db eval {SELECT id, v FROM t ORDER BY id}
+    if {$rewrite eq "amend"} {
+      peer eval {
+        UPDATE t SET v='amended' WHERE id=2;
+        SELECT dolt_commit('-A','--amend','-m','c2-amend');
+      }
+    } else {
+      peer eval {SELECT dolt_reset('--hard','HEAD~1')}
+    }
+    if {$maintenance eq "gc"} {
+      peer eval {SELECT dolt_gc()}
+    } else {
+      peer eval {VACUUM}
+    }
+    set peerHead [peer one {SELECT dolt_hashof('HEAD')}]
+    do_test $prefix.upgrade-refused {
+      set rc [catch {db eval {INSERT INTO t VALUES(3,'c')}} msg]
+      list $rc [sqlite3_extended_errcode db]
+    } {1 SQLITE_BUSY_SNAPSHOT}
+    do_test $prefix.snapshot-intact {
+      list [expr {[db one {SELECT dolt_hashof('HEAD')}] eq $origHead}] \
+           [expr {[db one {SELECT hash FROM dolt_branches WHERE name='main'}] eq $origHead}] \
+           [db eval {SELECT id, v FROM t ORDER BY id}]
+    } {1 1 {1 a 2 b}}
+    db eval {ROLLBACK}
+    do_test $prefix.after-rollback {
+      list [expr {[db one {SELECT dolt_hashof('HEAD')}] eq $peerHead}] \
+           [db one {PRAGMA integrity_check}]
+    } {1 ok}
+    peer close
+    db close
+    sqlite3 db test.db
+  }
+}
+
 finish_test

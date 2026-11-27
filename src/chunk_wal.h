@@ -62,6 +62,9 @@ static inline int csReplayWal(struct ChunkStore *cs){
   return csReplayWalSkipping(cs, 0, 0, -1);
 }
 int csReplayWalTail(struct ChunkStore *cs, i64 iStart);
+int csVerifyWalTailPrefix(const struct ChunkStore *cs,
+                          const ProllyHash *pRefsHash);
+int csReplayWalTailIntoTemp(struct ChunkStore *cs, struct ChunkStore *pTmp);
 int csTryLoadWalCheckpoint(struct ChunkStore *cs, int *pLoaded,
                            i64 *pSkipStart, i64 *pSkipEnd, i64 iEnd);
 int csWriteWalCheckpoint(struct ChunkStore *cs, int sectorSize, int *pWritten);

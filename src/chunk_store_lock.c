@@ -842,11 +842,13 @@ static int csStoreHasAnyBranchTip(ChunkStore *pCand, const BranchRef *aBr,
   return SQLITE_OK;
 }
 
-/* Proof the path still holds our DB: candidate contains one of our branch
-** tips or the sanctioned replacement proof. Empty files are never moved.
-** Working-set roots are not proof — a peer WS advance lets GC sweep the one
-** we remember. No proof: upstream read-only. */
-static int csMovedFileIsOurs(ChunkStore *cs, int *pIsOurs){
+static int csMovedFileMatchesRefs(
+  ChunkStore *cs,
+  const BranchRef *aBranches,
+  int nBranches,
+  const ProllyHash *pCommittedRefsHash,
+  int *pIsOurs
+){
   ChunkStore cand;
   ProllyHash from;
   ProllyHash to;
@@ -875,20 +877,13 @@ static int csMovedFileIsOurs(ChunkStore *cs, int *pIsOurs){
                         SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB);
   }
   if( rc==SQLITE_OK ){
-    /* A commit detaches its local refs across the lock; they are still ours. */
-    if( cs->pDetachedRefs ){
-      rc = csStoreHasAnyBranchTip(&cand, cs->pDetachedRefs->aBranches,
-                                  cs->pDetachedRefs->nBranches, pIsOurs);
-    }else{
-      rc = csStoreHasAnyBranchTip(&cand, cs->refs.aBranches,
-                                  cs->refs.nBranches, pIsOurs);
-    }
+    rc = csStoreHasAnyBranchTip(&cand, aBranches, nBranches, pIsOurs);
     if( rc==SQLITE_OK && !*pIsOurs && lockBusy ){
       rc = SQLITE_BUSY;
     }else if( rc==SQLITE_OK && !*pIsOurs ){
       rc = csReadReplacementProof(cs, &from, &to, &valid);
       if( rc==SQLITE_OK && valid
-       && prollyHashCompare(&cs->refs.committedRefsHash, &from)==0 ){
+       && prollyHashCompare(pCommittedRefsHash, &from)==0 ){
         rc = chunkStoreHas(&cand, &to, pIsOurs);
       }
     }
@@ -906,21 +901,43 @@ static int csMovedFileIsOurs(ChunkStore *cs, int *pIsOurs){
   return rc;
 }
 
-static int csIncrementalTailRefresh(ChunkStore *cs);
+/* Proof the path still holds our DB: candidate contains one of our branch
+** tips or the sanctioned replacement proof. Empty files are never moved.
+** Working-set roots are not proof — a peer WS advance lets GC sweep the one
+** we remember. No proof: upstream read-only. */
+static int csMovedFileIsOurs(ChunkStore *cs, int *pIsOurs){
+  /* A commit detaches its local refs across the lock; they are still ours. */
+  if( cs->pDetachedRefs ){
+    return csMovedFileMatchesRefs(cs, cs->pDetachedRefs->aBranches,
+                                  cs->pDetachedRefs->nBranches,
+                                  &cs->refs.committedRefsHash, pIsOurs);
+  }
+  return csMovedFileMatchesRefs(cs, cs->refs.aBranches, cs->refs.nBranches,
+                                &cs->refs.committedRefsHash, pIsOurs);
+}
 
 /* A peer's amend or reset followed by GC sweeps every tip we remember.
 ** The tips it moved to were appended to the file we still hold open, so
-** learn them from that tail and retry the proof. */
+** inspect that tail in a temporary store and retry the proof. */
 static int csMovedFileIsOursAfterTail(ChunkStore *cs, int *pIsOurs){
+  ChunkStore tail;
   i64 heldSize = 0;
   int rc = csMovedFileIsOurs(cs, pIsOurs);
   if( rc!=SQLITE_OK || *pIsOurs ) return rc;
+  if( cs->file.pFile==0 ) return SQLITE_OK;
   rc = sqlite3OsFileSize(cs->file.pFile, &heldSize);
   if( rc!=SQLITE_OK || heldSize<=cs->file.iFileSize ) return rc;
-  rc = csIncrementalTailRefresh(cs);
+  rc = csReplayWalTailIntoTemp(cs, &tail);
   if( rc==SQLITE_MISMATCH ) return SQLITE_OK;
   if( rc!=SQLITE_OK ) return rc;
-  return csMovedFileIsOurs(cs, pIsOurs);
+  if( prollyHashCompare(&tail.refs.refsHash, &cs->refs.committedRefsHash)!=0 ){
+    rc = csMovedFileMatchesRefs(cs, tail.refs.aBranches, tail.refs.nBranches,
+                                &tail.refs.refsHash, pIsOurs);
+  }
+  tail.file.pFile = 0;
+  memset(&tail.index, 0, sizeof(tail.index));
+  chunkStoreClose(&tail);
+  return rc;
 }
 
 i64 csMinExpectedFileSize(const ChunkStore *cs){
@@ -1160,10 +1177,6 @@ int chunkStoreHasExternalChanges(ChunkStore *cs, int *pChanged){
 ** ingest just the new records instead of reopening the whole store. Any doubt falls back to
 ** the full reload. */
 static int csIncrementalTailRefresh(ChunkStore *cs){
-  u8 aRoot[1 + CHUNK_MANIFEST_SIZE];
-  i64 contentEnd;
-  i64 rootOff;
-  int hashState;
   int rc;
 
   rc = csScrubFailedRoot(cs);
@@ -1173,42 +1186,15 @@ static int csIncrementalTailRefresh(ChunkStore *cs){
    || cs->bRefsStale || cs->movedReadOnly || cs->corruptMidStream
    || cs->notADatabase || cs->file.pFile==0
    || cs->wal.iWalOffset<=0
-   || (cs->wal.nWalData!=0 && cs->wal.nWalData < (i64)sizeof(aRoot))
+   || (cs->wal.nWalData!=0
+       && cs->wal.nWalData < (i64)(1 + CHUNK_MANIFEST_SIZE))
    || prollyHashCompare(&cs->refs.refsHash,
                         &cs->refs.committedRefsHash)!=0 ){
     return SQLITE_MISMATCH;
   }
 
-  if( cs->wal.nWalData==0 ){
-    u8 expected[CHUNK_MANIFEST_SIZE];
-    if( cs->file.iFileSize!=cs->wal.iWalOffset ) return SQLITE_MISMATCH;
-    rc = sqlite3OsRead(cs->file.pFile,aRoot+1,CHUNK_MANIFEST_SIZE,0);
-    if( rc==SQLITE_IOERR_SHORT_READ ) return SQLITE_MISMATCH;
-    if( rc!=SQLITE_OK ) return rc;
-    csSerializeManifest(cs,expected);
-    csManifestSeal(expected,0);
-    if( memcmp(aRoot+1,expected,sizeof(expected))!=0 ) return SQLITE_MISMATCH;
-  }else{
-    contentEnd = cs->wal.iWalOffset + cs->wal.nWalData;
-    rootOff = contentEnd - (i64)sizeof(aRoot);
-    if( rootOff < cs->wal.iWalOffset ) return SQLITE_MISMATCH;
-    rc = sqlite3OsRead(cs->file.pFile, aRoot, (int)sizeof(aRoot), rootOff);
-    /* A short read means the file shrank (compaction/replacement): not
-    ** eligible, reload. Any other IO failure is a real error and must not
-    ** be absorbed by the reload retry. */
-    if( rc==SQLITE_IOERR_SHORT_READ ) return SQLITE_MISMATCH;
-    if( rc!=SQLITE_OK ) return rc;
-    if( aRoot[0]!=CS_WAL_TAG_ROOT ) return SQLITE_MISMATCH;
-    hashState = csManifestHashState(aRoot+1, rootOff);
-    if( hashState!=CS_MANIFEST_HASH_OK ){
-      hashState = csManifestHashStateOffsetless(aRoot+1);
-    }
-    if( hashState!=CS_MANIFEST_HASH_OK
-     || memcmp(aRoot + 1 + CS_MANIFEST_REFS_HASH_OFF,
-               cs->refs.refsHash.data, PROLLY_HASH_SIZE)!=0 ){
-      return SQLITE_MISMATCH;
-    }
-  }
+  rc = csVerifyWalTailPrefix(cs, &cs->refs.refsHash);
+  if( rc!=SQLITE_OK ) return rc;
 
   rc = csReplayWalTail(cs, cs->file.iFileSize);
   if( rc!=SQLITE_OK ) return rc;
