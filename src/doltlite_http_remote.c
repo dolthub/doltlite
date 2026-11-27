@@ -723,6 +723,7 @@ EM_JS(int, doltliteWasmHttpSend, (const char *zUrl, const char *zMethod,
       return xhr.status;
     }
     if (typeof require === "function" && typeof SharedArrayBuffer !== "undefined") {
+      var maxSab = 1024 * 1024 * 1024;
       if (!st.node) {
         var wt = require("node:worker_threads");
         var src = [
@@ -758,31 +759,53 @@ EM_JS(int, doltliteWasmHttpSend, (const char *zUrl, const char *zMethod,
           "  Atomics.store(ctl,0,2); Atomics.notify(ctl,0);",
           "} })();"
         ].join("\n");
-        var ctlSab = new SharedArrayBuffer(32);
-        st.node = {
-          ctl: new Int32Array(ctlSab),
-          ctlSab: ctlSab,
+        var node = {
+          ctl: null,
+          ctlSab: null,
           req: new SharedArrayBuffer(8 * 1024 * 1024),
           data: new SharedArrayBuffer(8 * 1024 * 1024),
           src: src,
-          wt: wt
+          wt: wt,
+          worker: null,
+          spawn: function(newReq, newData) {
+            var req = newReq || this.req;
+            var data = newData || this.data;
+            var ctlSab = new SharedArrayBuffer(32);
+            var worker = new this.wt.Worker(this.src, {
+              eval: true,
+              workerData: { ctl: ctlSab, req: req, data: data }
+            });
+            worker.unref();
+            var oldWorker = this.worker;
+            this.req = req;
+            this.data = data;
+            this.ctlSab = ctlSab;
+            this.ctl = new Int32Array(ctlSab);
+            this.worker = worker;
+            if (oldWorker) oldWorker.terminate();
+          }
         };
-        st.node.worker = new wt.Worker(src, {
-          eval: true,
-          workerData: { ctl: ctlSab, req: st.node.req, data: st.node.data }
-        });
-        st.node.worker.unref();
+        node.spawn(null, null);
+        st.node = node;
       }
       var n = st.node;
+      var spec = JSON.stringify({ url: url, method: method, auth: auth,
+                                  timeoutMs: timeoutMs });
+      var enc = new TextEncoder().encode(spec);
+      var bodyLen = body ? body.length : 0;
+      var reqNeed = enc.length + bodyLen;
+      if (reqNeed > maxSab) return 0;
+      if (reqNeed > n.req.byteLength) {
+        var reqGrow = n.req.byteLength;
+        while (reqGrow < reqNeed && reqGrow < maxSab) reqGrow *= 2;
+        if (reqGrow > maxSab) reqGrow = maxSab;
+        n.spawn(new SharedArrayBuffer(reqGrow), null);
+      }
       for (;;) {
-        var spec = JSON.stringify({ url: url, method: method, auth: auth,
-                                    timeoutMs: timeoutMs });
-        var enc = new TextEncoder().encode(spec);
-        if (enc.length + (body ? body.length : 0) > n.req.byteLength) return 0;
         new Uint8Array(n.req).set(enc, 0);
         if (body) new Uint8Array(n.req).set(body, enc.length);
         Atomics.store(n.ctl, 4, enc.length);
-        Atomics.store(n.ctl, 5, body ? body.length : 0);
+        Atomics.store(n.ctl, 5, bodyLen);
         Atomics.store(n.ctl, 6, 0);
         Atomics.store(n.ctl, 0, 1);
         Atomics.notify(n.ctl, 0);
@@ -793,15 +816,11 @@ EM_JS(int, doltliteWasmHttpSend, (const char *zUrl, const char *zMethod,
         var status = Atomics.load(n.ctl, 1);
         Atomics.store(n.ctl, 0, 0);
         if (over) {
+          if (need > maxSab) return 0;
           var grow = n.data.byteLength;
-          while (grow < need) grow *= 2;
-          n.data = new SharedArrayBuffer(grow);
-          n.worker.terminate();
-          n.worker = new n.wt.Worker(n.src, {
-            eval: true,
-            workerData: { ctl: n.ctlSab, req: n.req, data: n.data }
-          });
-          n.worker.unref();
+          while (grow < need && grow < maxSab) grow *= 2;
+          if (grow > maxSab) grow = maxSab;
+          n.spawn(null, new SharedArrayBuffer(grow));
           continue;
         }
         if (bad) return 0;
