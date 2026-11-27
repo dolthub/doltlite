@@ -6166,6 +6166,8 @@ static void vec1UnloadConfig(Vec1Tab *pTab){
   pTab->cfg.nElem = 0;
 }
 
+static int vec1FinishWriter(Vec1Tab *pTab, int bDiscard);
+
 /*
 ** xDisconnect method. Free the virtual table object passed as the only
 ** argument.
@@ -6181,6 +6183,7 @@ static int vec1DisconnectMethod(sqlite3_vtab *pVtab){
     *pp = pTab->pTabNext;
   }
 
+  vec1FinishWriter(pTab, 1);
   for(ii=0; ii<size_of_array(pTab->aStmt); ii++){
     sqlite3_finalize(pTab->aStmt[ii]);
   }
@@ -12151,6 +12154,15 @@ static int vec1RenameMethod(sqlite3_vtab *pVtab, const char *zNew){
   int bDefensive = 0;             /* Initial value of DEFENSIVE */
   int bWritable = 0;              /* Initial value of WRITABLE_SCHEMA */
   char *zSql = 0;                 /* SQL script to rename shadow objects */
+  int ii;
+
+  /* Flush any buffered writes before renaming shadow tables */
+  rc = vec1FinishWriter(pTab, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  for(ii=0; ii<size_of_array(pTab->aStmt); ii++){
+    sqlite3_finalize(pTab->aStmt[ii]);
+    pTab->aStmt[ii] = 0;
+  }
 
   /* Query the initial values of the DEFENSIVE and WRITABLE_SCHEMA db-config 
   ** options. Then clear DEFENSIVE and set WRITABLE_SCHEMA so that we can
