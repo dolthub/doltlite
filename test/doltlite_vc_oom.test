@@ -150,4 +150,35 @@ do_faultsim_test 4.1 -faults oom-transient -prep {
   faultsim_integrity_check
 }
 
+faultsim_restore_and_reopen
+do_test 5.0 {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+    INSERT INTO t VALUES(1, 10);
+    SELECT dolt_commit('-Am', 'c1');
+    ALTER TABLE t ADD COLUMN b TEXT;
+    ALTER TABLE t ADD COLUMN c REAL;
+    INSERT INTO t VALUES(2, 20, 'two', 2.5);
+    SELECT dolt_commit('-Am', 'c2');
+  }
+  set {} {}
+} {}
+faultsim_save_and_close
+
+do_faultsim_test 5.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db eval {
+    SELECT id, a, b, c FROM dolt_at_t('HEAD~1') ORDER BY id
+  }
+} -test {
+  faultsim_test_result {0 {1 10 {} {}}} \
+      {1 {out of memory}} {1 {disk I/O error}} \
+      {1 {vtab constructor failed: dolt_at_t}} \
+      {1 {no such table: dolt_at_t}}
+  catchsql ROLLBACK
+  faultsim_integrity_check
+}
+
 finish_test
