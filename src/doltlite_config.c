@@ -89,23 +89,6 @@ static int mutateDefaultBranch(sqlite3 *db, ChunkStore *cs, void *pArg){
   return rc;
 }
 
-static int defaultBranchSealTxn(
-  sqlite3_context *ctx, int hadExplicitTxn, int bHookApproved
-){
-  sqlite3 *db = sqlite3_context_db_handle(ctx);
-  int rc;
-  if( hadExplicitTxn ){
-    int (*xHook)(void*) = db->xCommitCallback;
-    if( bHookApproved ) db->xCommitCallback = 0;
-    rc = doltliteVcSealBranchStyleTxn(db);
-    db->xCommitCallback = xHook;
-  }else{
-    rc = doltliteVcSealAutocommitSavepoint(db);
-  }
-  if( rc!=SQLITE_OK ) doltliteVcResultSealError(ctx, db, rc);
-  return rc;
-}
-
 static void doltliteDefaultBranchFunc(
   sqlite3_context *ctx, int argc, sqlite3_value **argv
 ){
@@ -159,7 +142,16 @@ static void doltliteDefaultBranchFunc(
       sqlite3_result_error_code(ctx, rc);
       return;
     }
-    if( defaultBranchSealTxn(ctx, hadExplicitTxn, bHookApproved)!=SQLITE_OK ){
+    if( hadExplicitTxn ){
+      int (*xHook)(void*) = db->xCommitCallback;
+      if( bHookApproved ) db->xCommitCallback = 0;
+      rc = doltliteVcSealBranchStyleTxn(db);
+      db->xCommitCallback = xHook;
+    }else{
+      rc = doltliteVcSealAutocommitSavepoint(db);
+    }
+    if( rc!=SQLITE_OK ){
+      doltliteVcResultSealError(ctx, db, rc);
       return;
     }
     sqlite3_result_int(ctx, 0);
