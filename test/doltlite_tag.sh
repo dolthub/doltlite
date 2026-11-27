@@ -89,6 +89,9 @@ run_test "delete_multiple_tags_removed" "SELECT count(*) FROM dolt_tags;" "0" "$
 echo "SELECT dolt_tag('one'); SELECT dolt_tag('two');" | $DOLTLITE "$DB4" > /dev/null 2>&1
 run_test_error_match "delete_multiple_tags_missing_is_atomic" "SELECT dolt_tag('-d','one','missing','two');" "not found" "$DB4"
 run_test "delete_multiple_tags_missing_keeps_tags" "SELECT count(*) FROM dolt_tags;" "2" "$DB4"
+echo "SELECT dolt_tag('v1');" | $DOLTLITE "$DB4" > /dev/null 2>&1
+run_test "delete_duplicate_tag_names" "SELECT dolt_tag('-d','v1','v1');" "0" "$DB4"
+run_test "delete_duplicate_tag_names_removed" "SELECT count(*) FROM dolt_tags WHERE tag_name='v1';" "0" "$DB4"
 
 DB5=/tmp/test_tag_collide_$$.db; rm -f "$DB5"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
