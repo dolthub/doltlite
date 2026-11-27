@@ -45,6 +45,7 @@ struct BlameVtab {
   char **azPkNames;
   char **azPkColl;
   int   *aPkColIdx;
+  char  *aPkAff;
   int    nPkCols;
   int    intPkCid;
   int    bHasRowid;
@@ -254,7 +255,7 @@ static char *blameBuildSchema(BlameVtab *v, Table *pTab){
   sqlite3_str_appendall(pStr, "CREATE TABLE x(");
   for(i=0; i<v->nPkCols; i++){
     const char *zType = "BLOB";
-    switch( pTab->aCol[v->aPkColIdx[i]].affinity ){
+    switch( v->aPkAff[i] ){
       case SQLITE_AFF_TEXT: zType = "TEXT"; break;
       case SQLITE_AFF_NUMERIC: zType = "NUMERIC"; break;
       case SQLITE_AFF_INTEGER: zType = "INTEGER"; break;
@@ -1018,8 +1019,25 @@ static int bmConnect(sqlite3 *db, void *pAux, int argc,
     return SQLITE_ERROR;
   }
 
+  v->aPkAff = sqlite3_malloc(v->nPkCols);
+  if( !v->aPkAff ){
+    blameFreePkColumns(v->azPkNames, v->azPkColl, v->aPkColIdx, v->nPkCols);
+    sqlite3_free(v->zTableName);
+    sqlite3_free(v);
+    return SQLITE_NOMEM;
+  }
+  {
+    int i;
+    for(i=0; i<v->nPkCols; i++){
+      int cid = v->aPkColIdx[i];
+      v->aPkAff[i] = (cid>=0 && cid<pTab->nCol)
+                     ? pTab->aCol[cid].affinity : SQLITE_AFF_BLOB;
+    }
+  }
+
   zSchema = blameBuildSchema(v, pTab);
   if( !zSchema ){
+    sqlite3_free(v->aPkAff);
     blameFreePkColumns(v->azPkNames, v->azPkColl, v->aPkColIdx, v->nPkCols);
     sqlite3_free(v->zTableName);
     sqlite3_free(v);
@@ -1028,6 +1046,7 @@ static int bmConnect(sqlite3 *db, void *pAux, int argc,
   rc = doltliteDeclareVtab(db, zSchema);
   sqlite3_free(zSchema);
   if( rc!=SQLITE_OK ){
+    sqlite3_free(v->aPkAff);
     blameFreePkColumns(v->azPkNames, v->azPkColl, v->aPkColIdx, v->nPkCols);
     sqlite3_free(v->zTableName);
     sqlite3_free(v);
@@ -1041,6 +1060,7 @@ static int bmConnect(sqlite3 *db, void *pAux, int argc,
 
 static int bmDisconnect(sqlite3_vtab *pVtab){
   BlameVtab *v = (BlameVtab*)pVtab;
+  sqlite3_free(v->aPkAff);
   blameFreePkColumns(v->azPkNames, v->azPkColl, v->aPkColIdx, v->nPkCols);
   sqlite3_free(v->zTableName);
   sqlite3_free(v);
@@ -1234,11 +1254,16 @@ static int bmColumn(sqlite3_vtab_cursor *pCursor,
       Table *pTab = sqlite3FindTable(v->db, v->zTableName, "main");
       int iField = iCol;
       if( v->bHasRowid ){
-        iField = pTab ? sqlite3TableColumnToStorage(pTab, cid) : cid;
+        if( pTab && cid>=0 && cid<pTab->nCol ){
+          iField = sqlite3TableColumnToStorage(pTab, cid);
+        }else{
+          iField = -1;
+        }
       }
       doltliteParseRecord(r->pCurVal, r->nCurVal, &ri);
       if( iField>=0 && iField<ri.nField ){
-        if( pTab && pTab->aCol[cid].affinity==SQLITE_AFF_REAL ){
+        if( pTab && cid>=0 && cid<pTab->nCol
+         && pTab->aCol[cid].affinity==SQLITE_AFF_REAL ){
           DoltliteSerialValue f;
           if( doltliteSerialValueFromPayload(r->pCurVal, r->nCurVal,
                   ri.aType[iField], ri.aOffset[iField], &f)==SQLITE_OK
@@ -1323,7 +1348,11 @@ int doltliteBlameModuleStale(sqlite3 *db, Module *pMod){
   pTab = sqlite3FindTable(db, v->zTableName, "main");
   if( !pTab || IsVirtual(pTab) || IsView(pTab) ) return 1;
   if( (HasRowid(pTab)!=0)!=(v->bHasRowid!=0) ) return 1;
-  if( (pTab->iPKey>=0)!=(v->intPkCid>=0) ) return 1;
+  if( v->bHasRowid ){
+    if( pTab->iPKey!=v->intPkCid ) return 1;
+  }else if( v->intPkCid>=0 ){
+    return 1;
+  }
   if( pTab->iPKey>=0 ){
     n = 1;
   }else{
@@ -1333,8 +1362,22 @@ int doltliteBlameModuleStale(sqlite3 *db, Module *pMod){
   if( n!=v->nPkCols ) return 1;
   for(i=0; i<n; i++){
     int iCol = pPk ? pPk->aiColumn[i] : pTab->iPKey;
+    const char *zTabColl;
+    const char *zCachedColl;
     if( iCol<0 || iCol>=pTab->nCol
-     || sqlite3_stricmp(pTab->aCol[iCol].zCnName, v->azPkNames[i])!=0 ){
+     || iCol!=v->aPkColIdx[i]
+     || sqlite3_stricmp(pTab->aCol[iCol].zCnName, v->azPkNames[i])!=0
+     || !v->aPkAff
+     || pTab->aCol[iCol].affinity!=v->aPkAff[i] ){
+      return 1;
+    }
+    zTabColl = sqlite3ColumnColl(&pTab->aCol[iCol]);
+    if( zTabColl && (!zTabColl[0] || sqlite3_stricmp(zTabColl, "BINARY")==0) ){
+      zTabColl = 0;
+    }
+    zCachedColl = (v->azPkColl && v->azPkColl[i]) ? v->azPkColl[i] : 0;
+    if( (zTabColl!=0)!=(zCachedColl!=0)
+     || (zTabColl && sqlite3_stricmp(zTabColl, zCachedColl)!=0) ){
       return 1;
     }
   }
