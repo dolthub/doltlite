@@ -568,26 +568,44 @@ done:
   return rc;
 }
 
-char *doltliteCredsDir(void) {
-  const char *override = getenv("DOLTLITE_CREDS_DIR");
+static int credsResolveDir(const char *dir, char **pOwned,
+                           const char **pEffective) {
+  const char *override;
   const char *home;
-  char *dir;
+  *pOwned = NULL;
+  *pEffective = NULL;
+  if (dir) {
+    *pEffective = dir;
+    return 0;
+  }
+  override = getenv("DOLTLITE_CREDS_DIR");
   if (override && *override) {
-    return dlStrDup(override);
+    *pOwned = dlStrDup(override);
+    if (!*pOwned) return 1;
+    *pEffective = *pOwned;
+    return 0;
   }
   home = getenv("HOME");
 #ifdef _WIN32
   if (!home || !*home) home = getenv("USERPROFILE");
   if (!home || !*home) home = getenv("APPDATA");
 #endif
-  if (!home || !*home) return NULL;
+  if (!home || !*home) return 0;
   {
     size_t n = strlen(home) + strlen("/.doltlite/creds") + 1;
-    dir = (char *)sqlite3_malloc(n);
-    if (!dir) return NULL;
-    snprintf(dir, n, "%s/.doltlite/creds", home);
+    *pOwned = (char *)sqlite3_malloc(n);
+    if (!*pOwned) return 1;
+    snprintf(*pOwned, n, "%s/.doltlite/creds", home);
+    *pEffective = *pOwned;
   }
-  return dir;
+  return 0;
+}
+
+char *doltliteCredsDir(void) {
+  char *owned = NULL;
+  const char *effective = NULL;
+  if (credsResolveDir(NULL, &owned, &effective)) return NULL;
+  return owned;
 }
 
 static int makeDir(const char *path) {
@@ -1545,7 +1563,8 @@ int doltliteCredsResolve(
   const char *dir, const char *override, const char *url,
   DoltliteCreds **out, char **source, char **error
 ) {
-  char *selected = NULL, *key = NULL;
+  char *selected = NULL, *key = NULL, *ownedDir = NULL;
+  const char *effectiveDir = NULL;
   CredsSetting *settings = NULL, *setting;
   char **kids = NULL;
   const char *why = NULL;
@@ -1566,9 +1585,14 @@ int doltliteCredsResolve(
     }
   }
   if (!selected) {
-    char *ownedDir = dir ? NULL : doltliteCredsDir();
-    char *path = dir || ownedDir ? credsConfigPath(dir ? dir : ownedDir, "") : NULL;
-    if (!path) { sqlite3_free(ownedDir); goto oom; }
+    char *path;
+    if (credsResolveDir(dir, &ownedDir, &effectiveDir)) goto oom;
+    if (!effectiveDir) {
+      rc = DOLTLITE_CREDS_NONE;
+      goto done;
+    }
+    path = credsConfigPath(effectiveDir, "");
+    if (!path) goto oom;
     if (credsSettingsRead(path, &settings, 0)) {
       char message[1200];
       snprintf(message, sizeof(message),
@@ -1576,12 +1600,10 @@ int doltliteCredsResolve(
           path);
       *error = dlStrDup(message);
       sqlite3_free(path);
-      sqlite3_free(ownedDir);
       if (!*error) goto oom;
       goto done;
     }
     sqlite3_free(path);
-    sqlite3_free(ownedDir);
     if (url && strstr(url, "://")) {
       key = doltliteCredsRemoteKey(url);
       if (!key) goto oom;
@@ -1606,12 +1628,14 @@ int doltliteCredsResolve(
     }
   }
   if (!selected) {
-    if (doltliteCredsList(dir, &kids, &n)) {
+    if (doltliteCredsList(effectiveDir, &kids, &n)) {
       *error = dlStrDup("cannot read credential directory");
+      if (!*error) goto oom;
       goto done;
     }
     if (n > 1) {
       *error = dlStrDup("multiple credentials found; select one with dolt_creds_use()");
+      if (!*error) goto oom;
       goto done;
     }
     if (!n) { rc = DOLTLITE_CREDS_NONE; goto done; }
@@ -1621,14 +1645,27 @@ int doltliteCredsResolve(
   }
   if (!strcmp(selected, "anonymous")) {
     rc = DOLTLITE_CREDS_ANONYMOUS;
-  } else if (doltliteCredsLoadNamed(dir, selected, out)) {
-    char message[256];
-    snprintf(message, sizeof(message),
-        "%s selected credential is missing, unreadable or invalid: %.52s; use dolt_creds_ls() and dolt_creds_use()",
-        why, selected);
-    *error = dlStrDup(message);
   } else {
-    rc = DOLTLITE_CREDS_SELECTED;
+    if (!effectiveDir && credsResolveDir(dir, &ownedDir, &effectiveDir)) {
+      goto oom;
+    }
+    if (!effectiveDir) {
+      char message[256];
+      snprintf(message, sizeof(message),
+          "%s selected credential cannot be loaded without a credentials directory: %.52s; set HOME or DOLTLITE_CREDS_DIR",
+          why, selected);
+      *error = dlStrDup(message);
+      if (!*error) goto oom;
+    } else if (doltliteCredsLoadNamed(effectiveDir, selected, out)) {
+      char message[256];
+      snprintf(message, sizeof(message),
+          "%s selected credential is missing, unreadable or invalid: %.52s; use dolt_creds_ls() and dolt_creds_use()",
+          why, selected);
+      *error = dlStrDup(message);
+      if (!*error) goto oom;
+    } else {
+      rc = DOLTLITE_CREDS_SELECTED;
+    }
   }
   if (source) {
     *source = dlStrDup(why);
@@ -1647,6 +1684,7 @@ oom:
   rc = DOLTLITE_CREDS_ERROR;
 done:
   credsSettingsFree(settings);
+  sqlite3_free(ownedDir);
   sqlite3_free(selected);
   sqlite3_free(key);
   doltliteCredsFreeList(kids, n);

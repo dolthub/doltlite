@@ -67,6 +67,24 @@ static int writeBytes(const char *path, const void *data, size_t len) {
   return ok;
 }
 
+static char *dupEnv(const char *name) {
+  const char *v = getenv(name);
+  char *copy;
+  if (!v) return NULL;
+  copy = (char *)malloc(strlen(v) + 1);
+  if (copy) strcpy(copy, v);
+  return copy;
+}
+
+static void setEnvVar(const char *name, const char *val) {
+#ifdef _WIN32
+  _putenv_s(name, val ? val : "");
+#else
+  if (val) setenv(name, val, 1);
+  else unsetenv(name);
+#endif
+}
+
 static int failures = 0;
 
 static void hexenc(const unsigned char *p, size_t n, char *out) {
@@ -633,6 +651,95 @@ int main(int argc, char **argv) {
     remove(invalidPath);
     free(invalidPath);
     sqlite3_free(kid);
+  }
+
+  {
+    char *savedHome = dupEnv("HOME");
+    char *savedCredsDir = dupEnv("DOLTLITE_CREDS_DIR");
+    char *savedCredsKid = dupEnv("DOLTLITE_CREDS_KID");
+#ifdef _WIN32
+    char *savedUserProfile = dupEnv("USERPROFILE");
+    char *savedAppData = dupEnv("APPDATA");
+#endif
+    DoltliteCreds *resolved = NULL;
+    char *source = NULL;
+    char *error = NULL;
+    int rc;
+
+    setEnvVar("HOME", NULL);
+    setEnvVar("DOLTLITE_CREDS_DIR", NULL);
+    setEnvVar("DOLTLITE_CREDS_KID", NULL);
+#ifdef _WIN32
+    setEnvVar("USERPROFILE", NULL);
+    setEnvVar("APPDATA", NULL);
+#endif
+
+    rc = doltliteCredsResolve(NULL, NULL, "https://doltliteremoteapi.dolthub.com/org/repo",
+                              &resolved, &source, &error);
+    check_bool("resolve with unset HOME and DOLTLITE_CREDS_DIR returns NONE",
+               rc == DOLTLITE_CREDS_NONE && resolved == NULL &&
+               source == NULL && error == NULL);
+    doltliteCredsFree(resolved);
+    sqlite3_free(source);
+    sqlite3_free(error);
+    resolved = NULL;
+    source = NULL;
+    error = NULL;
+
+    setEnvVar("DOLTLITE_CREDS_KID", "0123456789abcdefghijklmnopqrstuv0123456789abc");
+    rc = doltliteCredsResolve(NULL, NULL, "https://doltliteremoteapi.dolthub.com/org/repo",
+                              &resolved, &source, &error);
+    check_bool("resolve with unset dirs and DOLTLITE_CREDS_KID returns non-OOM error",
+               rc == DOLTLITE_CREDS_ERROR && resolved == NULL &&
+               error != NULL && strstr(error, "out of memory") == NULL &&
+               strstr(error, "credentials directory") != NULL &&
+               source != NULL && strcmp(source, "DOLTLITE_CREDS_KID") == 0);
+    doltliteCredsFree(resolved);
+    sqlite3_free(source);
+    sqlite3_free(error);
+    resolved = NULL;
+    source = NULL;
+    error = NULL;
+
+    setEnvVar("DOLTLITE_CREDS_KID", NULL);
+    rc = doltliteCredsResolve(NULL, "0123456789abcdefghijklmnopqrstuv0123456789abc",
+                              "https://doltliteremoteapi.dolthub.com/org/repo",
+                              &resolved, &source, &error);
+    check_bool("resolve with unset dirs and explicit override returns non-OOM error",
+               rc == DOLTLITE_CREDS_ERROR && resolved == NULL &&
+               error != NULL && strstr(error, "out of memory") == NULL &&
+               strstr(error, "credentials directory") != NULL &&
+               source != NULL && strcmp(source, "connection") == 0);
+    doltliteCredsFree(resolved);
+    sqlite3_free(source);
+    sqlite3_free(error);
+    resolved = NULL;
+    source = NULL;
+    error = NULL;
+
+    rc = doltliteCredsResolve(NULL, "anonymous",
+                              "https://doltliteremoteapi.dolthub.com/org/repo",
+                              &resolved, &source, &error);
+    check_bool("resolve with unset dirs and explicit anonymous succeeds",
+               rc == DOLTLITE_CREDS_ANONYMOUS && resolved == NULL &&
+               error == NULL && source != NULL &&
+               strcmp(source, "connection") == 0);
+    doltliteCredsFree(resolved);
+    sqlite3_free(source);
+    sqlite3_free(error);
+
+    setEnvVar("HOME", savedHome);
+    setEnvVar("DOLTLITE_CREDS_DIR", savedCredsDir);
+    setEnvVar("DOLTLITE_CREDS_KID", savedCredsKid);
+    free(savedHome);
+    free(savedCredsDir);
+    free(savedCredsKid);
+#ifdef _WIN32
+    setEnvVar("USERPROFILE", savedUserProfile);
+    setEnvVar("APPDATA", savedAppData);
+    free(savedUserProfile);
+    free(savedAppData);
+#endif
   }
 
   doltliteCredsFree(c);
