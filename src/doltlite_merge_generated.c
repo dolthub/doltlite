@@ -655,7 +655,7 @@ int canFastMerge(
   if( !schemaUnchangedBothSides ) return 0;
   if( !zName || !db ) return 0;
 
-  pTab = sqlite3FindTable(db, zName, 0);
+  pTab = sqlite3FindTable(db, zName, "main");
   if( !pTab ) return 0;
   if( pTab->tabFlags & TF_HasStored ) return 0;
 
