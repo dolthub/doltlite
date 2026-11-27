@@ -1497,7 +1497,10 @@ static int btCursorInsertImpl(
         }
         if( rc!=SQLITE_OK ) return rc;
 
+        prollyCursorReleaseAll(&pCur->pCur);
         pCur->mmActive = 0;
+        pCur->deferredTreeSeek = 0;
+        pCur->curFlags &= ~BTCF_AtLast;
         pCur->flushSeekEdits = 0;
       } else if( (flags & BTREE_SAVEPOSITION) && !pCur->curIntKey ){
         ProllyMutMapEntry *pEntry = pInsertedEntry;
@@ -2096,6 +2099,14 @@ int prollyBtCursorPayloadChecked(BtCursor *pCur, u32 offset, u32 amt, void *pBuf
   }
   if( pCur->eState!=CURSOR_VALID ){
     return SQLITE_ABORT;
+  }
+
+  if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
+    if( (i64)offset + (i64)amt > (i64)pCur->nCachedPayload ){
+      return SQLITE_CORRUPT_BKPT;
+    }
+    if( amt>0 ) memcpy(pBuf, pCur->pCachedPayload + offset, amt);
+    return SQLITE_OK;
   }
 
   if( pCur->curIntKey

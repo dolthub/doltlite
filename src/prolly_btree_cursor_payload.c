@@ -512,6 +512,13 @@ int prollyBtCursorPayload(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
     if( pCur->eState!=CURSOR_VALID ) return SQLITE_ABORT;
   }
   assert( pCur->eState==CURSOR_VALID );
+  if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
+    if( (i64)offset + (i64)amt > (i64)pCur->nCachedPayload ){
+      return SQLITE_CORRUPT_BKPT;
+    }
+    if( amt>0 ) memcpy(pBuf, pCur->pCachedPayload + offset, amt);
+    return SQLITE_OK;
+  }
   if( pCur->curIntKey
    && pCur->mmActive
    && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
