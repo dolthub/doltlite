@@ -9,6 +9,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <signal.h>
+#endif
 
 #ifdef _WIN32
 static int setenv(const char *n, const char *v, int overwrite) {
@@ -608,6 +611,141 @@ cleanup:
   return rc;
 }
 
+#ifndef _WIN32
+static volatile sig_atomic_t gPollEintrCount = 0;
+static int gPollWakeFd = -1;
+
+static void onPollTestAlarm(int sig) {
+  (void)sig;
+  gPollEintrCount++;
+  if (gPollEintrCount >= 2 && gPollWakeFd >= 0) {
+    char b = 'x';
+    ssize_t ignored = write(gPollWakeFd, &b, 1);
+    (void)ignored;
+  }
+}
+
+static int testPollUntilEintr(void) {
+  int fds[2] = {-1, -1};
+  struct sigaction sa, oldSa;
+  struct itimerval itv, zeroItv;
+  doltlite_pollfd pfd;
+  long long start, elapsed;
+  char drain;
+  int rc = 1;
+  int pollRc;
+  int listenFd = -1, cliFd = -1, srvFd = -1;
+  int one = 1;
+  struct sockaddr_in addr;
+  socklen_t addrLen = (socklen_t)sizeof(addr);
+  char portStr[16];
+
+  memset(&zeroItv, 0, sizeof(zeroItv));
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = onPollTestAlarm;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+
+  if (pipe(fds) != 0) {
+    printf("FAIL  testPollUntilEintr: pipe failed\n");
+    return 1;
+  }
+  if (sigaction(SIGALRM, &sa, &oldSa) != 0) {
+    printf("FAIL  testPollUntilEintr: sigaction failed\n");
+    close(fds[0]);
+    close(fds[1]);
+    return 1;
+  }
+
+  gPollEintrCount = 0;
+  gPollWakeFd = fds[1];
+  memset(&itv, 0, sizeof(itv));
+  itv.it_value.tv_usec = 25000;
+  itv.it_interval.tv_usec = 25000;
+  if (setitimer(ITIMER_REAL, &itv, NULL) != 0) {
+    printf("FAIL  testPollUntilEintr: setitimer failed\n");
+    goto cleanup;
+  }
+
+  pfd.fd = fds[0];
+  pfd.events = POLLIN;
+  pfd.revents = 0;
+  pollRc = doltlitePollUntil(&pfd, doltliteMonotonicMs() + 2000);
+  setitimer(ITIMER_REAL, &zeroItv, NULL);
+  gPollWakeFd = -1;
+
+  if (pollRc != 1 || (pfd.revents & POLLIN) == 0 || gPollEintrCount < 2) {
+    printf("FAIL  testPollUntilEintr: ready case pollRc=%d revents=0x%x sigs=%d\n",
+           pollRc, (unsigned)pfd.revents, (int)gPollEintrCount);
+    goto cleanup;
+  }
+  if (read(fds[0], &drain, 1) != 1) {
+    printf("FAIL  testPollUntilEintr: drain read failed\n");
+    goto cleanup;
+  }
+
+  gPollEintrCount = 0;
+  gPollWakeFd = -1;
+  if (setitimer(ITIMER_REAL, &itv, NULL) != 0) {
+    printf("FAIL  testPollUntilEintr: setitimer (timeout) failed\n");
+    goto cleanup;
+  }
+
+  pfd.fd = fds[0];
+  pfd.events = POLLIN;
+  pfd.revents = 0;
+  start = doltliteMonotonicMs();
+  pollRc = doltlitePollUntil(&pfd, start + 120);
+  elapsed = doltliteMonotonicMs() - start;
+  setitimer(ITIMER_REAL, &zeroItv, NULL);
+
+  if (pollRc != 0 || gPollEintrCount < 2 || elapsed < 100 || elapsed > 2000) {
+    printf("FAIL  testPollUntilEintr: timeout case pollRc=%d sigs=%d elapsed=%lldms\n",
+           pollRc, (int)gPollEintrCount, elapsed);
+    goto cleanup;
+  }
+
+  listenFd = (int)socket(AF_INET, SOCK_STREAM, 0);
+  if (listenFd < 0) goto cleanup;
+  setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof(one));
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port = 0;
+  if (bind(listenFd, (struct sockaddr *)&addr, sizeof(addr)) != 0
+   || listen(listenFd, 1) != 0
+   || getsockname(listenFd, (struct sockaddr *)&addr, &addrLen) != 0) {
+    printf("FAIL  testPollUntilEintr: loopback listen failed\n");
+    goto cleanup;
+  }
+  snprintf(portStr, sizeof(portStr), "%u", (unsigned)ntohs(addr.sin_port));
+  cliFd = doltliteTcpConnect("127.0.0.1", portStr, 2000);
+  if (cliFd < 0) {
+    printf("FAIL  testPollUntilEintr: doltliteTcpConnect loopback failed\n");
+    goto cleanup;
+  }
+  srvFd = (int)accept(listenFd, NULL, NULL);
+  if (srvFd < 0) {
+    printf("FAIL  testPollUntilEintr: accept failed\n");
+    goto cleanup;
+  }
+
+  printf("  PASS  doltlitePollUntil retries across EINTR and honors deadline\n");
+  rc = 0;
+
+cleanup:
+  setitimer(ITIMER_REAL, &zeroItv, NULL);
+  gPollWakeFd = -1;
+  sigaction(SIGALRM, &oldSa, NULL);
+  if (srvFd >= 0) doltliteCloseSocket(srvFd);
+  if (cliFd >= 0) doltliteCloseSocket(cliFd);
+  if (listenFd >= 0) doltliteCloseSocket(listenFd);
+  if (fds[0] >= 0) close(fds[0]);
+  if (fds[1] >= 0) close(fds[1]);
+  return rc;
+}
+#endif
+
 static const char *testHost(void) {
   const char *h = getenv("DOLTLITE_TLS_TEST_HOST");
   return (h && *h) ? h : "dolthub.com";
@@ -620,6 +758,12 @@ int main(int argc, char **argv) {
   DoltliteConn *probe, *c;
 
   unsetenv("DOLTLITE_CA_FILE");
+
+#ifndef _WIN32
+  if (testPollUntilEintr() != 0) {
+    fails++;
+  }
+#endif
 
   if (argc > 2 && argv[1][0] != '\0' && argv[2][0] != '\0') {
     if (testNonblockHandshakeWantWrite(argv[1], argv[2]) != 0) {

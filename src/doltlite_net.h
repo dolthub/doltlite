@@ -153,6 +153,22 @@ static inline int doltliteSocketConnectPending(void) {
 #endif
 }
 
+static inline int doltlitePollUntil(doltlite_pollfd *pfd, long long deadline) {
+  for (;;) {
+    long long remaining = deadline - doltliteMonotonicMs();
+    int waitMs;
+    int rc;
+    if (remaining <= 0) return 0;
+    waitMs = remaining > 0x7fffffff ? 0x7fffffff : (int)remaining;
+    pfd->revents = 0;
+    rc = doltlitePoll(pfd, 1, waitMs);
+#ifndef _WIN32
+    if (rc < 0 && errno == EINTR) continue;
+#endif
+    return rc;
+  }
+}
+
 static inline int doltliteTcpConnect(
   const char *host,
   const char *port,
@@ -185,9 +201,6 @@ static inline int doltliteTcpConnect(
         connected = 1;
       } else if (doltliteSocketConnectPending()) {
         doltlite_pollfd pfd;
-        long long remaining = deadline - doltliteMonotonicMs();
-        int waitMs = remaining > 0x7fffffff
-                   ? 0x7fffffff : (int)remaining;
         int soError = 0;
 #ifdef _WIN32
         int nSoError = (int)sizeof(soError);
@@ -197,7 +210,7 @@ static inline int doltliteTcpConnect(
         pfd.fd = fd;
         pfd.events = POLLOUT;
         pfd.revents = 0;
-        if (remaining > 0 && doltlitePoll(&pfd, 1, waitMs) > 0
+        if (doltlitePollUntil(&pfd, deadline) > 0
          && getsockopt(fd, SOL_SOCKET, SO_ERROR,
 #ifdef _WIN32
                        (char *)&soError,
