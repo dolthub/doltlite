@@ -379,6 +379,11 @@ static int diffIterEnsurePrefetchBuf(ProllyDiffIter *pIter){
   return SQLITE_OK;
 }
 
+static int diffNodeFlagsMatch(const ProllyNode *pNode, u8 expectedFlags){
+  return (pNode->flags & (PROLLY_NODE_INTKEY|PROLLY_NODE_BLOBKEY))
+      == (expectedFlags & (PROLLY_NODE_INTKEY|PROLLY_NODE_BLOBKEY));
+}
+
 static int diffIterPrefetchPairs(
   ProllyDiffIter *pIter,
   const DiffPrefetchPair *aInitial,
@@ -397,7 +402,9 @@ static int diffIterPrefetchPairs(
   if( rc!=SQLITE_OK ) return rc;
   aPair = (DiffPrefetchPair*)pIter->pPrefetchPairs;
   aHash = (ProllyHash*)pIter->pPrefetchHashes;
-  memcpy(aPair, aInitial, (size_t)nInitial * sizeof(DiffPrefetchPair));
+  if( aPair != aInitial ){
+    memcpy(aPair, aInitial, (size_t)nInitial * sizeof(DiffPrefetchPair));
+  }
 
   while( iLevel<nPair ){
     int iLevelEnd = nPair;
@@ -444,6 +451,8 @@ static int diffIterPrefetchPairs(
       }
       if( (int)oldNode.level>=PROLLY_CURSOR_MAX_DEPTH
        || (int)newNode.level>=PROLLY_CURSOR_MAX_DEPTH
+       || !diffNodeFlagsMatch(&oldNode, pIter->oldFlags)
+       || !diffNodeFlagsMatch(&newNode, pIter->newFlags)
        || (expectedLevel>=0
         && ((int)oldNode.level!=expectedLevel
          || (int)newNode.level!=expectedLevel)) ){
@@ -557,6 +566,8 @@ static int diffIterDescendPair(
 
   if( (int)oldNode.level>=PROLLY_CURSOR_MAX_DEPTH
    || (int)newNode.level>=PROLLY_CURSOR_MAX_DEPTH
+   || !diffNodeFlagsMatch(&oldNode, pIter->oldFlags)
+   || !diffNodeFlagsMatch(&newNode, pIter->newFlags)
    || (expectedLevel>=0
     && ((int)oldNode.level!=expectedLevel
      || (int)newNode.level!=expectedLevel)) ){

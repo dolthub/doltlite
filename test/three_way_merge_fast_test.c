@@ -474,6 +474,173 @@ static void test_diff_open_error_frees_prefetch_buf(void){
   remove(path);
 }
 
+static int putTwoBlobChildNode(
+  ChunkStore *cs,
+  u8 level,
+  const u8 *k0, int nK0, const ProllyHash *h0,
+  const u8 *k1, int nK1, const ProllyHash *h1,
+  ProllyHash *pOut
+){
+  ProllyNodeBuilder b;
+  u8 *pData = 0;
+  int nData = 0;
+  int rc;
+
+  prollyNodeBuilderInit(&b, level, PROLLY_NODE_BLOBKEY);
+  rc = prollyNodeBuilderAdd(&b, k0, nK0, h0->data, PROLLY_HASH_SIZE);
+  if( rc==SQLITE_OK ){
+    rc = prollyNodeBuilderAdd(&b, k1, nK1, h1->data, PROLLY_HASH_SIZE);
+  }
+  if( rc==SQLITE_OK ){
+    rc = prollyNodeBuilderFinish(&b, &pData, &nData);
+  }
+  if( rc==SQLITE_OK ){
+    rc = chunkStorePut(cs, pData, nData, pOut);
+  }
+  sqlite3_free(pData);
+  prollyNodeBuilderFree(&b);
+  return rc;
+}
+
+static void test_diff_prefetch_frame_no_overlap(void){
+  ChunkStore cs;
+  ProllyCache cache;
+  ProllyHash empty, leaf1A, leaf1B, leaf2;
+  ProllyHash midOld, midNew, rootOld, rootNew;
+  ProllyDiffIter iter;
+  ProllyDiffChange *pCh = 0;
+  doltlite_chunk_source src;
+  u8 recA[] = {2, 15, 'a'};
+  u8 recB[] = {2, 15, 'b'};
+  int rc;
+  int nChanges = 0;
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wm_diff_prefetch_frame";
+
+  rc = openStore(&cs, &cache, path);
+  check("diff_prefetch_frame: open", rc==SQLITE_OK);
+  memset(&empty, 0, sizeof(empty));
+
+  rc = insertInt(&cs, &cache, &empty, 1, recA, sizeof(recA), &leaf1A);
+  check("diff_prefetch_frame: leaf1A", rc==SQLITE_OK);
+  rc = insertInt(&cs, &cache, &empty, 1, recB, sizeof(recB), &leaf1B);
+  check("diff_prefetch_frame: leaf1B", rc==SQLITE_OK);
+  rc = insertInt(&cs, &cache, &empty, 2, recA, sizeof(recA), &leaf2);
+  check("diff_prefetch_frame: leaf2", rc==SQLITE_OK);
+
+  rc = putTwoChildNode(&cs, 1, 1, &leaf1A, 2, &leaf2, &midOld);
+  check("diff_prefetch_frame: midOld", rc==SQLITE_OK);
+  rc = putTwoChildNode(&cs, 1, 1, &leaf1B, 2, &leaf2, &midNew);
+  check("diff_prefetch_frame: midNew", rc==SQLITE_OK);
+
+  rc = putSingleEntryNode(&cs, 2, 2, midOld.data, PROLLY_HASH_SIZE, &rootOld);
+  check("diff_prefetch_frame: rootOld", rc==SQLITE_OK);
+  rc = putSingleEntryNode(&cs, 2, 2, midNew.data, PROLLY_HASH_SIZE, &rootNew);
+  check("diff_prefetch_frame: rootNew", rc==SQLITE_OK);
+  rc = chunkStoreCommit(&cs);
+  check("diff_prefetch_frame: commit", rc==SQLITE_OK);
+
+  memset(&src, 0, sizeof(src));
+  src.iVersion = 1;
+  src.xGet = dummySourceGet;
+  src.xGetMany = dummySourceGetMany;
+  rc = chunkStoreSourceSet(&cs, 0, &src, 0);
+  check("diff_prefetch_frame: set source", rc==SQLITE_OK);
+  check("diff_prefetch_frame: source attached", cs.pChunkSource!=0);
+
+  rc = prollyDiffIterOpen(&iter, &cs, &cache, &rootOld, &rootNew,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY);
+  check("diff_prefetch_frame: open diff", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    while( (rc = prollyDiffIterStep(&iter, &pCh))==SQLITE_ROW ){
+      nChanges++;
+      check("diff_prefetch_frame: change is modify",
+            pCh->type==PROLLY_DIFF_MODIFY);
+      check("diff_prefetch_frame: change key is 1",
+            pCh->keyIsIntKey && pCh->intKey==1);
+    }
+    check("diff_prefetch_frame: step done", rc==SQLITE_DONE);
+    check("diff_prefetch_frame: one change", nChanges==1);
+    prollyDiffIterClose(&iter);
+  }
+
+  chunkStoreSourceSet(&cs, 0, 0, 0);
+  closeStore(&cs, &cache, path);
+}
+
+static void test_diff_corrupt_child_flags(void){
+  ChunkStore cs;
+  ProllyCache cache;
+  ProllyHash empty, leafA, leafO;
+  ProllyHash badOld, badNew, rootOld, rootNew;
+  ProllyDiffIter iter;
+  ProllyDiffChange *pCh = 0;
+  doltlite_chunk_source src;
+  u8 recA[] = {2, 15, 'a'};
+  u8 recO[] = {2, 15, 'o'};
+  u8 kA[1] = {'a'};
+  u8 kB[1] = {'b'};
+  u8 kC[1] = {'c'};
+  int rc;
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wm_diff_corrupt_flags";
+
+  rc = openStore(&cs, &cache, path);
+  check("diff_corrupt_flags: open", rc==SQLITE_OK);
+  memset(&empty, 0, sizeof(empty));
+
+  rc = insertInt(&cs, &cache, &empty, 1, recA, sizeof(recA), &leafA);
+  check("diff_corrupt_flags: leafA", rc==SQLITE_OK);
+  rc = insertInt(&cs, &cache, &empty, 2, recO, sizeof(recO), &leafO);
+  check("diff_corrupt_flags: leafO", rc==SQLITE_OK);
+
+  /* Corrupt level-1 BLOBKEY internal children with 1-byte keys under INTKEY roots. */
+  rc = putTwoBlobChildNode(&cs, 1, kA, 1, &leafA, kB, 1, &leafO, &badOld);
+  check("diff_corrupt_flags: badOld", rc==SQLITE_OK);
+  rc = putTwoBlobChildNode(&cs, 1, kA, 1, &leafA, kC, 1, &leafO, &badNew);
+  check("diff_corrupt_flags: badNew", rc==SQLITE_OK);
+
+  rc = putSingleEntryNode(&cs, 2, 10, badOld.data, PROLLY_HASH_SIZE, &rootOld);
+  check("diff_corrupt_flags: rootOld", rc==SQLITE_OK);
+  rc = putSingleEntryNode(&cs, 2, 10, badNew.data, PROLLY_HASH_SIZE, &rootNew);
+  check("diff_corrupt_flags: rootNew", rc==SQLITE_OK);
+  rc = chunkStoreCommit(&cs);
+  check("diff_corrupt_flags: commit", rc==SQLITE_OK);
+
+  /* Corrupt child flags caught in diffIterDescendPair during Step. */
+  rc = prollyDiffIterOpen(&iter, &cs, &cache, &rootOld, &rootNew,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY);
+  check("diff_corrupt_flags: open ok for corrupt child", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    rc = prollyDiffIterStep(&iter, &pCh);
+    check("diff_corrupt_flags: step returns SQLITE_CORRUPT",
+          rc==SQLITE_CORRUPT);
+    prollyDiffIterClose(&iter);
+  }
+
+  /* Corrupt root flags caught directly in diffIterDescendPair during Open. */
+  rc = prollyDiffIterOpen(&iter, &cs, &cache, &badOld, &badNew,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY);
+  check("diff_corrupt_flags: corrupt root open returns SQLITE_CORRUPT",
+        rc==SQLITE_CORRUPT);
+  prollyDiffIterClose(&iter);
+
+  /* Corrupt child flags caught in diffIterPrefetchPairs when chunk source is set. */
+  memset(&src, 0, sizeof(src));
+  src.iVersion = 1;
+  src.xGet = dummySourceGet;
+  src.xGetMany = dummySourceGetMany;
+  rc = chunkStoreSourceSet(&cs, 0, &src, 0);
+  check("diff_corrupt_flags: set source", rc==SQLITE_OK);
+
+  rc = prollyDiffIterOpen(&iter, &cs, &cache, &rootOld, &rootNew,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY);
+  check("diff_corrupt_flags: prefetch returns SQLITE_CORRUPT",
+        rc==SQLITE_CORRUPT);
+  prollyDiffIterClose(&iter);
+
+  chunkStoreSourceSet(&cs, 0, 0, 0);
+  closeStore(&cs, &cache, path);
+}
+
 int main(void){
   sqlite3_initialize();
   test_same_shape_still_handles();
@@ -482,6 +649,8 @@ int main(void){
   test_corrupt_value_error();
   test_corrupt_child_level_and_depth();
   test_diff_open_error_frees_prefetch_buf();
+  test_diff_prefetch_frame_no_overlap();
+  test_diff_corrupt_child_flags();
   printf("%d passed, %d failed\n", nPass, nFail);
   return nFail>0 ? 1 : 0;
 }
