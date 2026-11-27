@@ -499,7 +499,7 @@ static int atAppendMissingColumns(
   u8 *aAffinity;
   u8 *aGenerated;
   int *aColToRec;
-  int declWasNull, affWasNull, recWasNull, genWasNull;
+  int nameWasNull, declWasNull, affWasNull, recWasNull, genWasNull;
 
   if( !pSrc || pSrc->nCol<=0 || !pSrc->azName ) return SQLITE_OK;
   nAdd = 0;
@@ -519,6 +519,7 @@ static int atAppendMissingColumns(
 
   nOld = pDst->nCol;
   nOut = nOld + nAdd;
+  nameWasNull = pDst->azName==0;
   declWasNull = pDst->azDecl==0;
   affWasNull = pDst->aAffinity==0;
   recWasNull = pDst->aColToRec==0;
@@ -529,10 +530,22 @@ static int atAppendMissingColumns(
   aColToRec = sqlite3_realloc(pDst->aColToRec, nOut*(int)sizeof(int));
   aGenerated = genWasNull ? 0 : sqlite3_realloc(pDst->aGenerated, nOut);
   if( !azName || !azDecl || !aAffinity || !aColToRec || (!genWasNull && !aGenerated) ){
-    if( azName ) pDst->azName = azName;
-    if( azDecl ) pDst->azDecl = azDecl;
-    if( aAffinity ) pDst->aAffinity = aAffinity;
-    if( aColToRec ) pDst->aColToRec = aColToRec;
+    if( azName ){
+      if( nameWasNull ) sqlite3_free(azName);
+      else pDst->azName = azName;
+    }
+    if( azDecl ){
+      if( declWasNull ) sqlite3_free(azDecl);
+      else pDst->azDecl = azDecl;
+    }
+    if( aAffinity ){
+      if( affWasNull ) sqlite3_free(aAffinity);
+      else pDst->aAffinity = aAffinity;
+    }
+    if( aColToRec ){
+      if( recWasNull ) sqlite3_free(aColToRec);
+      else pDst->aColToRec = aColToRec;
+    }
     if( aGenerated ) pDst->aGenerated = aGenerated;
     return SQLITE_NOMEM;
   }
@@ -541,6 +554,9 @@ static int atAppendMissingColumns(
   pDst->aAffinity = aAffinity;
   pDst->aColToRec = aColToRec;
   pDst->aGenerated = aGenerated;
+  if( nameWasNull ){
+    for(i=0; i<nOld; i++) pDst->azName[i] = 0;
+  }
   if( declWasNull ){
     for(i=0; i<nOld; i++) pDst->azDecl[i] = 0;
   }
@@ -574,7 +590,11 @@ static int atAppendMissingColumns(
     if( !pDst->azName[nOut] ) return SQLITE_NOMEM;
     if( pSrc->azDecl && pSrc->azDecl[i] ){
       pDst->azDecl[nOut] = sqlite3_mprintf("%s", pSrc->azDecl[i]);
-      if( !pDst->azDecl[nOut] ) return SQLITE_NOMEM;
+      if( !pDst->azDecl[nOut] ){
+        sqlite3_free(pDst->azName[nOut]);
+        pDst->azName[nOut] = 0;
+        return SQLITE_NOMEM;
+      }
     }
     if( pSrc->aAffinity ) pDst->aAffinity[nOut] = pSrc->aAffinity[i];
     if( pDst->aGenerated ){
