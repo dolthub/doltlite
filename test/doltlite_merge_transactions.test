@@ -196,4 +196,22 @@ foreach violations {0 1} {
   } {0 0 0}
 }
 
+foreach {name diverged flags in_txn} {
+  ff 0 {} 1
+  no-ff 0 {'--no-ff',} 1
+  three-way 1 {} 1
+  three-way-no-commit 1 {'--no-commit',} 0
+} {
+  merge_txn_setup $diverged
+  if {$in_txn} {execsql BEGIN}
+  db commit_hook {return 1}
+  do_test merge-txn-seal-fail-$name {
+    lindex [catchsql "SELECT dolt_merge(${flags}'feature')"] 0
+  } 1
+  db commit_hook {}
+  if {![sqlite3_get_autocommit db]} {
+    execsql ROLLBACK
+  }
+}
+
 finish_test
