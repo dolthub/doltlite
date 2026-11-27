@@ -97,4 +97,57 @@ ifcapable fts5 {
   }
 }
 
+faultsim_restore_and_reopen
+do_test 4.0 {
+  reset_db
+  execsql {
+    CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b TEXT);
+    CREATE INDEX idx_t_a ON t(a);
+    INSERT INTO t VALUES(1, 10, 'base');
+    CREATE TABLE r(id INTEGER PRIMARY KEY, v INT);
+    INSERT INTO r VALUES(1, 100);
+    SELECT dolt_commit('-Am', 'base');
+    SELECT dolt_branch('side');
+    ALTER TABLE t RENAME COLUMN a TO a_renamed;
+    INSERT INTO r VALUES(2, 200);
+    SELECT dolt_commit('-Am', 'main rename col and edit r');
+    SELECT dolt_checkout('side');
+    INSERT INTO t VALUES(2, 20, 'side');
+    ALTER TABLE r RENAME TO r_renamed;
+    SELECT dolt_commit('-Am', 'side edit t and rename table');
+    SELECT dolt_checkout('main');
+  }
+  set {} {}
+} {}
+faultsim_save_and_close
+
+set merge_rename_oom_results [list \
+  {0 {40 2 2}} \
+  {1 {out of memory}} \
+  {1 {disk I/O error}} \
+  {1 {merge source not found}} \
+  {1 {no common ancestor found}} \
+  {1 {failed to load commit}} \
+  {1 {failed to load our commit}} \
+  {1 {failed to load their commit}} \
+  {1 {failed to load ancestor}} \
+  {1 {merge failed}} \
+  {1 {failed to create merge commit}} \
+  {1 {cannot merge: schema change could not be applied: out of memory}} \
+  {1 {cannot merge: schema change could not be applied: unable to open a temporary database file for storing temporary tables}} \
+]
+
+do_faultsim_test 4.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  set h [db one {SELECT length(dolt_merge('side'))}]
+  set nt [db one {SELECT count(*) FROM t}]
+  set nr [db one {SELECT count(*) FROM r_renamed}]
+  list $h $nt $nr
+} -test {
+  faultsim_test_result {*}$::merge_rename_oom_results
+  catchsql ROLLBACK
+  faultsim_integrity_check
+}
+
 finish_test

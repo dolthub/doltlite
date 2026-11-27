@@ -895,12 +895,12 @@ static int mergeDependentCoherent(
   return 1;
 }
 
-static void mergeSetEntryText(SchemaEntry *pSe, const char *zSql){
+static int mergeSetEntryText(SchemaEntry *pSe, const char *zSql){
   char *z = sqlite3_mprintf("%s", zSql);
-  if( z ){
-    sqlite3_free(pSe->zSql);
-    pSe->zSql = z;
-  }
+  if( !z ) return SQLITE_NOMEM;
+  sqlite3_free(pSe->zSql);
+  pSe->zSql = z;
+  return SQLITE_OK;
 }
 
 /* Pairs are (ancestor, side). One pass maps a post-rename index back. */
@@ -1288,7 +1288,8 @@ static int mergePreNormalizeTableRename(
         pNewT->zName = z1;
         sqlite3_free(pNewT->zTblName);
         pNewT->zTblName = z2;
-        mergeSetEntryText(pNewT, pAncT->zSql);
+        rc = mergeSetEntryText(pNewT, pAncT->zSql);
+        if( rc!=SQLITE_OK ) return rc;
       }
     }
   }
@@ -1706,10 +1707,11 @@ int mergePreNormalizeRenamedDependents(
     {
       char *zBaseOwned = sqlite3_mprintf("%s", zBase);
       if( !zBaseOwned ){ rc = SQLITE_NOMEM; goto table_done; }
-      mergeSetEntryText(pAncT, zBaseOwned);
-      mergeSetEntryText(pOurT, zBaseOwned);
-      mergeSetEntryText(pTheirT, zBaseOwned);
+      rc = mergeSetEntryText(pAncT, zBaseOwned);
+      if( rc==SQLITE_OK ) rc = mergeSetEntryText(pOurT, zBaseOwned);
+      if( rc==SQLITE_OK ) rc = mergeSetEntryText(pTheirT, zBaseOwned);
       sqlite3_free(zBaseOwned);
+      if( rc!=SQLITE_OK ) goto table_done;
     }
     for(i=0; i<nOursSchema+nTheirsSchema; i++){
       SchemaEntry *pSide = i<nOursSchema ? &aOursSchema[i]
@@ -1750,10 +1752,11 @@ int mergePreNormalizeRenamedDependents(
       if( !pFrom || !pFrom->zSql ) continue;
       zDepOwned = sqlite3_mprintf("%s", pFrom->zSql);
       if( !zDepOwned ){ rc = SQLITE_NOMEM; goto table_done; }
-      mergeSetEntryText(pDepAnc, zDepOwned);
-      mergeSetEntryText(pDepOurs, zDepOwned);
-      mergeSetEntryText(pDepTheirs, zDepOwned);
+      rc = mergeSetEntryText(pDepAnc, zDepOwned);
+      if( rc==SQLITE_OK ) rc = mergeSetEntryText(pDepOurs, zDepOwned);
+      if( rc==SQLITE_OK ) rc = mergeSetEntryText(pDepTheirs, zDepOwned);
       sqlite3_free(zDepOwned);
+      if( rc!=SQLITE_OK ) goto table_done;
     }
     {
       struct TableEntry *pEntAnc =
