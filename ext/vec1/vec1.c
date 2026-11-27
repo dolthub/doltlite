@@ -7058,6 +7058,8 @@ static int vec1FindBuckets(
       }
       printf("\n");
 #endif
+    }else{
+      rc = vec1BucketSort(aRes, nBucket);
     }
 
   }else{
