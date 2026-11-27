@@ -199,6 +199,20 @@ do_execsql_test 2.4 {
   PRAGMA integrity_check;
 } {ok}
 
+do_execsql_test 2.5 {
+  SELECT rowid FROM v2(
+    vec1_from_json('[0, 0, 0, 0]'),
+    '{K:4, nprobe:3000000000}'
+  ) ORDER BY rowid;
+} {1 2 3 4}
+
+do_execsql_test 2.6 {
+  SELECT rowid FROM v2(
+    vec1_from_json('[0, 0, 0, 0]'),
+    '{K:4, nprobe:1e20}'
+  ) ORDER BY rowid;
+} {1 2 3 4}
+
 #-------------------------------------------------------------------------
 # Test KANN queries when ROTATE, WHT, and COS are all disabled and
 # nCodebook * nCodeElem != nElem (padded codebooks).

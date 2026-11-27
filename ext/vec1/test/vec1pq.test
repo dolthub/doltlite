@@ -171,5 +171,38 @@ do_execsql_test 5.4 {
   PRAGMA integrity_check
 } {ok}
 
+#-------------------------------------------------------------------------
+# Test distance stats with nbucket:1 and residual:1. Centroid 0 must be
+# subtracted before computing coarse_error and reconstruction_error.
+reset_db
+vec1_load db
+
+do_execsql_test 6.0 {
+  CREATE VIRTUAL TABLE v6 USING vec1(v);
+  WITH s(i) AS (
+    SELECT 1 UNION ALL SELECT i+1 FROM s WHERE i<520
+  )
+  INSERT INTO v6(rowid, v)
+  SELECT i, vec1_from_json(
+    '[' || (1000.0 + (i % 10) * 0.1) || ',1000.0,1000.0,1000.0]'
+  ) FROM s;
+  INSERT INTO v6(cmd, arg) VALUES('rebuild', (
+    SELECT vec1_train(v, '{"quantizer":"pq","nbucket":1,"residual":1,"codesize":2}')
+    FROM v6
+  ));
+} {}
+
+do_execsql_test 6.1 {
+  SELECT
+    json_extract(distance, '$.bucket') == 0,
+    json_extract(distance, '$.coarse_error') > 0.0,
+    json_extract(distance, '$.reconstruction_error') < 0.05
+  FROM v6 WHERE rowid = 1;
+} {1 1 1}
+
+do_execsql_test 6.2 {
+  PRAGMA integrity_check
+} {ok}
+
 finish_test
 

@@ -107,5 +107,24 @@ do_catchsql_test 4.2 {
   SELECT vec1_train(a, '{nbucket:4, profile:"failing_profile"}') FROM v1;
 } {1 {profile callback boom}}
 
+#-------------------------------------------------------------------------
+# Test OOM during command name extraction in special INSERT does not
+# match the NULL sentinel in vec1InterpretCmdName().
+#
+reset_db
+vec1_load db
+
+do_execsql_test 5.0 {
+  CREATE VIRTUAL TABLE v1 USING vec1(a);
+}
+
+do_faultsim_test 5.1 -faults oom-t* -body {
+  execsql {
+    INSERT INTO v1(cmd, arg) VALUES(123456789012345, 4096);
+  }
+} -test {
+  faultsim_test_result {1 {vec1: unknown command: 123456789012345}}
+}
+
 finish_test
 

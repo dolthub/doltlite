@@ -851,6 +851,11 @@ static void vec1FromJsonFunc(
 
   /* vec1_from_json(NULL) returns NULL */
   if( sqlite3_value_type(aVal[0])==SQLITE_NULL ) return;
+  if( zJson==0 ){
+    sqlite3_result_error_nomem(pCtx);
+    return;
+  }
+  if( nJson<2 ) goto parse_failed;
 
   /* Allocate space for the return value */
   aVec = (float*)sqlite3_malloc(sizeof_f32*(nJson/2));
@@ -6198,6 +6203,7 @@ static void vec1UnloadModel(Vec1Tab *pTab){
   pTab->pModBlob = 0;
   pTab->cfg.iModelVersion = 0;
   memset(&pTab->mod, 0, sizeof(pTab->mod));
+  pTab->mod.hdr.eDistance = VEC1_DISTANCE_L2;
 }
 
 static void vec1UnloadConfig(Vec1Tab *pTab){
@@ -8892,7 +8898,9 @@ static int vec1LoadConfigIfRequired(Vec1Tab *pTab){
 
 static int vec1InterpretNProbe(Vec1Tab *pTab, double fVal){
   int nProbe;
-  if( fVal>=1.0 ){
+  if( fVal>=(double)pTab->mod.hdr.nBucket ){
+    nProbe = (int)pTab->mod.hdr.nBucket;
+  }else if( fVal>=1.0 ){
     nProbe = (int)fVal;
   }else{
     nProbe = (int)(fVal * pTab->mod.hdr.nBucket);
@@ -9722,13 +9730,13 @@ static void vec1DistanceStats(sqlite3_context *ctx, Vec1Csr *pCsr){
       const float *aTransform = 0;
       char *zEnc = 0;
   
-      if( pMod->hdr.nBucket>1 || pMod->hdr.nCodebook>0 ){
+      if( pMod->hdr.nBucket>0 || pMod->hdr.nCodebook>0 ){
         aTransform = vec1TransformInputVector(pMod, pTab->aTmpVec, aVec); 
         fNorm = vec1VectorNorm2(aTransform, nElem);
       }
   
       /* Find bucket and coarse error if applicable. */
-      if( pMod->hdr.nBucket>1 ){
+      if( pMod->hdr.nBucket>0 ){
         iBucket = vec1BestMatchSimple(
             pMod->aCentroid, pMod->hdr.nBucket, aTransform, nElem, &fCoarseError
         );
@@ -11528,7 +11536,8 @@ static int vec1InterpretCmdName(Vec1Tab *pTab, const char *zCmd, int *piCmd){
   };
   int iCmd;
 
-  for(iCmd=0; iCmd<size_of_array(azCmd); iCmd++){
+  if( zCmd==0 ) return SQLITE_NOMEM;
+  for(iCmd=0; azCmd[iCmd]; iCmd++){
     if( 0==sqlite3_stricmp(zCmd, azCmd[iCmd]) ){
       *piCmd = iCmd;
       return SQLITE_OK;
@@ -12062,6 +12071,7 @@ static int vec1UpdateMethod(
     if( sqlite3_value_type(argv[iCmd])!=SQLITE_NULL ){
       const char *zCmd = (char*)sqlite3_value_text(argv[iCmd]);
       sqlite3_value *pVal = argv[2+VEC1_COLUMN_ARG];
+      if( zCmd==0 ) return SQLITE_NOMEM;
       if( sqlite3_value_type(pVal)==SQLITE_NULL ){
         pVal = argv[2+VEC1_COLUMN_VECTOR];
       }
@@ -12986,7 +12996,7 @@ static int vec1catColumnMethod(
       char *zRet = 0;
 
       rc = vec1LoadConfig(pTab);
-      zDist = ((pHdr->eDistance==VEC1_DISTANCE_L2) ? "l2" : "cos");
+      zDist = ((pHdr->eDistance==VEC1_DISTANCE_COS) ? "cos" : "l2");
       if( pHdr->nCodebook==0 && pHdr->nBucket==0 ){
         zRet = vec1MPrintf(&rc, 
             "{\"index\": \"%s\", \"distance\": \"%s\"}",

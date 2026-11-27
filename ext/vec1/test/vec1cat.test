@@ -242,6 +242,24 @@ do_execsql_test 4.3 {
   SELECT typeof(distance) FROM x1(random_vector(32), '{nprobe:8, K:5}')
 } {real}
 
+#-------------------------------------------------------------------------
+# Test that vec1cat continues to report distance "l2" for an untrained
+# table after ROLLBACK unloads the model.
+reset_db
+vec1_load db
+
+do_execsql_test 5.0 {
+  CREATE VIRTUAL TABLE u1 USING vec1(v);
+  SELECT model FROM vec1cat WHERE name='u1';
+} {{{"index": "none", "distance": "l2"}}}
+
+do_execsql_test 5.1 {
+  BEGIN;
+    INSERT INTO u1(v) VALUES(random_vector(4));
+  ROLLBACK;
+  SELECT model FROM vec1cat WHERE name='u1';
+} {{{"index": "none", "distance": "l2"}}}
+
 
 finish_test
 

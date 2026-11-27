@@ -50,6 +50,10 @@ foreach {tn in out} {
   4 "  [1,2,3"           "1 {error parsing json vector}"
   5 "  [1,2, ]"          "1 {error parsing json vector}"
   6 "  [1,2,3] x "       "1 {error parsing json vector}"
+  7 ""                   "1 {error parsing json vector}"
+  8 "["                  "1 {error parsing json vector}"
+  9 "x"                  "1 {error parsing json vector}"
+  10 "[]"                "1 {error parsing json vector}"
 } {
   do_catchsql_test 2.$tn {
     SELECT vec1_to_json( vec1_from_json($in) )
