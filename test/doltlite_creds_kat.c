@@ -281,6 +281,62 @@ int main(int argc, char **argv) {
   }
 
   {
+    static const struct {
+      const char *in;
+      const unsigned char want[3];
+      size_t wantLen;
+    } validCases[] = {
+      { "",     { 0, 0, 0 }, 0 },
+      { "AQ",   { 1, 0, 0 }, 1 },
+      { "AQ==", { 1, 0, 0 }, 1 },
+      { "AQI",  { 1, 2, 0 }, 2 },
+      { "AQI=", { 1, 2, 0 }, 2 },
+      { "AQID", { 1, 2, 3 }, 3 }
+    };
+    static const char *invalidCases[] = {
+      "AAAA=invalid!!!",
+      "AAAA=invalid!!!!",
+      "AQ=invalid",
+      "AQ=x",
+      "AQ==extra",
+      "AQ==extr",
+      "AQ=",
+      "AQI==",
+      "=AAA",
+      "A===",
+      "====",
+      "AAAA=",
+      "AAAA====",
+      "=",
+      "==",
+      "==="
+    };
+    size_t k;
+    for (k = 0; k < sizeof(validCases) / sizeof(validCases[0]); k++) {
+      unsigned char *dec = NULL;
+      size_t dlen = 99;
+      int rc = doltliteBase64UrlDecode(validCases[k].in, &dec, &dlen);
+      char label[64];
+      snprintf(label, sizeof(label), "base64url decode valid \"%s\"",
+               validCases[k].in);
+      check_bool(label,
+                 rc == 0 && dlen == validCases[k].wantLen &&
+                 (dlen == 0 || memcmp(dec, validCases[k].want, dlen) == 0));
+      sqlite3_free(dec);
+    }
+    for (k = 0; k < sizeof(invalidCases) / sizeof(invalidCases[0]); k++) {
+      unsigned char *dec = NULL;
+      size_t dlen = 0;
+      int rc = doltliteBase64UrlDecode(invalidCases[k], &dec, &dlen);
+      char label[64];
+      snprintf(label, sizeof(label), "base64url decode rejects \"%s\"",
+               invalidCases[k]);
+      check_bool(label, rc != 0 && dec == NULL);
+      sqlite3_free(dec);
+    }
+  }
+
+  {
     char *json = doltliteCredsToJwk(c);
     if (!json || doltliteCredsFromJwk(json, &c2) != 0) {
       failures++;
