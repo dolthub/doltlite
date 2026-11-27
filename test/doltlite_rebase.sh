@@ -2520,4 +2520,40 @@ else
 fi
 rm -f "$DBRB_IGN3"
 
+DBRB_SH=/tmp/test_rebase_shadow_conflicts_$$.db
+AUX_SH=/tmp/test_rebase_shadow_aux_$$.db
+rm -f "$DBRB_SH" "$AUX_SH"
+python3 -c "import sqlite3
+c = sqlite3.connect('$AUX_SH')
+c.execute('CREATE TABLE dolt_conflicts(\"table\" TEXT)')
+c.execute('INSERT INTO dolt_conflicts VALUES(\"fake_tbl\")')
+c.commit()
+c.close()"
+"$DOLTLITE" "$DBRB_SH" >/dev/null <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_checkout('-b', 'feat');
+UPDATE t SET v = 'feat' WHERE id = 1;
+SELECT dolt_commit('-am', 'feat1');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 'main' WHERE id = 1;
+SELECT dolt_commit('-am', 'main1');
+SQL
+RB_SH_OUT=$(echo "ATTACH '$AUX_SH' AS aux;
+SELECT dolt_checkout('feat');
+BEGIN;
+SELECT dolt_rebase('main');
+SELECT dolt_rebase('--continue');
+SELECT dolt_rebase('--abort');" | "$DOLTLITE" "$DBRB_SH" 2>&1)
+if echo "$RB_SH_OUT" | grep -q 'conflicts detected in tables t; resolve conflicts before continuing the rebase' \
+   && ! echo "$RB_SH_OUT" | grep -q 'fake_tbl'; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: rebase_continue_ignores_attached_dolt_conflicts\n  full: $RB_SH_OUT"
+fi
+rm -f "$DBRB_SH" "$AUX_SH"
+
 dltest_finish

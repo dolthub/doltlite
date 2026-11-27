@@ -1595,4 +1595,36 @@ feat
   "$DB"
 rm -f "$DB"
 
+DB=/tmp/test_rv_continue_shadow_status_$$.db
+AUX=/tmp/test_rv_continue_shadow_aux_$$.db
+rm -f "$DB" "$AUX"
+python3 -c "import sqlite3
+c = sqlite3.connect('$AUX')
+c.execute('CREATE TABLE dolt_status(staged INT)')
+c.execute('INSERT INTO dolt_status VALUES(0)')
+c.commit()
+c.close()"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','init');
+UPDATE t SET v='b';
+SELECT dolt_commit('-A','-m','b');
+UPDATE t SET v='c';
+SELECT dolt_commit('-A','-m','c');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "revert_continue_ignores_attached_dolt_status" \
+  "ATTACH '$AUX' AS aux;
+   BEGIN;
+   SELECT dolt_revert('HEAD~1');
+   SELECT dolt_conflicts_resolve('--ours', 't');
+   SELECT dolt_add('t');
+   SELECT length(dolt_revert('--continue')) >= 40;
+   COMMIT;" \
+  "Error near line 3: Revert has 1 conflict(s). Resolve and then commit with dolt_commit.
+0
+0
+1" \
+  "$DB"
+rm -f "$DB" "$AUX"
+
 dltest_finish

@@ -832,7 +832,7 @@ void doltliteReplayFinish(
     }
   }else{
     rc = sqlite3_prepare_v2(db,
-        "SELECT 1 FROM dolt_status WHERE staged=0 LIMIT 1", -1, &pStmt, 0);
+        "SELECT 1 FROM main.dolt_status WHERE staged=0 LIMIT 1", -1, &pStmt, 0);
     if( rc==SQLITE_OK ){
       rc = sqlite3_step(pStmt);
       if( rc==SQLITE_ROW ){

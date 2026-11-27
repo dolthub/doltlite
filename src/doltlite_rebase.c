@@ -2354,7 +2354,7 @@ static int rebaseFormatConflictTables(sqlite3 *db, char **pzNames){
   int n = 0;
 
   *pzNames = 0;
-  rc = sqlite3_prepare_v2(db, "SELECT \"table\" FROM dolt_conflicts",
+  rc = sqlite3_prepare_v2(db, "SELECT \"table\" FROM main.dolt_conflicts",
                           -1, &pStmt, 0);
   if( rc!=SQLITE_OK ) return rc;
   pStr = sqlite3_str_new(db);

@@ -611,7 +611,7 @@ static int doltlitePreserveUntrackedOnHardReset(
   /* Read once: each dolt_status scan serializes the whole catalog. */
   if( rc==SQLITE_OK ){
     rc = sqlite3_prepare_v2(db,
-        "SELECT table_name FROM dolt_status WHERE status='renamed'",
+        "SELECT table_name FROM main.dolt_status WHERE status='renamed'",
         -1, &pStmt, 0);
   }
   if( rc==SQLITE_OK ){
