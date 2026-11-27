@@ -497,6 +497,14 @@ static void doltMergeBaseFunc(
     return;
   }
 
+  if( doltliteGetChunkStore(db) ){
+    rc = doltliteRefreshAutocommitWorkingState(db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
+  }
+
   rc = doltliteResolveRef(db,zRef1, &hash1);
   if( rc!=SQLITE_OK ){
     doltliteLookupResultError(ctx, rc,
