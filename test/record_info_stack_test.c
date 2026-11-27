@@ -3,6 +3,7 @@
 #include <string.h>
 #include "sqlite3.h"
 #include "doltlite_merge_int.h"
+#include "prolly_mutate.h"
 
 static int nPass = 0;
 static int nFail = 0;
@@ -230,6 +231,168 @@ static void test_record_int_field_signed(void){
   }
 }
 
+static int build_master_tree_with_record(
+  ChunkStore *cs,
+  ProllyCache *pCache,
+  const u8 *pRec,
+  int nRec,
+  ProllyHash *pRootOut
+){
+  ProllyMutMap mm;
+  ProllyMutator mut;
+  int rc;
+
+  memset(pRootOut, 0, sizeof(*pRootOut));
+  rc = prollyMutMapInit(&mm, 1);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = prollyMutMapInsert(&mm, 0, 0, 1, pRec, nRec);
+  if( rc==SQLITE_OK ){
+    memset(&mut, 0, sizeof(mut));
+    mut.pStore = cs;
+    mut.pCache = pCache;
+    mut.pEdits = &mm;
+    mut.flags = PROLLY_NODE_INTKEY;
+    rc = prollyMutateFlush(&mut);
+    if( rc==SQLITE_OK ) *pRootOut = mut.newRoot;
+  }
+  prollyMutMapFree(&mm);
+  return rc;
+}
+
+static void test_schema_loader_wide_record_no_leak(void){
+  sqlite3 *db = 0;
+  ChunkStore *cs;
+  ProllyCache *pCache;
+  DoltliteSerialValue aVals[40];
+  u8 *pValidWide = 0;
+  u8 *pCorruptWide = 0;
+  int nValidWide = 0;
+  int nCorruptWide = 0;
+  ProllyHash validMasterRoot, corruptMasterRoot, catHash;
+  SchemaEntry entry;
+  SchemaEntry *aEntries = 0;
+  int nEntries = 0;
+  int found = 0;
+  sqlite3_int64 memBefore, memAfter;
+  struct TableEntry master;
+  u8 *pCatData = 0;
+  int nCatData = 0;
+  int i, rc;
+
+  check("schema_loader_open_memdb", sqlite3_open(":memory:", &db)==SQLITE_OK);
+  if( !db ) return;
+  cs = doltliteGetChunkStore(db);
+  pCache = doltliteGetCache(db);
+  check("schema_loader_has_store_and_cache", cs!=0 && pCache!=0);
+  if( !cs || !pCache ){
+    sqlite3_close(db);
+    return;
+  }
+
+  memset(aVals, 0, sizeof(aVals));
+  aVals[0].eType = SQLITE_TEXT;
+  aVals[0].p = "table";
+  aVals[0].n = 5;
+  aVals[1].eType = SQLITE_TEXT;
+  aVals[1].p = "t1";
+  aVals[1].n = 2;
+  aVals[2].eType = SQLITE_TEXT;
+  aVals[2].p = "t1";
+  aVals[2].n = 2;
+  aVals[3].eType = SQLITE_INTEGER;
+  aVals[3].i = 2;
+  aVals[4].eType = SQLITE_TEXT;
+  aVals[4].p = "CREATE TABLE t1(a INT)";
+  aVals[4].n = 22;
+  for(i=5; i<40; i++){
+    aVals[i].eType = SQLITE_INTEGER;
+    aVals[i].i = 0;
+  }
+  pValidWide = doltliteBuildRecord(aVals, 40, &nValidWide);
+  check("schema_loader_build_valid_wide", pValidWide!=0 && nValidWide>0);
+
+  aVals[2].eType = SQLITE_INTEGER;
+  aVals[2].i = 123;
+  pCorruptWide = doltliteBuildRecord(aVals, 40, &nCorruptWide);
+  check("schema_loader_build_corrupt_wide", pCorruptWide!=0 && nCorruptWide>0);
+
+  if( pValidWide && pCorruptWide ){
+    rc = build_master_tree_with_record(cs, pCache, pValidWide, nValidWide,
+                                       &validMasterRoot);
+    check("schema_loader_build_valid_tree", rc==SQLITE_OK);
+
+    rc = build_master_tree_with_record(cs, pCache, pCorruptWide, nCorruptWide,
+                                       &corruptMasterRoot);
+    check("schema_loader_build_corrupt_tree", rc==SQLITE_OK);
+
+    /* Warm cache once, then assert 0 leaked bytes on break early-exit path. */
+    memset(&entry, 0, sizeof(entry));
+    rc = loadSchemaEntryFromMaster(cs, pCache, &validMasterRoot,
+                                   PROLLY_NODE_INTKEY, "t1", &entry, &found);
+    check("schema_entry_wide_break_warmup", rc==SQLITE_OK && found==1);
+    clearSchemaEntry(&entry);
+
+    memBefore = sqlite3_memory_used();
+    rc = loadSchemaEntryFromMaster(cs, pCache, &validMasterRoot,
+                                   PROLLY_NODE_INTKEY, "t1", &entry, &found);
+    check("schema_entry_wide_break_ok", rc==SQLITE_OK && found==1);
+    clearSchemaEntry(&entry);
+    memAfter = sqlite3_memory_used();
+    check("schema_entry_wide_break_no_leak", memAfter==memBefore);
+
+    /* Warm cache once, then assert 0 leaked bytes on error goto path. */
+    rc = loadSchemaEntryFromMaster(cs, pCache, &corruptMasterRoot,
+                                   PROLLY_NODE_INTKEY, "t1", &entry, &found);
+    check("schema_entry_wide_error_warmup", rc==SQLITE_CORRUPT && found==0);
+
+    memBefore = sqlite3_memory_used();
+    rc = loadSchemaEntryFromMaster(cs, pCache, &corruptMasterRoot,
+                                   PROLLY_NODE_INTKEY, "t1", &entry, &found);
+    check("schema_entry_wide_error_corrupt", rc==SQLITE_CORRUPT && found==0);
+    memAfter = sqlite3_memory_used();
+    check("schema_entry_wide_error_no_leak", memAfter==memBefore);
+
+    /* Serialize a valid catalog, then point master.root at corruptMasterRoot. */
+    memset(&master, 0, sizeof(master));
+    master.iTable = 1;
+    master.root = validMasterRoot;
+    master.flags = PROLLY_NODE_INTKEY;
+    memset(&catHash, 0, sizeof(catHash));
+    rc = doltliteSerializeCatalogEntries(db, &master, 1, &pCatData, &nCatData);
+    if( rc==SQLITE_OK ){
+      int patched = 0;
+      for(i=0; i+PROLLY_HASH_SIZE<=nCatData; i++){
+        if( memcmp(pCatData + i, validMasterRoot.data, PROLLY_HASH_SIZE)==0 ){
+          memcpy(pCatData + i, corruptMasterRoot.data, PROLLY_HASH_SIZE);
+          patched = 1;
+          break;
+        }
+      }
+      rc = patched ? chunkStorePut(cs, pCatData, nCatData, &catHash)
+                   : SQLITE_ERROR;
+    }
+    sqlite3_free(pCatData);
+    check("schema_catalog_wide_setup", rc==SQLITE_OK);
+
+    if( rc==SQLITE_OK ){
+      rc = loadSchemaFromCatalog(db, cs, pCache, &catHash, &aEntries, &nEntries);
+      check("schema_catalog_wide_error_warmup",
+            rc==SQLITE_CORRUPT && aEntries==0 && nEntries==0);
+
+      memBefore = sqlite3_memory_used();
+      rc = loadSchemaFromCatalog(db, cs, pCache, &catHash, &aEntries, &nEntries);
+      check("schema_catalog_wide_error_corrupt",
+            rc==SQLITE_CORRUPT && aEntries==0 && nEntries==0);
+      memAfter = sqlite3_memory_used();
+      check("schema_catalog_wide_error_no_leak", memAfter==memBefore);
+    }
+  }
+
+  sqlite3_free(pValidWide);
+  sqlite3_free(pCorruptWide);
+  sqlite3_close(db);
+}
+
 int main(void){
   DoltliteRecordInfo info = {0};
   u8 rec[512];
@@ -258,6 +421,7 @@ int main(void){
   test_build_record_overflow();
   test_build_index_entry_wide_header();
   test_record_int_field_signed();
+  test_schema_loader_wide_record_no_leak();
 
   printf("record_info_stack_test: %d passed, %d failed\n", nPass, nFail);
   return nFail ? 1 : 0;

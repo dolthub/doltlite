@@ -120,6 +120,7 @@ static int loadSchemaFromCatalogMode(
   ProllyHash masterRoot;
   u8 masterFlags = 0;
   ProllyCursor cur;
+  DoltliteRecordInfo ri = {0};
   int res, rc, i;
   SchemaEntry *aEntries = 0;
   int nEntries = 0, nAlloc = 0;
@@ -170,7 +171,6 @@ static int loadSchemaFromCatalogMode(
   while( prollyCursorIsValid(&cur) ){
     const u8 *pVal;
     int nVal;
-    DoltliteRecordInfo ri = {0};
 
     prollyCursorValue(&cur, &pVal, &nVal);
 
@@ -235,6 +235,7 @@ static int loadSchemaFromCatalogMode(
   }
 
 load_schema_done:
+  doltliteRecordInfoClear(&ri);
   prollyCursorClose(&cur);
   if( rc!=SQLITE_OK ){
     freeSchemaEntries(aEntries, nEntries);
@@ -340,6 +341,7 @@ int loadSchemaEntryFromMaster(
   int *pFound
 ){
   ProllyCursor cur;
+  DoltliteRecordInfo ri = {0};
   int res, rc;
 
   memset(pEntry, 0, sizeof(*pEntry));
@@ -355,7 +357,6 @@ int loadSchemaEntryFromMaster(
 
   while( prollyCursorIsValid(&cur) ){
     const u8 *pVal; int nVal;
-    DoltliteRecordInfo ri = {0};
 
     prollyCursorValue(&cur, &pVal, &nVal);
     if( pVal && nVal > 0 ){
@@ -403,6 +404,7 @@ int loadSchemaEntryFromMaster(
   }
 
 load_schema_entry_done:
+  doltliteRecordInfoClear(&ri);
   prollyCursorClose(&cur);
   if( rc!=SQLITE_OK ){
     clearSchemaEntry(pEntry);
