@@ -4322,6 +4322,11 @@ static int vec1SVDSelfTest(
   return SQLITE_OK;
 }
 
+/*
+** The number of vectors handled by each pass in vec1CovarianceWork().
+*/
+#define VEC1_COVAR_NVEC (VEC1_MULTIMATCH_NVEC * VEC1_COVAR_MULTIMATCH_MULT)
+
 typedef struct Vec1CovarianceJob Vec1CovarianceJob;
 struct Vec1CovarianceJob {
   double *aM;          /* output matrix - each job writes distinct rows */
@@ -4332,6 +4337,7 @@ struct Vec1CovarianceJob {
   int    nCodeElem;    /* Number of elements in each subspace */
   int    iSub;         /* Our job to do this subspace */
   double fTotalDist;   /* private accumulator */
+  float *aPad;         /* Zero-padded sub-vector scratch if nKK < nCodeElem */
 #ifdef VEC1_USE_TRANSPOSITION
   float *aTrans;        /* Transposed version of this job's codebook */
 #endif
@@ -4348,22 +4354,33 @@ static Vec1CovarianceJob *vec1CovarianceAlloc(
   int *pnJob                      /* OUT: number of jobs */
 ){
   int nByte = sizeof(Vec1CovarianceJob) * p->nCodesize;
+  int nPadJobs = 0;
+  int ii;
   Vec1CovarianceJob *aJob;
+
+  for(ii=0; ii<p->nCodesize; ii++){
+    if( ii*p->nCodeElem + p->nCodeElem > pVec->nElem ){
+      nPadJobs++;
+    }
+  }
 
 #ifdef VEC1_USE_TRANSPOSITION
   /* Add space for each job to create a transposed version of its codebook */
   nByte += sizeof_f32 * p->nCodeElem * VEC1_PQ_CODEBOOK_SZ * p->nCodesize;
 #endif
+  if( nPadJobs>0 ){
+    nByte += sizeof_f32 * VEC1_COVAR_NVEC * p->nCodeElem * nPadJobs;
+  }
   aJob = (Vec1CovarianceJob*)vec1MallocZero(nByte);
 
   assert( p->rc==SQLITE_OK );
   *pnJob = 0;
   if( aJob ){
-    int ii;
+    float *aExtra = (float*)&aJob[p->nCodesize];
 #ifdef VEC1_USE_TRANSPOSITION
-    float *aTrans = (float*)&aJob[p->nCodesize];
     for(ii=0; ii<p->nCodesize; ii++){
-      aJob[ii].aTrans = &aTrans[ii * p->nCodeElem * VEC1_PQ_CODEBOOK_SZ];
+      aJob[ii].aTrans = aExtra;
+      aExtra += p->nCodeElem * VEC1_PQ_CODEBOOK_SZ;
     }
 #endif
     for(ii=0; ii<p->nCodesize; ii++){
@@ -4373,6 +4390,10 @@ static Vec1CovarianceJob *vec1CovarianceAlloc(
       pJob->pVec = pVec;
       pJob->nCodeElem = p->nCodeElem;
       pJob->iSub = ii;
+      if( ii*p->nCodeElem + p->nCodeElem > pVec->nElem ){
+        pJob->aPad = aExtra;
+        aExtra += VEC1_COVAR_NVEC * p->nCodeElem;
+      }
     }
     *pnJob = p->nCodesize;
   }else{
@@ -4412,11 +4433,6 @@ static void vec1AddToDoubleArrayNEON(double *aOut, float32x4_t fVec){
   vst1q_f64(&aOut[2], vaddq_f64(hi, hi1));
 }
 #endif
-
-/*
-** The number of vectors handled by each pass in vec1CovarianceWork().
-*/ 
-#define VEC1_COVAR_NVEC (VEC1_MULTIMATCH_NVEC * VEC1_COVAR_MULTIMATCH_MULT)
 
 /*
 ** For each vv in (0..VEC1_COVAR_NVEC-1), and each ii in
@@ -4522,6 +4538,9 @@ static void vec1CovarianceWork(void *pArg){
   int nElem = pJob->pVec->nElem;
   int nKK = MIN(pJob->nCodeElem, nElem - iSubOff);
 
+  assert( nKK>0 );
+  assert( nKK==pJob->nCodeElem || pJob->aPad!=0 );
+
 #if defined(VEC1_USE_TRANSPOSITION)
   /* Populate this job's transposed copy of its slice of the codebook. */
   vec1CodebookTranspose(
@@ -4546,7 +4565,13 @@ static void vec1CovarianceWork(void *pArg){
 
     for(vv=0; vv<VEC1_COVAR_NVEC; vv++){
       aVec[vv] = vec1TrainingVector(pJob->pVec, ii+vv);
-      aSub[vv] = &aVec[vv][iSubOff];
+      if( pJob->aPad ){
+        float *aSlot = &pJob->aPad[vv * pJob->nCodeElem];
+        memcpy(aSlot, &aVec[vv][iSubOff], nKK * sizeof_f32);
+        aSub[vv] = aSlot;
+      }else{
+        aSub[vv] = &aVec[vv][iSubOff];
+      }
     }
 
     for(iBatch=0; iBatch<VEC1_COVAR_MULTIMATCH_MULT; iBatch++){
@@ -4579,11 +4604,20 @@ static void vec1CovarianceWork(void *pArg){
   ** loop above because nVec is not a multiple of VEC1_COVAR_NVEC. */
   for(; ii<nVec; ii++){
     float *aVec = vec1TrainingVector(pJob->pVec, ii);
-    const float *aSub = &aVec[iSubOff];
-    int iBest = vec1BestMatchSimple(
+    const float *aSub;
+    int iBest;
+    float *aSubHat;
+
+    if( pJob->aPad ){
+      memcpy(pJob->aPad, &aVec[iSubOff], nKK * sizeof_f32);
+      aSub = pJob->aPad;
+    }else{
+      aSub = &aVec[iSubOff];
+    }
+    iBest = vec1BestMatchSimple(
         aCode, VEC1_PQ_CODEBOOK_SZ, aSub, pJob->nCodeElem, &pJob->fTotalDist
     );
-    float *aSubHat = &aCode[iBest * pJob->nCodeElem];
+    aSubHat = &aCode[iBest * pJob->nCodeElem];
 
     for(kk=0; kk<nKK; kk++){
       float subhat_kk = aSubHat[kk];
