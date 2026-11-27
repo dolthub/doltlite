@@ -411,7 +411,7 @@ static void cfPruneDeletedSchemaConflicts(sqlite3 *db, ConflictsCur *c){
   int nOut = 0;
   for(i=0; i<c->nTables; i++){
     ConflictTableInfo *p = &c->aTables[i];
-    if( p->nConflicts==0 && sqlite3FindTable(db, p->zName, 0)==0 ){
+    if( p->nConflicts==0 && sqlite3FindTable(db, p->zName, "main")==0 ){
       freeConflictTable(p);
       continue;
     }
@@ -1735,7 +1735,7 @@ static void conflictsResolveParsedFunc(
 
 resolve_error:
   db->nVcInterruptMask++;
-  if( bBegan ){
+  if( bBegan && !db->autoCommit ){
     int rc2 = sqlite3_exec(db, "ROLLBACK", 0, 0, 0);
     if( rc2!=SQLITE_OK ) rc = rc2;
   }else if( bSp ){
