@@ -859,9 +859,19 @@ int tryResolveSchemaDivergence(
   *pSchemaChoice = SCHEMA_MERGE_DEFAULT;
   csLocal = doltliteGetChunkStore(db);
   cacheLocal = doltliteGetCache(db);
-  loadSchemaFromCatalog(db, csLocal, cacheLocal, pCatAnc, &aAncSchema, &nAncSchema);
-  loadSchemaFromCatalog(db, csLocal, cacheLocal, pCatOurs, &aOursSchema, &nOursSchema);
-  loadSchemaFromCatalog(db, csLocal, cacheLocal, pCatTheirs, &aTheirsSchema, &nTheirsSchema);
+  rc = loadSchemaFromCatalog(db, csLocal, cacheLocal, pCatAnc, &aAncSchema, &nAncSchema);
+  if( rc==SQLITE_OK ){
+    rc = loadSchemaFromCatalog(db, csLocal, cacheLocal, pCatOurs, &aOursSchema, &nOursSchema);
+  }
+  if( rc==SQLITE_OK ){
+    rc = loadSchemaFromCatalog(db, csLocal, cacheLocal, pCatTheirs, &aTheirsSchema, &nTheirsSchema);
+  }
+  if( rc!=SQLITE_OK ){
+    freeSchemaEntries(aAncSchema, nAncSchema);
+    freeSchemaEntries(aOursSchema, nOursSchema);
+    freeSchemaEntries(aTheirsSchema, nTheirsSchema);
+    return rc;
+  }
 
   ancSchEntry = findSchemaEntry(aAncSchema, nAncSchema, zName);
   ourSchEntry = findSchemaEntry(aOursSchema, nOursSchema, zName);
@@ -905,7 +915,7 @@ int tryResolveSchemaDivergence(
   freeSchemaEntries(aTheirsSchema, nTheirsSchema);
 
   if( rc!=SQLITE_OK ){
-    if( pzErrMsg ){
+    if( rc==SQLITE_ERROR && pzErrMsg ){
       if( zSchemaErr ){
         *pzErrMsg = sqlite3_mprintf(
           "schema conflict on table '%s' \xe2\x80\x94 %s",
@@ -920,7 +930,7 @@ int tryResolveSchemaDivergence(
     freeAddedColumns(azAddCols, nAddCols);
     freeAddedColumns(azDropCols, nDropCols);
     freeAddedColumns(azRenameCols, nRenameCols);
-    return SQLITE_ERROR;
+    return rc;
   }
   sqlite3_free(zSchemaErr);
 
