@@ -119,4 +119,58 @@ foreach artifact {schema violation} {
     SELECT count(*) FROM dolt_status;
   } 0
 }
+
+# A schema-conflicted table with both staged and unstaged modifications must
+# appear once in dolt_status as an unstaged schema conflict with no duplicates.
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+  CREATE TABLE u(id INTEGER PRIMARY KEY);
+  INSERT INTO t VALUES(1, 1);
+  INSERT INTO u VALUES(1);
+  SELECT dolt_commit('-Am', 'base');
+  SELECT dolt_branch('feature');
+  SELECT dolt_checkout('feature');
+  ALTER TABLE t ADD COLUMN b INT;
+  INSERT INTO u VALUES(2);
+  SELECT dolt_commit('-am', 'feature');
+  SELECT dolt_checkout('main');
+  ALTER TABLE t ADD COLUMN b TEXT;
+  SELECT dolt_commit('-am', 'main');
+  BEGIN;
+}
+do_test status-schema-conflict-dedup-merge {
+  lindex [catchsql {SELECT dolt_merge('feature')}] 0
+} 1
+execsql {
+  INSERT INTO t VALUES(2, 2, 'x');
+  SELECT dolt_add('t');
+  INSERT INTO t VALUES(3, 3, 'y');
+}
+do_execsql_test status-schema-conflict-dedup-status {
+  SELECT table_name,staged,status FROM dolt_status
+    ORDER BY table_name,staged,status;
+  SELECT count(*) FROM dolt_at_t('STAGED');
+  SELECT count(*) FROM dolt_at_t('WORKING');
+} {t 0 {schema conflict} u 0 modified 2 3}
+do_execsql_test status-schema-conflict-dedup-rowids {
+  SELECT count(*)=count(DISTINCT rowid) FROM dolt_status;
+} 1
+foreach predicate {
+  {table_name='t'} {table_name='t' AND staged=0} {table_name='t' AND staged=1}
+  {staged=0} {staged=1} {status='schema conflict'}
+  {table_name='T'} {table_name='T' COLLATE NOCASE}
+} {
+  set expected [execsql "SELECT table_name,staged,status
+    FROM (SELECT * FROM dolt_status LIMIT -1) WHERE $predicate
+    ORDER BY table_name,staged,status"]
+  do_execsql_test status-schema-conflict-dedup-filter-$predicate "
+    SELECT table_name,staged,status FROM dolt_status WHERE $predicate
+    ORDER BY table_name,staged,status
+  " $expected
+}
+do_execsql_test status-schema-conflict-dedup-rollback {
+  ROLLBACK;
+  SELECT count(*) FROM dolt_status;
+} 0
 finish_test
