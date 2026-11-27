@@ -1569,22 +1569,21 @@ static void doltCheckoutParsedFunc(
     isCreateAndSwitch = 1;
   }
 
-  if( !createBranch && argc==1 ){
+  if( !createBranch && argc==1 && iEndOptions!=0 ){
     ProllyHash probe;
     if( chunkStoreFindTag(cs, zBranch, &probe)==SQLITE_OK
      && !prollyHashIsEmpty(&probe) ){
       checkoutDetachedHeadError(ctx, db);
       return;
     }
-    if( iEndOptions!=0
-     && chunkStoreFindBranch(cs, zBranch, &probe)!=SQLITE_OK
+    if( chunkStoreFindBranch(cs, zBranch, &probe)!=SQLITE_OK
      && doltliteResolveRef(db, zBranch, &probe)==SQLITE_OK ){
       checkoutDetachedHeadError(ctx, db);
       return;
     }
   }
 
-  if( !createBranch && !doltliteIsDetached(db)
+  if( !createBranch && !doltliteIsDetached(db) && iEndOptions!=0
    && strcmp(zBranch, doltliteGetSessionBranch(db))==0 && argc==1 ){
     sqlite3_result_int(ctx, 0);
     return;

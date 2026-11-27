@@ -127,4 +127,82 @@ foreach storage {file memory} {
   }
 }
 
+# Explicit -- separator must force table checkout even when the name matches
+# the current branch or an existing tag.
+foreach storage {file memory} {
+  set prefix checkout-options-dashdash-$storage
+
+  reset_db
+  if {$storage eq "memory"} {
+    db close
+    sqlite3 db :memory:
+  }
+  db eval {
+    CREATE TABLE main(id INT PRIMARY KEY, v TEXT);
+    INSERT INTO main VALUES(1, 'committed');
+    SELECT dolt_commit('-Am', 'init main table');
+    UPDATE main SET v = 'dirty' WHERE id = 1;
+    INSERT INTO main VALUES(2, 'extra');
+  }
+  do_execsql_test $prefix.current-branch-table-reverts {
+    SELECT dolt_checkout('--', 'main');
+    SELECT active_branch();
+    SELECT id, v FROM main ORDER BY id;
+    SELECT count(*) FROM dolt_status;
+  } {0 main 1 committed 0}
+
+  reset_db
+  if {$storage eq "memory"} {
+    db close
+    sqlite3 db :memory:
+  }
+  db eval {
+    CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
+    INSERT INTO t VALUES(1, 'base');
+    SELECT dolt_commit('-Am', 'init');
+  }
+  do_catchsql_test $prefix.current-branch-missing-table-errors {
+    SELECT dolt_checkout('--', 'main');
+  } {1 {no such branch or table: main}}
+
+  reset_db
+  if {$storage eq "memory"} {
+    db close
+    sqlite3 db :memory:
+  }
+  db eval {
+    CREATE TABLE v1(id INT PRIMARY KEY, v TEXT);
+    INSERT INTO v1 VALUES(1, 'committed');
+    SELECT dolt_commit('-Am', 'init v1 table');
+    SELECT dolt_tag('v1');
+    UPDATE v1 SET v = 'dirty' WHERE id = 1;
+    INSERT INTO v1 VALUES(2, 'extra');
+  }
+  do_execsql_test $prefix.tag-name-table-reverts {
+    SELECT dolt_checkout('--', 'v1');
+    SELECT active_branch();
+    SELECT id, v FROM v1 ORDER BY id;
+    SELECT count(*) FROM dolt_status;
+  } {0 main 1 committed 0}
+  do_test $prefix.tag-without-dashdash-still-detached-error {
+    set res [catchsql {SELECT dolt_checkout('v1')}]
+    list [lindex $res 0] [string match "*detached head*" [lindex $res 1]]
+  } {1 1}
+
+  reset_db
+  if {$storage eq "memory"} {
+    db close
+    sqlite3 db :memory:
+  }
+  db eval {
+    CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
+    INSERT INTO t VALUES(1, 'base');
+    SELECT dolt_commit('-Am', 'init');
+    SELECT dolt_tag('v1');
+  }
+  do_catchsql_test $prefix.tag-name-missing-table-errors {
+    SELECT dolt_checkout('--', 'v1');
+  } {1 {no such branch or table: v1}}
+}
+
 finish_test
