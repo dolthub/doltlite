@@ -810,6 +810,179 @@ complete_gc_done:
   removeStore(zPath);
 }
 
+static void testGcSkipsSourceCacheDiamond(const char *zPrefix){
+  sqlite3 *srcDb = 0;
+  sqlite3 *db = 0;
+  SourceCtx ctx;
+  doltlite_chunk_source api;
+  unsigned char *pRefs = 0;
+  int nRefs = 0;
+  char zSrc[192], zLazy[192];
+  char *zTipHex = 0;
+  char *zSql = 0;
+  ProllyHash diamondTip, localExtra;
+  ChunkStore *cs;
+  ChunkIndexSpool *pSpool = 0;
+  sqlite3_int64 nLog = 0, val = 0;
+  int i, rc, srcHas = 0, localIdx = -1, inTxn = 0, hasExtra = 0;
+  const int nDiamond = 16;
+
+  memset(&ctx, 0, sizeof(ctx));
+  memset(&diamondTip, 0, sizeof(diamondTip));
+  memset(&localExtra, 0, sizeof(localExtra));
+  snprintf(zSrc, sizeof(zSrc), "%s_diamond_src.db", zPrefix);
+  snprintf(zLazy, sizeof(zLazy), "%s_diamond_lazy.db", zPrefix);
+  removeStore(zSrc);
+  removeStore(zLazy);
+
+  rc = openDb(zSrc, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, &srcDb);
+  if( rc==SQLITE_OK ){
+    rc = execSql(srcDb,
+        "CREATE TABLE d(id INTEGER PRIMARY KEY, side TEXT NOT NULL);"
+        "INSERT INTO d VALUES(0,'base');"
+        "SELECT dolt_commit('-Am','diamond base');"
+        "SELECT dolt_checkout('-b','diamond');");
+  }
+  for(i=1; rc==SQLITE_OK && i<=nDiamond; i++){
+    zSql = sqlite3_mprintf(
+        "SELECT dolt_branch('side');"
+        "SELECT dolt_checkout('side');"
+        "INSERT INTO d VALUES(%d,'side');"
+        "SELECT dolt_commit('-Am','side %d');"
+        "SELECT dolt_checkout('diamond');"
+        "INSERT INTO d VALUES(%d,'main');"
+        "SELECT dolt_commit('-Am','main %d');"
+        "SELECT dolt_merge('side');"
+        "SELECT dolt_branch('-D','side');",
+        i*2, i, i*2+1, i);
+    rc = zSql ? execSql(srcDb, zSql) : SQLITE_NOMEM;
+    sqlite3_free(zSql);
+    zSql = 0;
+  }
+  if( rc==SQLITE_OK ){
+    rc = queryText(srcDb, "SELECT dolt_hashof('HEAD')", &zTipHex);
+  }
+  if( rc==SQLITE_OK ){
+    rc = doltliteHexToHash(zTipHex, &diamondTip);
+  }
+  if( rc==SQLITE_OK ){
+    rc = execSql(srcDb,
+        "SELECT dolt_branch('diamond_alias');"
+        "SELECT dolt_checkout('main');");
+  }
+  if( srcDb ){
+    sqlite3_close(srcDb);
+    srcDb = 0;
+  }
+  check("build diamond DAG source repository", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto diamond_done;
+
+  rc = sourceOpen(&ctx, zSrc);
+  if( rc==SQLITE_OK ){
+    initSourceApi(&ctx, &api);
+    rc = serializeRefs(&ctx, &pRefs, &nRefs);
+  }
+  if( rc==SQLITE_OK ) rc = createLazyFile(zLazy, pRefs, nRefs);
+  if( rc==SQLITE_OK ) rc = openDb(zLazy, SQLITE_OPEN_READWRITE, &db);
+  if( rc==SQLITE_OK ) rc = doltlite_set_chunk_source(db, "main", &api);
+  check("open lazy store for diamond GC", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto diamond_done;
+
+  /* Load the diamond DAG under a graph lock so chunks land in csSourceCache
+  ** without being persisted into the local chunk store. */
+  rc = execSql(db, "BEGIN IMMEDIATE");
+  if( rc==SQLITE_OK ) inTxn = 1;
+  if( rc==SQLITE_OK ){
+    rc = queryInt64(db, "SELECT count(*) FROM dolt_log('diamond')", &nLog);
+  }
+  if( inTxn ){
+    int rrc = execSql(db, "ROLLBACK");
+    if( rc==SQLITE_OK ) rc = rrc;
+    inTxn = 0;
+  }
+  check("cache diamond DAG in source memory cache",
+        rc==SQLITE_OK && nLog==nDiamond*3+2);
+  if( rc!=SQLITE_OK ) goto diamond_done;
+
+  rc = execSql(db,
+      "CREATE TABLE local_keep(id INTEGER PRIMARY KEY);"
+      "INSERT INTO local_keep VALUES(77);"
+      "SELECT dolt_commit('-Am','local commit on cached diamond');"
+      "SELECT dolt_checkout('-b','local_extra');"
+      "INSERT INTO local_keep VALUES(88);"
+      "SELECT dolt_commit('-Am','discarded local branch');");
+  if( rc==SQLITE_OK ){
+    sqlite3_free(zTipHex);
+    zTipHex = 0;
+    rc = queryText(db, "SELECT dolt_hashof('HEAD')", &zTipHex);
+  }
+  if( rc==SQLITE_OK ) rc = doltliteHexToHash(zTipHex, &localExtra);
+  if( rc==SQLITE_OK ){
+    rc = execSql(db,
+        "SELECT dolt_checkout('main');"
+        "SELECT dolt_branch('-D','local_extra');");
+  }
+  check("create local commits referencing cached diamond", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) goto diamond_done;
+
+  cs = doltliteGetChunkStore(db);
+  sqlite3_mutex_enter(db->mutex);
+  sqlite3BtreeEnter(db->aDb[0].pBt);
+  rc = chunkStoreSourceHas(cs, &diamondTip, &srcHas);
+  if( rc==SQLITE_OK ) rc = csIndexSnapshot(cs, 1, &pSpool);
+  if( rc==SQLITE_OK ) rc = csIndexSpoolFind(pSpool, &diamondTip, &localIdx);
+  csIndexSpoolFree(pSpool);
+  pSpool = 0;
+  sqlite3BtreeLeave(db->aDb[0].pBt);
+  sqlite3_mutex_leave(db->mutex);
+  check("diamond tip is in source cache only, not local index",
+        rc==SQLITE_OK && srcHas && localIdx<0);
+  if( rc!=SQLITE_OK ) goto diamond_done;
+
+  ctx.mode = SOURCE_IOERR;
+  ctx.failAfter = 0;
+  sourceResetCounters(&ctx);
+  rc = execSql(db, "SELECT dolt_gc()");
+  check("GC succeeds with cached remote diamond DAG", rc==SQLITE_OK);
+  check("diamond GC never requests source chunks",
+        ctx.nGet==0 && ctx.nGetMany==0 && ctx.nRequest==0);
+
+  sqlite3_mutex_enter(db->mutex);
+  sqlite3BtreeEnter(db->aDb[0].pBt);
+  rc = chunkStoreHas(cs, &localExtra, &hasExtra);
+  sqlite3BtreeLeave(db->aDb[0].pBt);
+  sqlite3_mutex_leave(db->mutex);
+  check("GC treats source-cache-only boundary as partial and keeps local chunks",
+        rc==SQLITE_OK && hasExtra);
+
+  sqlite3_close(db);
+  db = 0;
+  ctx.mode = SOURCE_NORMAL;
+  sourceResetCounters(&ctx);
+  rc = openDb(zLazy, SQLITE_OPEN_READWRITE, &db);
+  if( rc==SQLITE_OK ) rc = doltlite_set_chunk_source(db, "main", &api);
+  if( rc==SQLITE_OK ){
+    rc = queryInt64(db, "SELECT id FROM local_keep", &val);
+  }
+  check("local data survives diamond GC and reopen",
+        rc==SQLITE_OK && val==77);
+
+diamond_done:
+  if( inTxn && db ) execSql(db, "ROLLBACK");
+  csIndexSpoolFree(pSpool);
+  sqlite3_free(zSql);
+  sqlite3_free(zTipHex);
+  sqlite3_free(pRefs);
+  if( db ){
+    doltlite_set_chunk_source(db, "main", 0);
+    sqlite3_close(db);
+  }
+  if( srcDb ) sqlite3_close(srcDb);
+  sourceClose(&ctx);
+  removeStore(zSrc);
+  removeStore(zLazy);
+}
+
 static int runToError(sqlite3 *db, const char *zSql, char **pzErr){
   sqlite3_stmt *pStmt = 0;
   int rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);
@@ -3408,6 +3581,7 @@ int main(void){
 
   testLocalGc(zPrefix, sourceDb, &source, &api, pRefs, nRefs);
   testCompleteGcWithSource(zPrefix, &source, &api);
+  testGcSkipsSourceCacheDiamond(zPrefix);
 
   testOracleWriteThroughAndRefresh(
       zSource, zWrite, sourceDb, &source, &api, pRefs, nRefs,
