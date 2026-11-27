@@ -298,6 +298,113 @@ static void testHostHeaderFormat(void){
   printf("Host header formatting: %s\n", failures==before ? "PASS" : "FAIL");
 }
 
+typedef struct Ipv6ProbeServer Ipv6ProbeServer;
+struct Ipv6ProbeServer {
+  int fd;
+  int port;
+  int hostOk;
+};
+
+static void *serveIpv6Once(void *arg){
+  Ipv6ProbeServer *s = (Ipv6ProbeServer*)arg;
+  int fd = accept(s->fd, 0, 0);
+  if( fd>=0 ){
+    char buf[4096];
+    char expectedHost[64];
+    int n = 0;
+    const char *resp = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+    struct timeval tv = {5, 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    while( n<(int)sizeof(buf)-1 ){
+      ssize_t got = recv(fd, buf+n, 1, 0);
+      if( got<=0 ) break;
+      n++;
+      if( n>=4 && memcmp(buf+n-4, "\r\n\r\n", 4)==0 ) break;
+    }
+    buf[n] = 0;
+    snprintf(expectedHost, sizeof(expectedHost), "\r\nHost: [::1]:%d\r\n", s->port);
+    s->hostOk = strstr(buf, expectedHost)!=0;
+    (void)send(fd, resp, strlen(resp), 0);
+    close(fd);
+  }
+  return 0;
+}
+
+static void testIpv6UrlParsing(void){
+  static const char *validUrls[] = {
+    "http://[::1]:8080/mydb",
+    "http://[::1]/mydb",
+    "http://[2001:db8::1]:9000/mydb",
+    "https://[::1]/mydb",
+    "https://[2001:db8::1]:8443/mydb",
+  };
+  static const char *invalidUrls[] = {
+    "http://[::1/mydb",
+    "http://[]/mydb",
+    "http://[::1]junk/mydb",
+    "http://[::1]:0/mydb",
+    "http://[::1]:99999/mydb",
+    "http://[::1/foo]/mydb",
+    "http://[[::1]]/mydb",
+    "http://[2001:db8::1]:9000",
+  };
+  int i;
+  int before = failures;
+  for(i=0; i<(int)(sizeof(validUrls)/sizeof(validUrls[0])); i++){
+    DoltliteRemote *r = doltliteHttpRemoteOpen(validUrls[i]);
+    if( !r ){
+      fprintf(stderr, "expected valid IPv6 URL to open: %s\n", validUrls[i]);
+    }
+    check("open valid IPv6 URL", r!=0);
+    if( r ) r->xClose(r);
+  }
+  for(i=0; i<(int)(sizeof(invalidUrls)/sizeof(invalidUrls[0])); i++){
+    DoltliteRemote *r = doltliteHttpRemoteOpen(invalidUrls[i]);
+    if( r ){
+      fprintf(stderr, "expected invalid IPv6 URL to fail: %s\n", invalidUrls[i]);
+      r->xClose(r);
+    }
+    check("reject invalid IPv6 URL", r==0);
+  }
+  {
+    Ipv6ProbeServer s;
+    struct sockaddr_in6 addr;
+    socklen_t len = sizeof(addr);
+    memset(&s, 0, sizeof(s));
+    s.fd = socket(AF_INET6, SOCK_STREAM, 0);
+    memset(&addr, 0, sizeof(addr));
+    addr.sin6_family = AF_INET6;
+    addr.sin6_addr = in6addr_loopback;
+    if( s.fd>=0 && bind(s.fd, (struct sockaddr*)&addr, sizeof(addr))==0
+     && listen(s.fd, 4)==0
+     && getsockname(s.fd, (struct sockaddr*)&addr, &len)==0 ){
+      pthread_t thr;
+      char url[128];
+      DoltliteRemote *r;
+      unsigned char *out = 0;
+      int n = 0;
+      int rc;
+      s.port = ntohs(addr.sin6_port);
+      if( pthread_create(&thr, 0, serveIpv6Once, &s)==0 ){
+        snprintf(url, sizeof(url), "http://[::1]:%d/repo.db", s.port);
+        r = doltliteHttpRemoteOpen(url);
+        check("open IPv6 loopback remote", r!=0);
+        if( r ){
+          rc = r->xGetRefs(r, &out, &n);
+          check("IPv6 loopback GET refs", rc==SQLITE_OK && n==2 && memcmp(out, "ok", 2)==0);
+          sqlite3_free(out);
+          r->xClose(r);
+        }
+        pthread_join(thr, 0);
+        check("IPv6 loopback bracketed Host header", s.hostOk);
+      }
+    }
+    if( s.fd>=0 ) close(s.fd);
+  }
+  printf("IPv6 URL parsing: %s\n", failures==before ? "PASS" : "FAIL");
+}
+
 int main(int argc, char **argv){
   DoltliteTlsServer *tls = 0;
   int i;
@@ -305,6 +412,7 @@ int main(int argc, char **argv){
       "dropped upload", "lost upload acknowledgement", "repeated disconnect",
       "ambiguous refs", "ambiguous refs CAS", "ambiguous commit", "HTTP rejection"};
   testHostHeaderFormat();
+  testIpv6UrlParsing();
   if( argc==3 ){
     tls = doltliteTlsServerNew(argv[1], argv[2]);
     if( !tls ){ fprintf(stderr, "cannot initialize test TLS server\n"); return 1; }
