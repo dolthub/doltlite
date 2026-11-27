@@ -239,4 +239,87 @@ foreach {case_name anc_ddl drop_ddl other_sql check_sql expected_rows} {
   }
 }
 
+# Replacing a named column-level CHECK when another column or another column
+# constraint follows must preserve the separating comma and sibling constraints.
+foreach {case_name anc_ddl edit_ddl check_not_null} {
+  named-col-mid
+    {CREATE TABLE t(id INTEGER PRIMARY KEY, x INT CONSTRAINT ck1 CHECK(x > 0), y INT)}
+    {CREATE TABLE t(id INTEGER PRIMARY KEY, x INT CONSTRAINT ck1 CHECK(x > 10), y INT)}
+    0
+  named-col-not-null
+    {CREATE TABLE t(id INTEGER PRIMARY KEY, x INT CONSTRAINT ck1 CHECK(x > 0) NOT NULL, y INT)}
+    {CREATE TABLE t(id INTEGER PRIMARY KEY, x INT CONSTRAINT ck1 CHECK(x > 10) NOT NULL, y INT)}
+    1
+} {
+  foreach direction {forward reverse} {
+    reset_db
+    execsql $anc_ddl
+    execsql {
+      INSERT INTO t VALUES(1, 20, 30);
+      SELECT dolt_commit('-Am', 'base');
+      SELECT dolt_branch('side');
+      SELECT dolt_checkout('side');
+      DROP TABLE t;
+    }
+    execsql $edit_ddl
+    execsql {
+      INSERT INTO t VALUES(1, 20, 30);
+      SELECT dolt_commit('-Am', 'tighten check');
+      SELECT dolt_checkout('main');
+      ALTER TABLE t ADD COLUMN z INT DEFAULT 5;
+      SELECT dolt_commit('-Am', 'add z');
+    }
+    if {$direction eq "forward"} {
+      set target side
+      set connection test.db
+    } else {
+      execsql {SELECT dolt_checkout('side')}
+      set target main
+      set connection test.db/side
+    }
+    set tag cut-raw-$case_name-$direction
+    do_test $tag-merge {
+      set result [catchsql "SELECT dolt_merge('$target')"]
+      if {[lindex $result 0] == 0} {set result {0 merged}}
+      set result
+    } {0 merged}
+    do_execsql_test $tag-conflicts {
+      SELECT count(*) FROM dolt_schema_conflicts;
+      SELECT count(*) FROM dolt_conflicts;
+    } {0 0}
+    do_execsql_test $tag-columns {
+      SELECT name FROM pragma_table_info('t') ORDER BY cid;
+    } {id x y z}
+    do_execsql_test $tag-schema {
+      SELECT count(*) FROM sqlite_master
+       WHERE name='t' AND sql LIKE '%x > 10%';
+      SELECT count(*) FROM sqlite_master
+       WHERE name='t' AND sql LIKE '%x > 0%';
+    } {1 0}
+    do_test $tag-reject-old {
+      set result [catchsql {INSERT INTO t(id, x, y) VALUES(2, 5, 1)}]
+      list [lindex $result 0] \
+           [string match {*CHECK constraint failed*} [lindex $result 1]]
+    } {1 1}
+    if {$check_not_null} {
+      do_test $tag-reject-null {
+        set result [catchsql {INSERT INTO t(id, x, y) VALUES(2, NULL, 1)}]
+        list [lindex $result 0] \
+             [string match {*NOT NULL constraint failed*} [lindex $result 1]]
+      } {1 1}
+    }
+    do_execsql_test $tag-accept-valid {
+      INSERT INTO t(id, x, y) VALUES(2, 15, 40);
+      SELECT id, x, y, z FROM t ORDER BY id;
+    } {1 20 30 5 2 15 40 5}
+    execsql {SELECT dolt_commit('-Am', 'after merge')}
+    db close
+    sqlite3 db $connection
+    do_execsql_test $tag-reopen {
+      SELECT id, x, y, z FROM t ORDER BY id;
+      PRAGMA integrity_check;
+    } {1 20 30 5 2 15 40 5 ok}
+  }
+}
+
 finish_test

@@ -1388,9 +1388,11 @@ int dlCutRaw(char **pzSql, const char *zRaw){
   while( start>zSql && isspace((unsigned char)start[-1]) ) start--;
   if( start>zSql && start[-1]==',' ){
     start--;
-  }else{
+  }else if( start>zSql && start[-1]=='(' ){
     while( *end && isspace((unsigned char)*end) ) end++;
     if( *end==',' ) end++;
+  }else{
+    start = hit;
   }
   zNew = sqlite3_mprintf("%.*s%s", (int)(start-zSql), zSql, end);
   if( !zNew ) return SQLITE_NOMEM;
