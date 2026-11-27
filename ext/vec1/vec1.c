@@ -7093,7 +7093,9 @@ static const float *vec1TransformInputVector(
      || (pMod->hdr.eDistance==VEC1_DISTANCE_COS)
      || (nCodebook>0 && (nCodebook*pMod->nCodeElem)!=pMod->hdr.nElem)
     ){
-      memcpy(aTmp, aRet, pMod->hdr.nElem * sizeof_f32);
+      if( aTmp!=aRet ){
+        memcpy(aTmp, aRet, pMod->hdr.nElem * sizeof_f32);
+      }
       /* If distance=cos, normalize the vector before applying the WHT
       ** transform. This is because the WHT transform scales the vector
       ** by sqrt(nElem). But so long as training, building and querying
