@@ -339,6 +339,275 @@ cleanup:
   return rc;
 }
 
+static int testNonblockReadWantReadAndWantWrite(const char *certFile, const char *keyFile) {
+  int srvFd = -1, rawSrvFd = -1, cliFd = -1;
+  DoltliteTlsServer *tlsSrv = NULL;
+  DoltliteConn *srvConn = NULL;
+  mbedtls_ssl_context cliSsl;
+  mbedtls_ssl_config cliConf;
+  mbedtls_ctr_drbg_context drbg;
+  mbedtls_entropy_context entropy;
+  TestCliBio bio;
+  unsigned char fill[4096];
+  char readBuf[64];
+  size_t totalFilled = 0;
+  size_t drained = 0;
+  int sawWantWrite = 0;
+  int srvDone = 0, cliDone = 0;
+  int i, n, rc = 1;
+
+  mbedtls_ssl_init(&cliSsl);
+  mbedtls_ssl_config_init(&cliConf);
+  mbedtls_ctr_drbg_init(&drbg);
+  mbedtls_entropy_init(&entropy);
+
+  if (makeLoopbackPair(&srvFd, &cliFd) != 0) {
+    printf("FAIL  makeLoopbackPair failed\n");
+    goto cleanup;
+  }
+
+  tlsSrv = doltliteTlsServerNew(certFile, keyFile);
+  if (!tlsSrv) {
+    printf("FAIL  doltliteTlsServerNew failed\n");
+    goto cleanup;
+  }
+  rawSrvFd = srvFd;
+  srvConn = doltliteConnServerAttach(tlsSrv, srvFd);
+  srvFd = -1;
+  if (!srvConn) {
+    printf("FAIL  doltliteConnServerAttach failed\n");
+    goto cleanup;
+  }
+
+  n = doltliteConnReadNonblock(srvConn, readBuf, (int)sizeof(readBuf));
+  if (n != -2) {
+    printf("FAIL  nonblock read before ClientHello expected -2 (WANT_READ), got %d\n", n);
+    goto cleanup;
+  }
+
+  if (mbedtls_ctr_drbg_seed(&drbg, mbedtls_entropy_func, &entropy,
+                            (const unsigned char *)"tls-nb-rd", 9) != 0 ||
+      mbedtls_ssl_config_defaults(&cliConf, MBEDTLS_SSL_IS_CLIENT,
+                                  MBEDTLS_SSL_TRANSPORT_STREAM,
+                                  MBEDTLS_SSL_PRESET_DEFAULT) != 0) {
+    printf("FAIL  client TLS config failed\n");
+    goto cleanup;
+  }
+  mbedtls_ssl_conf_min_tls_version(&cliConf, MBEDTLS_SSL_VERSION_TLS1_3);
+  mbedtls_ssl_conf_authmode(&cliConf, MBEDTLS_SSL_VERIFY_NONE);
+  mbedtls_ssl_conf_rng(&cliConf, mbedtls_ctr_drbg_random, &drbg);
+  if (mbedtls_ssl_setup(&cliSsl, &cliConf) != 0) {
+    printf("FAIL  mbedtls_ssl_setup failed\n");
+    goto cleanup;
+  }
+  bio.fd = cliFd;
+  bio.holdRecv = 1;
+  mbedtls_ssl_set_bio(&cliSsl, &bio, testCliSend, testCliRecv, NULL);
+
+  for (i = 0; i < 20; i++) {
+    int cret = mbedtls_ssl_handshake(&cliSsl);
+    if (cret == MBEDTLS_ERR_SSL_WANT_READ) break;
+    if (cret != MBEDTLS_ERR_SSL_WANT_WRITE) {
+      printf("FAIL  client ClientHello step returned %d\n", cret);
+      goto cleanup;
+    }
+  }
+
+  {
+    doltlite_pollfd pfd;
+    pfd.fd = rawSrvFd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    if (doltlitePoll(&pfd, 1, 2000) <= 0) {
+      printf("FAIL  ClientHello did not arrive on server socket\n");
+      goto cleanup;
+    }
+  }
+
+  memset(fill, 0x5a, sizeof(fill));
+  {
+    size_t chunk = 1024;
+    for (;;) {
+      int flags = 0;
+#ifdef MSG_NOSIGNAL
+      flags = MSG_NOSIGNAL;
+#endif
+#ifdef _WIN32
+      n = send(rawSrvFd, (const char *)fill, (int)chunk, flags);
+      if (n < 0) {
+        if (WSAGetLastError() == WSAEWOULDBLOCK) {
+          if (chunk > 1) { chunk = 1; continue; }
+          {
+            doltlite_pollfd pfd;
+            pfd.fd = rawSrvFd;
+            pfd.events = POLLOUT;
+            pfd.revents = 0;
+            if (doltlitePoll(&pfd, 1, 50) <= 0) break;
+            continue;
+          }
+        }
+        printf("FAIL  unexpected send error while filling buffer\n");
+        goto cleanup;
+      }
+#else
+      n = (int)send(rawSrvFd, fill, chunk, flags);
+      if (n < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+          if (chunk > 1) { chunk = 1; continue; }
+          {
+            doltlite_pollfd pfd;
+            pfd.fd = rawSrvFd;
+            pfd.events = POLLOUT;
+            pfd.revents = 0;
+            if (doltlitePoll(&pfd, 1, 50) <= 0) break;
+            continue;
+          }
+        }
+        printf("FAIL  unexpected send error while filling buffer\n");
+        goto cleanup;
+      }
+#endif
+      if (n == 0) break;
+      totalFilled += (size_t)n;
+      if (totalFilled > 32 * 1024 * 1024) break;
+    }
+  }
+  if (totalFilled == 0) {
+    printf("FAIL  could not fill send buffer\n");
+    goto cleanup;
+  }
+
+  {
+    int lastRet = 0;
+    for (i = 0; i < 50; i++) {
+      int r = doltliteConnReadNonblock(srvConn, readBuf, (int)sizeof(readBuf));
+      lastRet = r;
+      if (r == -3) {
+        sawWantWrite = 1;
+        break;
+      }
+      if (r == -1) {
+        printf("FAIL  doltliteConnReadNonblock aborted on full send buffer (expected -3, got %d)\n", r);
+        goto cleanup;
+      }
+      if (r >= 0) {
+        printf("FAIL  doltliteConnReadNonblock unexpectedly returned %d while send buffer was full\n", r);
+        goto cleanup;
+      }
+      {
+        doltlite_pollfd pfd;
+        pfd.fd = cliFd;
+        pfd.events = 0;
+        pfd.revents = 0;
+        doltlitePoll(&pfd, 1, 10);
+      }
+    }
+    if (!sawWantWrite) {
+      printf("FAIL  doltliteConnReadNonblock never returned -3 (WANT_WRITE) on full send buffer (filled=%zu lastRet=%d)\n",
+             totalFilled, lastRet);
+      goto cleanup;
+    }
+  }
+
+  while (drained < totalFilled) {
+    size_t want = totalFilled - drained;
+    if (want > sizeof(fill)) want = sizeof(fill);
+    n = doltliteSocketRecv(cliFd, fill, (int)want);
+    if (n > 0) {
+      drained += (size_t)n;
+    } else if (n == -2) {
+      doltlite_pollfd pfd;
+      pfd.fd = cliFd;
+      pfd.events = POLLIN;
+      pfd.revents = 0;
+      if (doltlitePoll(&pfd, 1, 1000) <= 0) {
+        printf("FAIL  timed out draining filler bytes (%zu/%zu)\n", drained, totalFilled);
+        goto cleanup;
+      }
+    } else {
+      printf("FAIL  error draining filler bytes (%d)\n", n);
+      goto cleanup;
+    }
+  }
+
+  bio.holdRecv = 0;
+  for (i = 0; i < 200 && (!srvDone || !cliDone); i++) {
+    if (!srvDone) {
+      int step = doltliteConnHandshakeStep(srvConn);
+      if (step == 0) srvDone = 1;
+      else if (step < 0) {
+        printf("FAIL  server handshake failed after drain (%d)\n", step);
+        goto cleanup;
+      }
+    }
+    if (!cliDone) {
+      int cret = mbedtls_ssl_handshake(&cliSsl);
+      if (cret == 0) cliDone = 1;
+      else if (cret != MBEDTLS_ERR_SSL_WANT_READ && cret != MBEDTLS_ERR_SSL_WANT_WRITE) {
+        printf("FAIL  client handshake failed after drain (%d)\n", cret);
+        goto cleanup;
+      }
+    }
+    if (!srvDone || !cliDone) {
+      doltlite_pollfd pfd;
+      pfd.fd = cliFd;
+      pfd.events = POLLIN;
+      pfd.revents = 0;
+      doltlitePoll(&pfd, 1, 10);
+    }
+  }
+  if (!srvDone || !cliDone) {
+    printf("FAIL  handshake did not complete after drain (srv=%d cli=%d)\n", srvDone, cliDone);
+    goto cleanup;
+  }
+
+  n = doltliteConnReadNonblock(srvConn, readBuf, (int)sizeof(readBuf));
+  if (n != -2) {
+    printf("FAIL  nonblock read on idle established TLS conn expected -2 (WANT_READ), got %d\n", n);
+    goto cleanup;
+  }
+
+  for (i = 0; i < 50; i++) {
+    int wret = mbedtls_ssl_write(&cliSsl, (const unsigned char *)"hello", 5);
+    if (wret == 5) break;
+    if (wret != MBEDTLS_ERR_SSL_WANT_READ && wret != MBEDTLS_ERR_SSL_WANT_WRITE) {
+      printf("FAIL  client ssl_write returned %d\n", wret);
+      goto cleanup;
+    }
+  }
+
+  n = -2;
+  for (i = 0; i < 100; i++) {
+    n = doltliteConnReadNonblock(srvConn, readBuf, (int)sizeof(readBuf));
+    if (n != -2 && n != -3) break;
+    {
+      doltlite_pollfd pfd;
+      pfd.fd = rawSrvFd;
+      pfd.events = (short)(n == -3 ? (POLLIN | POLLOUT) : POLLIN);
+      pfd.revents = 0;
+      doltlitePoll(&pfd, 1, 20);
+    }
+  }
+  if (n != 5 || memcmp(readBuf, "hello", 5) != 0) {
+    printf("FAIL  expected 5 bytes \"hello\" from nonblock read, got %d\n", n);
+    goto cleanup;
+  }
+
+  printf("  PASS  doltliteConnReadNonblock distinguishes WANT_READ (-2) and WANT_WRITE (-3)\n");
+  rc = 0;
+
+cleanup:
+  mbedtls_ssl_free(&cliSsl);
+  mbedtls_ssl_config_free(&cliConf);
+  mbedtls_ctr_drbg_free(&drbg);
+  mbedtls_entropy_free(&entropy);
+  if (srvConn) doltliteConnClose(srvConn);
+  if (srvFd >= 0) doltliteCloseSocket(srvFd);
+  if (cliFd >= 0) doltliteCloseSocket(cliFd);
+  if (tlsSrv) doltliteTlsServerFree(tlsSrv);
+  return rc;
+}
+
 static const char *testHost(void) {
   const char *h = getenv("DOLTLITE_TLS_TEST_HOST");
   return (h && *h) ? h : "dolthub.com";
@@ -354,6 +623,9 @@ int main(int argc, char **argv) {
 
   if (argc > 2 && argv[1][0] != '\0' && argv[2][0] != '\0') {
     if (testNonblockHandshakeWantWrite(argv[1], argv[2]) != 0) {
+      fails++;
+    }
+    if (testNonblockReadWantReadAndWantWrite(argv[1], argv[2]) != 0) {
       fails++;
     }
   }
