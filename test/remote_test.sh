@@ -2747,6 +2747,66 @@ check "mid-scan rm of multiple remotes visits all snapshotted rows" "0|file://$M
 result=$("$DB" "$MS/multi.db" "SELECT count(*) FROM dolt_remotes;")
 check "mid-scan rm of multiple remotes leaves remotes empty" "0" "$result"
 
+echo "=== Relative parent segments and drive roots in file:// URLs ==="
+CP="$TMPDIR/rel_clean"
+mkdir -p "$CP/a/b/c"
+CP_REAL="$(cd "$CP" && pwd -P)"
+if command -v cygpath >/dev/null 2>&1; then
+  CP_REAL="$(cygpath -m "$CP_REAL")"
+fi
+DB_ABS="$(cd "$(dirname "$DB")" && pwd)/$(basename "$DB")"
+"$DB_ABS" "$CP/a/repo.db" <<ENDSQL >/dev/null
+CREATE TABLE t(id INTEGER PRIMARY KEY, loc TEXT);
+INSERT INTO t VALUES(1, 'at_a');
+SELECT dolt_commit('-Am', 'at_a');
+ENDSQL
+"$DB_ABS" "$CP/repo.db" <<ENDSQL >/dev/null
+CREATE TABLE t(id INTEGER PRIMARY KEY, loc TEXT);
+INSERT INTO t VALUES(2, 'at_root');
+SELECT dolt_commit('-Am', 'at_root');
+ENDSQL
+
+result=$(cd "$CP/a/b/c" && "$DB_ABS" "$CP/a/b/c/urls.db" <<ENDSQL
+SELECT dolt_remote('add', 'up2', 'file://../../repo.db');
+SELECT dolt_remote('add', 'up3', 'file://../../../repo.db');
+SELECT dolt_remote('add', 'mixed1', 'file://x/../../repo.db');
+SELECT dolt_remote('add', 'mixed2', 'file://../x/../../repo.db');
+SELECT dolt_remote('add', 'win1', 'file://C:/../repo.db');
+SELECT dolt_remote('add', 'win2', 'file://C:/a/../../repo.db');
+SELECT dolt_remote('add', 'win3', 'file://C:/a/..');
+SELECT dolt_remote('add', 'posix_root', 'file:///../repo.db');
+SELECT name, url FROM dolt_remotes ORDER BY name;
+ENDSQL
+)
+check "relative .. and drive-root file:// URLs normalize cleanly" "0
+0
+0
+0
+0
+0
+0
+0
+mixed1|file://$CP_REAL/a/b/repo.db
+mixed2|file://$CP_REAL/a/repo.db
+posix_root|file:///repo.db
+up2|file://$CP_REAL/a/repo.db
+up3|file://$CP_REAL/repo.db
+win1|file://C:/repo.db
+win2|file://C:/repo.db
+win3|file://C:/" "$result"
+
+result=$(cd "$CP/a/b/c" && "$DB_ABS" "$CP/a/b/c/clone2.db" \
+  "SELECT dolt_clone('file://../../repo.db'); SELECT id, loc FROM t; SELECT url FROM dolt_remotes WHERE name='origin';")
+check "dolt_clone resolves file://../../repo.db to parent-of-parent" "0
+1|at_a
+file://$CP_REAL/a/repo.db" "$result"
+
+result=$(cd "$CP/a/b/c" && "$DB_ABS" "$CP/a/b/c/clone3.db" \
+  "SELECT dolt_clone('file://../../../repo.db'); SELECT id, loc FROM t; SELECT url FROM dolt_remotes WHERE name='origin';")
+check "dolt_clone resolves file://../../../repo.db to grandparent-of-parent" "0
+2|at_root
+file://$CP_REAL/repo.db" "$result"
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"

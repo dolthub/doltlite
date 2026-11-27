@@ -123,10 +123,19 @@ static char *remoteSqlCleanPath(const char *zIn){
 
   zOut = sqlite3_malloc((int)strlen(zIn) + 2);
   if( !zOut ) return 0;
-  abs = zIn[0]=='/';
   pWrite = zOut;
-  if( abs ) *pWrite++ = '/';
-  z = zIn;
+  if( zIn[0]=='/' ){
+    abs = 1;
+    *pWrite++ = '/';
+  }else if( ((zIn[0]>='A' && zIn[0]<='Z') || (zIn[0]>='a' && zIn[0]<='z'))
+         && zIn[1]==':' && zIn[2]=='/' ){
+    abs = 3;
+    memcpy(pWrite, zIn, 3);
+    pWrite += 3;
+  }else{
+    abs = 0;
+  }
+  z = zIn + abs;
   while( *z ){
     const char *zStart;
     int n;
@@ -137,7 +146,10 @@ static char *remoteSqlCleanPath(const char *zIn){
     n = (int)(z - zStart);
     if( n==1 && zStart[0]=='.' ) continue;
     if( n==2 && zStart[0]=='.' && zStart[1]=='.' ){
-      if( pWrite > zOut + abs ){
+      int bLastDotDot = (pWrite - zOut >= abs + 2
+                      && pWrite[-2]=='.' && pWrite[-1]=='.'
+                      && (pWrite - zOut == abs + 2 || pWrite[-3]=='/'));
+      if( pWrite > zOut + abs && !bLastDotDot ){
         while( pWrite>zOut+abs && pWrite[-1]!='/' ) pWrite--;
         if( pWrite>zOut+abs && pWrite[-1]=='/' ) pWrite--;
       }else if( !abs ){
