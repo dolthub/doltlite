@@ -3511,5 +3511,29 @@ run_test "merge_ours_rename_only_idx_theirs_drop_ic" \
   "PRAGMA integrity_check;" "ok" "$DB_IDX_MOD6"
 rm -f "$DB_IDX_MOD6"
 
+DB_TEMP_SHADOW=/tmp/test_merge_temp_shadow_$$.db; rm -f "$DB_TEMP_SHADOW"
+$DOLTLITE "$DB_TEMP_SHADOW" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, x INT);
+CREATE INDEX idx_t_x ON t(x);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_commit('-Am', 'base');
+SELECT dolt_branch('other');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_commit('-Am', 'main insert');
+SELECT dolt_checkout('other');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_commit('-Am', 'other insert');
+SELECT dolt_checkout('main');
+SQL
+run_test_match "merge_temp_table_shadow_exec" \
+  "CREATE TEMP TABLE t(id INTEGER PRIMARY KEY, x INT); SELECT dolt_merge('other');" \
+  "^[0-9a-f]{40}$" "$DB_TEMP_SHADOW"
+run_test "merge_temp_table_shadow_ic" \
+  "PRAGMA integrity_check;" "ok" "$DB_TEMP_SHADOW"
+run_test "merge_temp_table_shadow_idx_lookup" \
+  "SELECT group_concat(id || ':' || x, ',') FROM (SELECT id, x FROM t INDEXED BY idx_t_x WHERE x >= 0 ORDER BY x);" \
+  "1:10,2:20,3:30" "$DB_TEMP_SHADOW"
+rm -f "$DB_TEMP_SHADOW"
+
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB11D" "$DB11E" "$DB11F" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22" "$DB23" "$DB24" "$DB25" "$DB40" "$DB41" "$DB42" "$DB43" "$DB44" "$DB45" "$DB46" "$DB47" "$DB48" "$DB49" "$DB50" "$DB51" "$DB52" "$DB53" "$DB54" "$DB55" "$DB56" "$DB57" "$DB58" "$DB59" "$DB60" "$DB61" "$DB62" "$DB63" "$DB64" "$DB66" "$DB65" "$DB67" "$DB68" "$DB69" "$DB70" "$DB71" "$DB72" "$DB73" "$DB74" "$DB75" "$DB76" "$DB77" "$DB78" "$DB79" "$DB80" "$DB81" "$DB82" "$DB83" "$DB84" "$DB85" "$DB86" "$DB87" "$DB88" "$DB89" "$DB90" "$DB91" "$DB92" "$DB93" "$DB94" "$DB95" "$DB96" "$DB97" "$DB98" "$DB99" "$DB100" "$DB101" "$DB102" "$DB103" "$DB104" "$DB105" "$DB106" "$DB107" "$DB108" "$DB109" "$DB110" "$DB111" "$DB112" "$DB113" "$DB114" "$DB115" "$DB116" "$DB117" "$DB118" "$DB119" "$DB120" "$DB121" "$DB122"
 dltest_finish
