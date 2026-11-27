@@ -241,6 +241,49 @@ async function main() {
     }
     await serverWorker.terminate();
   }
+
+  // Verify signed Int32Array wrap (>2 GiB) does not cause an infinite retry loop
+  // and that maxSab is forwarded to the worker.
+  const wrapModule = {};
+  let wrapSpawns = 0;
+  let seenMaxSab = 0;
+  const fakeRequire = (name) => {
+    if (name !== "node:worker_threads") return require(name);
+    return {
+      Worker: class FakeWorker {
+        constructor(_src, opts) {
+          wrapSpawns++;
+          seenMaxSab = opts.workerData.maxSab;
+          this.ctl = new Int32Array(opts.workerData.ctl);
+          this.worker = new Worker(`
+            const { workerData } = require("node:worker_threads");
+            const ctl = new Int32Array(workerData.ctl);
+            Atomics.wait(ctl, 0, 0);
+            Atomics.store(ctl, 1, 200);
+            Atomics.store(ctl, 2, -2147483648);
+            Atomics.store(ctl, 3, 0);
+            Atomics.store(ctl, 6, 1);
+            Atomics.store(ctl, 0, 2);
+            Atomics.notify(ctl, 0);
+          `, { eval: true, workerData: { ctl: opts.workerData.ctl } });
+        }
+        unref() { this.worker.unref(); }
+        terminate() { return this.worker.terminate(); }
+      }
+    };
+  };
+  const wrapSend = makeSender(wrapModule, UTF8ToString, HEAPU8, fakeRequire);
+  try {
+    const wrapStatus = wrapSend(allocStr("http://127.0.0.1:1/huge"), allocStr("GET"), 0, 0, 0, 5000);
+    assert.equal(wrapStatus, 0, "negative wrapped need must fail instead of looping");
+    assert.equal(wrapSpawns, 1, "must not respawn worker on wrapped need");
+    assert.equal(seenMaxSab, 1024 * 1024 * 1024, "workerData.maxSab must be 1 GiB");
+    console.log("PASS: wasm Node HTTP client rejects wrapped Int32Array response length without looping");
+  } finally {
+    if (wrapModule.__doltliteHttp && wrapModule.__doltliteHttp.node && wrapModule.__doltliteHttp.node.worker) {
+      await wrapModule.__doltliteHttp.node.worker.terminate();
+    }
+  }
 }
 
 main().catch((err) => {

@@ -743,6 +743,7 @@ EM_JS(int, doltliteWasmHttpSend, (const char *zUrl, const char *zMethod,
           "const ctl = new Int32Array(workerData.ctl);",
           "const req = workerData.req;",
           "const data = workerData.data;",
+          "const maxSab = workerData.maxSab;",
           "const dec = new TextDecoder();",
           "(async function(){ for(;;){",
           "  Atomics.wait(ctl, 0, 0);",
@@ -763,7 +764,8 @@ EM_JS(int, doltliteWasmHttpSend, (const char *zUrl, const char *zMethod,
           "    status = r.status;",
           "    const b = new Uint8Array(await r.arrayBuffer());",
           "    len = b.length;",
-          "    if(len > data.byteLength){ over = 1; }",
+          "    if(len > maxSab){ bad = 1; len = 0; }",
+          "    else if(len > data.byteLength){ over = 1; }",
           "    else { new Uint8Array(data).set(b); }",
           "  } catch(e){ bad = 1; }",
           "  Atomics.store(ctl,1,status); Atomics.store(ctl,2,len);",
@@ -785,7 +787,7 @@ EM_JS(int, doltliteWasmHttpSend, (const char *zUrl, const char *zMethod,
             var ctlSab = new SharedArrayBuffer(32);
             var worker = new this.wt.Worker(this.src, {
               eval: true,
-              workerData: { ctl: ctlSab, req: req, data: data }
+              workerData: { ctl: ctlSab, req: req, data: data, maxSab: maxSab }
             });
             worker.unref();
             var oldWorker = this.worker;
@@ -828,14 +830,14 @@ EM_JS(int, doltliteWasmHttpSend, (const char *zUrl, const char *zMethod,
         var status = Atomics.load(n.ctl, 1);
         Atomics.store(n.ctl, 0, 0);
         if (over) {
-          if (need > maxSab) return 0;
+          if (need <= 0 || need > maxSab) return 0;
           var grow = n.data.byteLength;
           while (grow < need && grow < maxSab) grow *= 2;
           if (grow > maxSab) grow = maxSab;
           n.spawn(null, new SharedArrayBuffer(grow));
           continue;
         }
-        if (bad) return 0;
+        if (bad || need < 0 || need > maxSab) return 0;
         st.resp = new Uint8Array(need);
         st.resp.set(new Uint8Array(n.data, 0, need));
         return status;
@@ -867,6 +869,7 @@ static int httpRequest(
   int *pStatus,
   u8 **ppResp, int *pnResp
 ){
+  char *zHost;
   char *zUrl;
   char *zAuth = 0;
   int status;
@@ -881,8 +884,11 @@ static int httpRequest(
 
   if( nBody > 0x7fffffff ) return SQLITE_TOOBIG;
 
-  zUrl = sqlite3_mprintf("%s%s:%d%s", p->useTls ? "https://" : "http://",
-                         p->zHost, p->port, zPath);
+  zHost = doltliteHttpFormatHostHeader(p->zHost, p->port, p->useTls);
+  if( !zHost ) return SQLITE_NOMEM;
+  zUrl = sqlite3_mprintf("%s%s%s", p->useTls ? "https://" : "http://",
+                         zHost, zPath);
+  sqlite3_free(zHost);
   if( !zUrl ) return SQLITE_NOMEM;
 
 #ifdef DOLTLITE_HAVE_AUTH
@@ -1637,7 +1643,7 @@ static int httpPrepareAuth(HttpRemote *p, const char *method, const char *path){
 #ifdef DOLTLITE_HAVE_AUTH
   const char *selected = 0;
   const char *aud;
-  char *url, *error = 0;
+  char *zHost, *url, *error = 0;
   int nPath = (int)strlen(path);
   int readOnly = strcmp(method, "GET")==0
       || (nPath>=11 && strcmp(path+nPath-11, "/get-chunks")==0)
@@ -1649,7 +1655,10 @@ static int httpPrepareAuth(HttpRemote *p, const char *method, const char *path){
     p->cred = 0;
     sqlite3_free(p->zAudience);
     p->zAudience = 0;
-    url = sqlite3_mprintf("https://%s:%d%s", p->zHost, p->port, p->zBasePath);
+    zHost = doltliteHttpFormatHostHeader(p->zHost, p->port, p->useTls);
+    if( !zHost ) return SQLITE_NOMEM;
+    url = sqlite3_mprintf("https://%s%s", zHost, p->zBasePath);
+    sqlite3_free(zHost);
     if( !url ) return SQLITE_NOMEM;
     p->authState = doltliteCredsResolve(0, selected, url, &p->cred, 0, &error);
     sqlite3_free(url);
@@ -1739,8 +1748,18 @@ DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
   zPathStart = 0;
   {
     const char *c = zHostStart;
-    while( *c && *c != ':' && *c != '/' ) c++;
-    nHost = (int)(c - zHostStart);
+    if( *c == '[' ){
+      zHostStart = c + 1;
+      c = zHostStart;
+      while( *c && *c != ']' && *c != '[' && *c != '/' ) c++;
+      if( *c != ']' ) return 0;
+      nHost = (int)(c - zHostStart);
+      c++;
+      if( *c && *c != ':' && *c != '/' ) return 0;
+    }else{
+      while( *c && *c != ':' && *c != '/' ) c++;
+      nHost = (int)(c - zHostStart);
+    }
     if( *c == ':' ){
       uint64_t value;
       zPortStart = c + 1;
