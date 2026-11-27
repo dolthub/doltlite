@@ -186,4 +186,104 @@ do_execsql_test shape-change-wor-to-rowid.committed {
   SELECT message, count(*) FROM dolt_blame_t GROUP BY message;
 } {0 c2 c2 202}
 
+# Dropping a column before the PK shifts the PK column ordinal.
+reset_db
+execsql {
+  CREATE TABLE t(x TEXT, id TEXT PRIMARY KEY);
+  INSERT INTO t VALUES('a', 'k1'), (NULL, 'k2');
+  SELECT dolt_commit('-Am', 'c1');
+}
+do_execsql_test drop-col-pk-ordinal.before {
+  SELECT id, message FROM dolt_blame_t ORDER BY id;
+} {k1 c1 k2 c1}
+execsql {ALTER TABLE t DROP COLUMN x}
+do_execsql_test drop-col-pk-ordinal.after-drop-working {
+  SELECT id, message FROM dolt_blame_t ORDER BY id;
+} {k2 c1}
+execsql {SELECT dolt_commit('-Am', 'c2')}
+do_execsql_test drop-col-pk-ordinal.after-drop-committed {
+  SELECT id, message FROM dolt_blame_t ORDER BY id;
+} {k1 c2 k2 c1}
+
+# Dropping a column before an INTEGER PRIMARY KEY shifts intPkCid.
+reset_db
+execsql {
+  CREATE TABLE t(x TEXT, id INTEGER PRIMARY KEY);
+  INSERT INTO t VALUES('a', 1), ('b', 2);
+  SELECT dolt_commit('-Am', 'c1');
+}
+do_execsql_test drop-col-ipk-ordinal.before {
+  SELECT id, message FROM dolt_blame_t ORDER BY id;
+} {1 c1 2 c1}
+execsql {
+  ALTER TABLE t DROP COLUMN x;
+  SELECT dolt_commit('-Am', 'c2');
+}
+do_execsql_test drop-col-ipk-ordinal.after {
+  SELECT id, message FROM dolt_blame_t ORDER BY id;
+} {1 c2 2 c2}
+
+# Branch switch where the PK has the same name at a different column ordinal.
+reset_db
+execsql {
+  CREATE TABLE t(x TEXT, id TEXT PRIMARY KEY);
+  INSERT INTO t VALUES('a', 'k1');
+  SELECT dolt_commit('-Am', 'c1');
+  SELECT dolt_checkout('-b', 'reordered');
+  DROP TABLE t;
+  CREATE TABLE t(id TEXT PRIMARY KEY, y INT);
+  INSERT INTO t VALUES('k2', 42);
+  SELECT dolt_commit('-Am', 'c2');
+  SELECT dolt_checkout('main');
+}
+do_execsql_test branch-pk-ordinal.main {
+  SELECT id, message FROM dolt_blame_t;
+} {k1 c1}
+execsql {SELECT dolt_checkout('reordered')}
+do_execsql_test branch-pk-ordinal.reordered {
+  SELECT id, message FROM dolt_blame_t;
+} {k2 c2}
+
+# Branch switch changing PK collation must reconnect blame vtab.
+reset_db
+execsql {
+  CREATE TABLE t(id TEXT PRIMARY KEY, v INT);
+  INSERT INTO t VALUES('abc', 1);
+  SELECT dolt_commit('-Am', 'c1');
+  SELECT dolt_checkout('-b', 'nocase');
+  DROP TABLE t;
+  CREATE TABLE t(id TEXT COLLATE NOCASE PRIMARY KEY, v INT);
+  INSERT INTO t VALUES('abc', 1);
+  SELECT dolt_commit('-Am', 'c2');
+  SELECT dolt_checkout('main');
+}
+do_execsql_test branch-pk-collation.binary {
+  SELECT id, message FROM dolt_blame_t WHERE id='ABC';
+} {}
+execsql {SELECT dolt_checkout('nocase')}
+do_execsql_test branch-pk-collation.nocase {
+  SELECT id, message FROM dolt_blame_t WHERE id='ABC';
+} {abc c1}
+
+# Branch switch changing PK affinity must reconnect blame vtab.
+reset_db
+execsql {
+  CREATE TABLE t(id TEXT PRIMARY KEY, v INT);
+  INSERT INTO t VALUES('1', 10);
+  SELECT dolt_commit('-Am', 'c1');
+  SELECT dolt_checkout('-b', 'realpk');
+  DROP TABLE t;
+  CREATE TABLE t(id REAL PRIMARY KEY, v INT);
+  INSERT INTO t VALUES(1, 20);
+  SELECT dolt_commit('-Am', 'c2');
+  SELECT dolt_checkout('main');
+}
+do_execsql_test branch-pk-affinity.text {
+  SELECT typeof(id), id, message FROM dolt_blame_t;
+} {text 1 c1}
+execsql {SELECT dolt_checkout('realpk')}
+do_execsql_test branch-pk-affinity.real {
+  SELECT typeof(id), id, message FROM dolt_blame_t WHERE id='1';
+} {real 1.0 c2}
+
 finish_test
