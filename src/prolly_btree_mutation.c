@@ -1497,7 +1497,11 @@ static int btCursorInsertImpl(
         }
         if( rc!=SQLITE_OK ) return rc;
 
-        prollyCursorReleaseAll(&pCur->pCur);
+        if( prollyCursorIsValid(&pCur->pCur)
+         && (prollyCursorIntKey(&pCur->pCur)!=pPayload->nKey
+             || (nInsertedPayload==0 && pPayload->nZero==0)) ){
+          prollyCursorReleaseAll(&pCur->pCur);
+        }
         pCur->mmActive = 0;
         pCur->deferredTreeSeek = 0;
         pCur->curFlags &= ~BTCF_AtLast;
