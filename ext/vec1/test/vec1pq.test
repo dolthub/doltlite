@@ -139,5 +139,37 @@ do_execsql_test 4.2 {
   PRAGMA integrity_check
 } {ok}
 
+#-------------------------------------------------------------------------
+# OPQ training with nElem not divisible by codesize (exercises both
+# batched and scalar-tail paths in covariance calculation).
+reset_db
+vec1_load db
+
+do_execsql_test 5.0 {
+  CREATE VIRTUAL TABLE v5 USING vec1(v, a1);
+  WITH s(i) AS (
+    SELECT 1 UNION ALL SELECT i+1 FROM s WHERE i<517
+  )
+  INSERT INTO v5(rowid, v, a1) SELECT i, random_vector(16), i FROM s;
+}
+
+do_execsql_test 5.1 {
+  INSERT INTO v5(cmd, arg) VALUES('rebuild', (
+    SELECT vec1_train(v, '{"quantizer":"opq","codesize":3}') FROM v5
+  ));
+} {}
+
+do_execsql_test 5.2 {
+  SELECT count(*) FROM v5(random_vector(16), '{K:5}');
+} {5}
+
+do_execsql_test 5.3 {
+  SELECT rowid, a1 FROM v5(random_vector(16), '{K:5}') WHERE a1 = 150;
+} {150 150}
+
+do_execsql_test 5.4 {
+  PRAGMA integrity_check
+} {ok}
+
 finish_test
 
