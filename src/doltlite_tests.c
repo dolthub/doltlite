@@ -679,9 +679,13 @@ test_run_done:
     return rc;
   }
   if( !zMessage ) zMessage = sqlite3_mprintf("");
+  if( !zMessage ){
+    testResultClear(pResult);
+    return SQLITE_NOMEM;
+  }
   pResult->zStatus = sqlite3_mprintf("%s", zMessage[0] ? "FAIL" : "PASS");
   pResult->zMessage = zMessage;
-  if( !pResult->zStatus || !pResult->zMessage ){
+  if( !pResult->zStatus ){
     testResultClear(pResult);
     return SQLITE_NOMEM;
   }
@@ -719,7 +723,14 @@ static int testRunBestIndex(sqlite3_vtab *pVtab,
   int iCol;
   int iCons;
   int nArg = 0;
-  (void)pVtab;
+  for(iCons=0; iCons<pInfo->nConstraint; iCons++){
+    struct sqlite3_index_constraint *p = &pInfo->aConstraint[iCons];
+    if( !p->usable && p->op==SQLITE_INDEX_CONSTRAINT_EQ
+     && p->iColumn>=TEST_RUN_FIRST_ARG
+     && p->iColumn<TEST_RUN_FIRST_ARG+TEST_RUN_MAX_ARGS ){
+      return SQLITE_CONSTRAINT;
+    }
+  }
   for(iCol=TEST_RUN_FIRST_ARG;
       iCol<TEST_RUN_FIRST_ARG+TEST_RUN_MAX_ARGS; iCol++){
     for(iCons=0; iCons<pInfo->nConstraint; iCons++){

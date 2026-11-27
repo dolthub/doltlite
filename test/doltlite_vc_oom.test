@@ -181,4 +181,29 @@ do_faultsim_test 5.1 -faults oom-transient -prep {
   faultsim_integrity_check
 }
 
+faultsim_restore_and_reopen
+do_test 6.0 {
+  reset_db
+  execsql {
+    INSERT INTO dolt_tests VALUES
+      ('t_pass', 'g1', 'SELECT 1', 'expected_rows', '==', '1');
+  }
+  set {} {}
+} {}
+faultsim_save_and_close
+
+do_faultsim_test 6.1 -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+} -body {
+  db eval {
+    SELECT test_name, status FROM dolt_test_run('*') ORDER BY test_name
+  }
+} -test {
+  faultsim_test_result {0 {t_pass PASS}} \
+      {1 {out of memory}} {1 {disk I/O error}} \
+      {1 {no such table: dolt_test_run}}
+  catchsql ROLLBACK
+  faultsim_integrity_check
+}
+
 finish_test

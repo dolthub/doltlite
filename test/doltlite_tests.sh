@@ -252,6 +252,16 @@ run_test_error_match "runner_parameter_with_expression" \
   "SELECT * FROM dolt_test_run(?, upper('errors'));" \
   "dolt_test_run requires literal arguments" "$DB"
 
+run_test_error_match "runner_join_column_argument" \
+  "CREATE TABLE run_names(n TEXT);
+   INSERT INTO run_names VALUES('a_rows_pass');
+   SELECT t.test_name, t.status FROM dolt_test_run(run_names.n) AS t JOIN run_names;" \
+  "dolt_test_run requires literal arguments" "$DB"
+
+run_test "runner_join_literal_argument" \
+  "SELECT t.test_name, t.status, run_names.n FROM dolt_test_run('a_rows_pass') AS t JOIN run_names;" \
+  "a_rows_pass|PASS|a_rows_pass" "$DB"
+
 run_test "runner_bound_parameter" \
 "INSERT INTO dolt_tests VALUES
 ('bound_one','bound_grp','SELECT 1','expected_rows','==','1'),
