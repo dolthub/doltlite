@@ -63,7 +63,7 @@ struct TagDeleteCtx {
 
 static int mutateTagDelete(sqlite3 *db, ChunkStore *cs, void *pArg){
   TagDeleteCtx *p = (TagDeleteCtx*)pArg;
-  int i;
+  int i, j;
   int rc;
   (void)db;
   for(i=0; i<p->nName; i++){
@@ -71,6 +71,14 @@ static int mutateTagDelete(sqlite3 *db, ChunkStore *cs, void *pArg){
     if( rc!=SQLITE_OK ) return rc;
   }
   for(i=0; i<p->nName; i++){
+    int isDup = 0;
+    for(j=0; j<i; j++){
+      if( strcmp(p->azName[j], p->azName[i])==0 ){
+        isDup = 1;
+        break;
+      }
+    }
+    if( isDup ) continue;
     rc = chunkStoreDeleteTag(cs, p->azName[i]);
     if( rc!=SQLITE_OK ) return rc;
   }

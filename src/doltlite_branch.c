@@ -284,7 +284,7 @@ static int mutateBranchDelete(sqlite3 *db, ChunkStore *cs, void *pArg){
   BranchDeleteCtx *p = (BranchDeleteCtx*)pArg;
   ProllyHash currentHead;
   const char *zDefault = chunkStoreGetDefaultBranch(cs);
-  int i;
+  int i, j;
   int rc;
 
   if( !p->force ) doltliteGetSessionHead(db, &currentHead);
@@ -327,6 +327,14 @@ static int mutateBranchDelete(sqlite3 *db, ChunkStore *cs, void *pArg){
     }
   }
   for(i=0; i<p->nName; i++){
+    int isDup = 0;
+    for(j=0; j<i; j++){
+      if( strcmp(p->azName[j], p->azName[i])==0 ){
+        isDup = 1;
+        break;
+      }
+    }
+    if( isDup ) continue;
     rc = chunkStoreDeleteBranch(cs, p->azName[i]);
     if( rc!=SQLITE_OK ) return rc;
   }

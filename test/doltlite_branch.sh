@@ -190,6 +190,12 @@ run_test "delete_multiple_missing_keeps_branches" "SELECT count(*) FROM dolt_bra
 echo "SELECT dolt_checkout('one'); INSERT INTO t VALUES(2); SELECT dolt_commit('-A','-m','one'); SELECT dolt_checkout('main');" | $DOLTLITE "$DB15" > /dev/null 2>&1
 run_test "force_delete_multiple_branches" "SELECT dolt_branch('-D','one','two');" "0" "$DB15"
 run_test "force_delete_multiple_branches_removed" "SELECT count(*) FROM dolt_branches WHERE name IN ('one','two');" "0" "$DB15"
+echo "SELECT dolt_branch('b1');" | $DOLTLITE "$DB15" > /dev/null 2>&1
+run_test "delete_duplicate_branch_names" "SELECT dolt_branch('-d','b1','b1');" "0" "$DB15"
+run_test "delete_duplicate_branch_names_removed" "SELECT count(*) FROM dolt_branches WHERE name='b1';" "0" "$DB15"
+echo "SELECT dolt_branch('b1'); SELECT dolt_checkout('b1'); INSERT INTO t VALUES(3); SELECT dolt_commit('-A','-m','unmerged'); SELECT dolt_checkout('main');" | $DOLTLITE "$DB15" > /dev/null 2>&1
+run_test "force_delete_duplicate_branch_names" "SELECT dolt_branch('-D','b1','b1');" "0" "$DB15"
+run_test "force_delete_duplicate_branch_names_removed" "SELECT count(*) FROM dolt_branches WHERE name='b1';" "0" "$DB15"
 
 DB16=/tmp/test_branch16_$$.db; rm -f "$DB16"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init'); SELECT dolt_branch('feat');" | $DOLTLITE "$DB16" > /dev/null 2>&1
