@@ -791,6 +791,8 @@ static int atBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   int refCol = nCols > 0 ? nCols : 2;
   (void)pVtab;
 
+  if( !doltliteVtabArgUsable(pInfo, refCol) ) return SQLITE_CONSTRAINT;
+
   for(i=0;i<pInfo->nConstraint;i++){
     if(!pInfo->aConstraint[i].usable) continue;
     if( pInfo->aConstraint[i].iColumn==refCol
