@@ -368,6 +368,137 @@ static void test_corrupt_child_level_and_depth(void){
   closeStore(&cs, &cache, path);
 }
 
+static int putBlobKeyNode(
+  ChunkStore *cs,
+  u8 level,
+  const u8 *pKey, int nKey,
+  const u8 *pVal, int nVal,
+  ProllyHash *pOut
+){
+  ProllyNodeBuilder b;
+  u8 *pData = 0;
+  int nData = 0;
+  int rc;
+
+  prollyNodeBuilderInit(&b, level, PROLLY_NODE_BLOBKEY);
+  rc = prollyNodeBuilderAdd(&b, pKey, nKey, pVal, nVal);
+  if( rc==SQLITE_OK ){
+    rc = prollyNodeBuilderFinish(&b, &pData, &nData);
+  }
+  if( rc==SQLITE_OK ){
+    rc = chunkStorePut(cs, pData, nData, pOut);
+  }
+  sqlite3_free(pData);
+  prollyNodeBuilderFree(&b);
+  return rc;
+}
+
+static void test_corrupt_child_key_flags(void){
+  ChunkStore cs;
+  ProllyCache cache;
+  ProllyHash empty, leafA, leafO, leafT;
+  ProllyHash blobLeaf, blobInt;
+  ProllyHash intChildA, intChildO;
+  ProllyHash ancRoot, oursRoot, theirsRoot, merged;
+  u8 recA[] = {2, 15, 'a'};
+  u8 recO[] = {2, 15, 'o'};
+  u8 recT[] = {2, 15, 't'};
+  u8 shortKey[1] = {'x'};
+  int rc, handled = 0;
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wm_corrupt_flags";
+
+  rc = openStore(&cs, &cache, path);
+  check("corrupt_flags: open", rc==SQLITE_OK);
+  memset(&empty, 0, sizeof(empty));
+
+  rc = insertInt(&cs, &cache, &empty, 1, recA, sizeof(recA), &leafA);
+  check("corrupt_flags: leafA", rc==SQLITE_OK);
+  rc = insertInt(&cs, &cache, &leafA, 2, recO, sizeof(recO), &leafO);
+  check("corrupt_flags: leafO", rc==SQLITE_OK);
+  rc = insertInt(&cs, &cache, &leafA, 3, recT, sizeof(recT), &leafT);
+  check("corrupt_flags: leafT", rc==SQLITE_OK);
+
+  /* Corrupt BLOBKEY leaf with a 1-byte key under an INTKEY parent. */
+  rc = putBlobKeyNode(&cs, 0, shortKey, 1, recT, sizeof(recT), &blobLeaf);
+  check("corrupt_flags: blobLeaf", rc==SQLITE_OK);
+
+  /* fmEmitChild with corrupt theirs leaf child. */
+  rc = putSingleEntryNode(&cs, 1, 10, leafA.data, PROLLY_HASH_SIZE, &ancRoot);
+  check("corrupt_flags: ancRoot", rc==SQLITE_OK);
+  rc = putSingleEntryNode(&cs, 1, 10, leafO.data, PROLLY_HASH_SIZE, &oursRoot);
+  check("corrupt_flags: oursRoot", rc==SQLITE_OK);
+  rc = putSingleEntryNode(&cs, 1, 10, blobLeaf.data, PROLLY_HASH_SIZE, &theirsRoot);
+  check("corrupt_flags: theirsRoot", rc==SQLITE_OK);
+
+  memset(&merged, 0, sizeof(merged));
+  handled = -1;
+  rc = prollyThreeWayMergeFast(&cs, &cache, &ancRoot, &oursRoot, &theirsRoot,
+                               PROLLY_NODE_INTKEY, &merged, &handled);
+  check("corrupt_flags: fmEmitChild theirs blob leaf returns SQLITE_CORRUPT",
+        rc==SQLITE_CORRUPT);
+  check("corrupt_flags: fmEmitChild theirs blob leaf not handled", handled==0);
+
+  /* fmEmitChild with corrupt anc leaf child. */
+  memset(&merged, 0, sizeof(merged));
+  handled = -1;
+  rc = prollyThreeWayMergeFast(&cs, &cache, &theirsRoot, &ancRoot, &oursRoot,
+                               PROLLY_NODE_INTKEY, &merged, &handled);
+  check("corrupt_flags: fmEmitChild anc blob leaf returns SQLITE_CORRUPT",
+        rc==SQLITE_CORRUPT);
+  check("corrupt_flags: fmEmitChild anc blob leaf not handled", handled==0);
+
+  /* fmEmitChild with corrupt ours leaf child. */
+  memset(&merged, 0, sizeof(merged));
+  handled = -1;
+  rc = prollyThreeWayMergeFast(&cs, &cache, &ancRoot, &theirsRoot, &oursRoot,
+                               PROLLY_NODE_INTKEY, &merged, &handled);
+  check("corrupt_flags: fmEmitChild ours blob leaf returns SQLITE_CORRUPT",
+        rc==SQLITE_CORRUPT);
+  check("corrupt_flags: fmEmitChild ours blob leaf not handled", handled==0);
+
+  /* fmEmitChild with corrupt level-1 BLOBKEY interior child under level-2 INTKEY parents. */
+  rc = putSingleEntryNode(&cs, 1, 10, leafA.data, PROLLY_HASH_SIZE, &intChildA);
+  check("corrupt_flags: intChildA", rc==SQLITE_OK);
+  rc = putSingleEntryNode(&cs, 1, 10, leafO.data, PROLLY_HASH_SIZE, &intChildO);
+  check("corrupt_flags: intChildO", rc==SQLITE_OK);
+  rc = putBlobKeyNode(&cs, 1, shortKey, 1, leafT.data, PROLLY_HASH_SIZE, &blobInt);
+  check("corrupt_flags: blobInt", rc==SQLITE_OK);
+
+  rc = putSingleEntryNode(&cs, 2, 10, intChildA.data, PROLLY_HASH_SIZE, &ancRoot);
+  check("corrupt_flags: l2 ancRoot", rc==SQLITE_OK);
+  rc = putSingleEntryNode(&cs, 2, 10, intChildO.data, PROLLY_HASH_SIZE, &oursRoot);
+  check("corrupt_flags: l2 oursRoot", rc==SQLITE_OK);
+  rc = putSingleEntryNode(&cs, 2, 10, blobInt.data, PROLLY_HASH_SIZE, &theirsRoot);
+  check("corrupt_flags: l2 theirsRoot", rc==SQLITE_OK);
+
+  memset(&merged, 0, sizeof(merged));
+  handled = -1;
+  rc = prollyThreeWayMergeFast(&cs, &cache, &ancRoot, &oursRoot, &theirsRoot,
+                               PROLLY_NODE_INTKEY, &merged, &handled);
+  check("corrupt_flags: fmEmitChild blob interior returns SQLITE_CORRUPT",
+        rc==SQLITE_CORRUPT);
+  check("corrupt_flags: fmEmitChild blob interior not handled", handled==0);
+
+  /* fmEmitSubtreeRows: child 0 merges leaves so chunker is non-empty,
+  ** child 1 splices blobLeaf (BLOBKEY leaf under an INTKEY parent). */
+  rc = putTwoChildNode(&cs, 1, 3, &leafA, 10, &leafA, &ancRoot);
+  check("corrupt_flags: splice ancRoot", rc==SQLITE_OK);
+  rc = putTwoChildNode(&cs, 1, 3, &leafO, 10, &blobLeaf, &oursRoot);
+  check("corrupt_flags: splice oursRoot", rc==SQLITE_OK);
+  rc = putTwoChildNode(&cs, 1, 3, &leafT, 10, &blobLeaf, &theirsRoot);
+  check("corrupt_flags: splice theirsRoot", rc==SQLITE_OK);
+
+  memset(&merged, 0, sizeof(merged));
+  handled = -1;
+  rc = prollyThreeWayMergeFast(&cs, &cache, &ancRoot, &oursRoot, &theirsRoot,
+                               PROLLY_NODE_INTKEY, &merged, &handled);
+  check("corrupt_flags: fmEmitSubtreeRows blob leaf returns SQLITE_CORRUPT",
+        rc==SQLITE_CORRUPT);
+  check("corrupt_flags: fmEmitSubtreeRows blob leaf not handled", handled==0);
+
+  closeStore(&cs, &cache, path);
+}
+
 static int dummySourceGet(
   void *pCtx,
   const unsigned char aHash[20],
@@ -648,6 +779,7 @@ int main(void){
   test_flags_disagree_with_nodes();
   test_corrupt_value_error();
   test_corrupt_child_level_and_depth();
+  test_corrupt_child_key_flags();
   test_diff_open_error_frees_prefetch_buf();
   test_diff_prefetch_frame_no_overlap();
   test_diff_corrupt_child_flags();
