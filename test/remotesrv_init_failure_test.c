@@ -162,6 +162,69 @@ int main(void){
         gFault.nOutstanding==nBaseline);
   opts.authKeysDir = 0;
 
+  opts.certFile = "cert.pem";
+  opts.keyFile = 0;
+  setFailure(-1);
+  mutexInit = -1;
+  condInit = -1;
+  rc = doltliteRemoteSrvInitForTest(&opts, &mutexInit, &condInit);
+  check("cert_without_key_fails", rc==SQLITE_ERROR);
+  check("cert_without_key_destroys_mutex", mutexInit==0);
+  check("cert_without_key_destroys_condition", condInit==0);
+  check("cert_without_key_serve_opts_fails",
+        doltliteServeOpts(&opts)==SQLITE_ERROR);
+  check("cert_without_key_async_returns_null",
+        doltliteServeAsyncOpts(&opts)==0);
+  check("cert_without_key_frees_allocations",
+        gFault.nOutstanding==nBaseline);
+
+  opts.certFile = 0;
+  opts.keyFile = "key.pem";
+  setFailure(-1);
+  mutexInit = -1;
+  condInit = -1;
+  rc = doltliteRemoteSrvInitForTest(&opts, &mutexInit, &condInit);
+  check("key_without_cert_fails", rc==SQLITE_ERROR);
+  check("key_without_cert_destroys_mutex", mutexInit==0);
+  check("key_without_cert_destroys_condition", condInit==0);
+  check("key_without_cert_serve_opts_fails",
+        doltliteServeOpts(&opts)==SQLITE_ERROR);
+  check("key_without_cert_async_returns_null",
+        doltliteServeAsyncOpts(&opts)==0);
+  check("key_without_cert_frees_allocations",
+        gFault.nOutstanding==nBaseline);
+
+  opts.certFile = "cert.pem";
+  opts.keyFile = "";
+  setFailure(-1);
+  mutexInit = -1;
+  condInit = -1;
+  rc = doltliteRemoteSrvInitForTest(&opts, &mutexInit, &condInit);
+  check("cert_with_empty_key_fails", rc==SQLITE_ERROR);
+  check("cert_with_empty_key_destroys_mutex", mutexInit==0);
+  check("cert_with_empty_key_destroys_condition", condInit==0);
+  check("cert_with_empty_key_async_returns_null",
+        doltliteServeAsyncOpts(&opts)==0);
+  check("cert_with_empty_key_frees_allocations",
+        gFault.nOutstanding==nBaseline);
+
+  opts.certFile = "";
+  opts.keyFile = "key.pem";
+  setFailure(-1);
+  mutexInit = -1;
+  condInit = -1;
+  rc = doltliteRemoteSrvInitForTest(&opts, &mutexInit, &condInit);
+  check("empty_cert_with_key_fails", rc==SQLITE_ERROR);
+  check("empty_cert_with_key_destroys_mutex", mutexInit==0);
+  check("empty_cert_with_key_destroys_condition", condInit==0);
+  check("empty_cert_with_key_async_returns_null",
+        doltliteServeAsyncOpts(&opts)==0);
+  check("empty_cert_with_key_frees_allocations",
+        gFault.nOutstanding==nBaseline);
+
+  opts.certFile = 0;
+  opts.keyFile = 0;
+
   setFailure(1);
   mutexInit = -1;
   condInit = -1;

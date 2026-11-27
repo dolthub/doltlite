@@ -1814,6 +1814,8 @@ static int serverInit(DoltliteServer *pSrv, const DoltliteServeOpts *o){
   int opt = 1;
   int i;
   const char *zBindAddr = o->zBindAddr;
+  int hasCert = (o->certFile!=0 && o->certFile[0]!='\0');
+  int hasKey = (o->keyFile!=0 && o->keyFile[0]!='\0');
 
   memset(pSrv, 0, sizeof(*pSrv));
   pSrv->listenFd = -1;
@@ -1864,7 +1866,11 @@ static int serverInit(DoltliteServer *pSrv, const DoltliteServeOpts *o){
     pSrv->audience = dupStr(o->audience);
     if( !pSrv->audience ){ serverCleanup(pSrv); return SQLITE_NOMEM; }
   }
-  if( o->certFile && o->keyFile ){
+  if( hasCert != hasKey ){
+    serverCleanup(pSrv);
+    return SQLITE_ERROR;
+  }
+  if( hasCert ){
     pSrv->tls = doltliteTlsServerNew(o->certFile, o->keyFile);
     if( !pSrv->tls ){ serverCleanup(pSrv); return SQLITE_ERROR; }
   }
