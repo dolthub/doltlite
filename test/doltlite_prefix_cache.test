@@ -135,4 +135,47 @@ foreach warm {0 1} {
   }
 }
 
+reset_db
+do_execsql_test zeroblob-prefix-tail-1 {
+  PRAGMA cache_size=-32;
+  CREATE TABLE zt(id INTEGER PRIMARY KEY, tag INTEGER, b BLOB, tail TEXT);
+  WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<32)
+  INSERT INTO zt SELECT i, i, zeroblob(16384), NULL FROM c;
+  SELECT length(dolt_commit('-Am', 'zeroblob leaves'));
+} {40}
+
+do_test zeroblob-prefix-tail-2 {
+  db close
+  sqlite3 db test.db
+  db eval {
+    PRAGMA cache_size=-32;
+    SELECT sum(id), sum(tag), sum(length(b)) FROM zt;
+  }
+} {528 528 524288}
+
+do_execsql_test zeroblob-prefix-tail-3 {
+  SELECT count(*),
+         sum(length(b)=16384),
+         sum(b=zeroblob(16384)),
+         sum(hex(substr(b, 8193, 8))='0000000000000000'),
+         sum(hex(substr(b, 16377, 8))='0000000000000000'),
+         sum(tail IS NULL)
+  FROM zt;
+} {32 32 32 32 32 32}
+
+do_test zeroblob-prefix-tail-4 {
+  db close
+  sqlite3 db test.db
+  db eval {
+    PRAGMA cache_size=-32;
+    SELECT sum(id), sum(length(b)) FROM zt;
+  }
+  set fd [db incrblob zt b 16]
+  fconfigure $fd -translation binary
+  seek $fd 16376
+  set tail [read $fd 8]
+  close $fd
+  binary encode hex $tail
+} {0000000000000000}
+
 finish_test
