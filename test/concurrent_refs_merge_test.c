@@ -1087,6 +1087,60 @@ static void storeDedupRevertForceRefresh(void){
   wipe(path);
 }
 
+static void storeZeroBranchMerge(void){
+  char path[256];
+  ChunkStore local, peer, fresh;
+  ProllyHash peerTag, localTag;
+  int peerOpen = 0;
+  int freshOpen = 0;
+  dbPath(path, (int)sizeof(path), "cszerobranch");
+  hashOf(&peerTag, "zero-peer-tag");
+  hashOf(&localTag, "zero-local-tag");
+  wipe(path);
+  check("cs_zero_seed",
+        openStore(&local, path, 1)==SQLITE_OK
+        && chunkStoreSetDefaultBranch(&local, "main")==SQLITE_OK
+        && commitRefs(&local)==SQLITE_OK);
+  if( openStore(&peer, path, 0)==SQLITE_OK ){
+    peerOpen = 1;
+  }
+  check("cs_zero_peer_open", peerOpen);
+  if( peerOpen ){
+    check("cs_zero_peer_commit",
+          chunkStoreAddRemote(&peer, "origin",
+                              "file://" DOLTLITE_TEST_TMPDIR "/refsmerge-zero-origin")==SQLITE_OK
+          && chunkStoreAddTagFull(&peer, "t_peer", &peerTag,
+                                  "bee", "b@x", 1, "peer")==SQLITE_OK
+          && commitRefs(&peer)==SQLITE_OK);
+    chunkStoreClose(&peer);
+  }
+  check("cs_zero_local_commit",
+        chunkStoreAddRemote(&local, "upstream",
+                            "file://" DOLTLITE_TEST_TMPDIR "/refsmerge-zero-up")==SQLITE_OK
+        && chunkStoreAddTagFull(&local, "t_local", &localTag,
+                                "ann", "a@x", 2, "local")==SQLITE_OK
+        && commitRefs(&local)==SQLITE_OK);
+  chunkStoreClose(&local);
+  if( openStore(&fresh, path, 0)==SQLITE_OK ){
+    freshOpen = 1;
+  }
+  check("cs_zero_reopen", freshOpen);
+  if( freshOpen ){
+    check("cs_zero_no_branches", fresh.refs.nBranches==0);
+    expectEq("cs_zero_default_branch", fresh.refs.zDefaultBranch, "main");
+    check("cs_zero_peer_remote",
+          remoteIs(&fresh, "origin",
+                   "file://" DOLTLITE_TEST_TMPDIR "/refsmerge-zero-origin"));
+    check("cs_zero_local_remote",
+          remoteIs(&fresh, "upstream",
+                   "file://" DOLTLITE_TEST_TMPDIR "/refsmerge-zero-up"));
+    check("cs_zero_peer_tag", tagIs(&fresh, "t_peer", &peerTag));
+    check("cs_zero_local_tag", tagIs(&fresh, "t_local", &localTag));
+    chunkStoreClose(&fresh);
+  }
+  wipe(path);
+}
+
 int main(void){
   snprintf(gPid, sizeof(gPid), "%ld", (long)getpid());
   scenarioTagAdd();
@@ -1113,6 +1167,7 @@ int main(void){
   storeDedupRevertMerge();
   storeDedupRevertConflict();
   storeDedupRevertForceRefresh();
+  storeZeroBranchMerge();
   printf("Results: %d passed, %d failed out of %d tests\n",
          nPass, nFail, nPass + nFail);
   return nFail > 0 ? 1 : 0;

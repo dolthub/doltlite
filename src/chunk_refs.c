@@ -922,7 +922,7 @@ int csMergeSavedRefsOntoDisk(
 
   /* Isolated category merges can still pair a new default with a deleted
   ** branch; the decoder requires a live default, so that is a conflict. */
-  if( cs->refs.zDefaultBranch
+  if( cs->refs.nBranches>0 && cs->refs.zDefaultBranch
    && csFindNamedRef(cs->refs.aBranches, cs->refs.nBranches,
                      (int)sizeof(BranchRef), cs->refs.zDefaultBranch)<0 ){
     return SQLITE_BUSY_SNAPSHOT;
