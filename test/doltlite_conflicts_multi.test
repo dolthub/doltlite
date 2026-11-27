@@ -100,4 +100,21 @@ do_execsql_test conflicts-multi-clean-invalid-rollback {
   RELEASE s;
 } {}
 
+# When dolt_conflicts_resolve runs in autocommit mode and its internal COMMIT
+# fails, it must preserve the original error code and leave autocommit intact.
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY);
+  CREATE TABLE log(x INT);
+}
+do_test conflicts-multi-autocommit-commit-busy {
+  set r [catchsql {INSERT INTO log SELECT dolt_conflicts_resolve('--ours','t')}]
+  list [lindex $r 0] [db errorcode] [lindex $r 1] [sqlite3_get_autocommit db]
+} {1 5 {database is locked} 1}
+do_execsql_test conflicts-multi-autocommit-after-busy {
+  SELECT dolt_conflicts_resolve('--ours','t');
+  SELECT count(*) FROM log;
+  PRAGMA integrity_check;
+} {0 0 ok}
+
 finish_test

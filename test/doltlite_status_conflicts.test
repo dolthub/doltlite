@@ -173,4 +173,37 @@ do_execsql_test status-schema-conflict-dedup-rollback {
   ROLLBACK;
   SELECT count(*) FROM dolt_status;
 } 0
+
+# Dropping a schema-conflicted main table while a TEMP table with the same
+# name exists must still prune the deleted main table from dolt_conflicts.
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);
+  INSERT INTO t VALUES(1, 1);
+  SELECT dolt_commit('-Am', 'base');
+  SELECT dolt_branch('feature');
+  SELECT dolt_checkout('feature');
+  ALTER TABLE t ADD COLUMN b INT;
+  SELECT dolt_commit('-am', 'feature');
+  SELECT dolt_checkout('main');
+  ALTER TABLE t ADD COLUMN b TEXT;
+  SELECT dolt_commit('-am', 'main');
+  BEGIN;
+}
+do_test status-schema-conflict-temp-shadow-merge {
+  lindex [catchsql {SELECT dolt_merge('feature')}] 0
+} 1
+do_execsql_test status-schema-conflict-temp-shadow-before {
+  SELECT "table", num_conflicts FROM dolt_conflicts;
+} {t 0}
+do_execsql_test status-schema-conflict-temp-shadow-after-drop {
+  CREATE TEMP TABLE t(x INT);
+  DROP TABLE main.t;
+  SELECT count(*) FROM dolt_conflicts;
+} {0}
+do_execsql_test status-schema-conflict-temp-shadow-rollback {
+  ROLLBACK;
+  SELECT count(*) FROM dolt_conflicts;
+} {0}
+
 finish_test
