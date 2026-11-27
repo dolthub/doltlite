@@ -705,6 +705,227 @@ static void runAtLastSeekClearTests(void){
   removeDb(zDb);
 }
 
+static int insertIntSavePos(BtCursor *pCur, i64 rowid, const char *zTag, int val){
+  u8 aRec[128];
+  BtreePayload payload;
+  int nRec = makeTextIntRecord(aRec, zTag, val);
+  memset(&payload, 0, sizeof(payload));
+  payload.nKey = rowid;
+  payload.pData = aRec;
+  payload.nData = nRec;
+  return sqlite3BtreeInsert(pCur, &payload, BTREE_SAVEPOSITION, 0);
+}
+
+static void checkIntPayload(
+  const char *zPrefix,
+  BtCursor *pCur,
+  const char *zWantTag,
+  int wantVal
+){
+  u8 aWant[128];
+  u8 aGot[128];
+  u8 aChk[128];
+  int nWant = makeTextIntRecord(aWant, zWantTag, wantVal);
+  u32 nSize = sqlite3BtreePayloadSize(pCur);
+  char zLabel[128];
+
+  sqlite3_snprintf(sizeof(zLabel), zLabel, "%s: PayloadSize", zPrefix);
+  check(zLabel, nSize==(u32)nWant);
+  if( nSize!=(u32)nWant || nWant>(int)sizeof(aGot) ) return;
+
+  memset(aGot, 0, sizeof(aGot));
+  sqlite3_snprintf(sizeof(zLabel), zLabel, "%s: Payload rc", zPrefix);
+  check(zLabel, sqlite3BtreePayload(pCur, 0, nSize, aGot)==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zLabel), zLabel, "%s: Payload bytes", zPrefix);
+  check(zLabel, memcmp(aGot, aWant, (size_t)nWant)==0);
+
+  memset(aChk, 0, sizeof(aChk));
+  sqlite3_snprintf(sizeof(zLabel), zLabel, "%s: PayloadChecked rc", zPrefix);
+  check(zLabel, sqlite3BtreePayloadChecked(pCur, 0, nSize, aChk)==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zLabel), zLabel, "%s: PayloadChecked bytes", zPrefix);
+  check(zLabel, memcmp(aChk, aWant, (size_t)nWant)==0);
+}
+
+static void runIntKeySavePosTests(void){
+  sqlite3 *db = 0;
+  Btree *pBt;
+  BtCursor *pCur = 0;
+  BtCursor *pCur2 = 0;
+  Table *pTab;
+  Pgno root = 0;
+  int rc;
+  int res = 0;
+  const char *zDb = "savepos_intkey.db";
+
+  removeDb(zDb);
+  rc = sqlite3_open(zDb, &db);
+  check("intsp: open", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ){ sqlite3_close(db); return; }
+
+  if( execSql(db,
+        "CREATE TABLE t_intsp(id INTEGER PRIMARY KEY, v BLOB);"
+        "INSERT INTO t_intsp VALUES"
+        "  (10, 'row10'),"
+        "  (20, zeroblob(4096)),"
+        "  (30, 'row30'),"
+        "  (40, 'row40');")!=SQLITE_OK ){
+    nFail++;
+    sqlite3_close(db);
+    removeDb(zDb);
+    return;
+  }
+
+  sqlite3BtreeEnterAll(db);
+  pBt = db->aDb[0].pBt;
+  pTab = sqlite3FindTable(db, "t_intsp", "main");
+  if( pTab ) root = pTab->tnum;
+  check("intsp: resolved table", pBt!=0 && root>1);
+  if( !pBt || root<=1 ){
+    sqlite3BtreeLeaveAll(db);
+    sqlite3_close(db);
+    removeDb(zDb);
+    return;
+  }
+
+  pCur = sqlite3_malloc(sqlite3BtreeCursorSize());
+  pCur2 = sqlite3_malloc(sqlite3BtreeCursorSize());
+  check("intsp: alloc cursors", pCur!=0 && pCur2!=0);
+  if( !pCur || !pCur2 ){
+    sqlite3_free(pCur);
+    sqlite3_free(pCur2);
+    sqlite3BtreeLeaveAll(db);
+    sqlite3_close(db);
+    removeDb(zDb);
+    return;
+  }
+  memset(pCur, 0, sqlite3BtreeCursorSize());
+  memset(pCur2, 0, sqlite3BtreeCursorSize());
+
+  check("intsp: begin write txn", sqlite3BtreeBeginTrans(pBt, 1, 0)==SQLITE_OK);
+  check("intsp: open pCur",
+        sqlite3BtreeCursor(pBt, root, BTREE_WRCSR, 0, pCur)==SQLITE_OK);
+  check("intsp: open pCur2",
+        sqlite3BtreeCursor(pBt, root, BTREE_WRCSR, 0, pCur2)==SQLITE_OK);
+
+  /* Case 1: Position on committed zero-tailed tree row 20, deferred
+  ** BTREE_SAVEPOSITION insert at different rowid 25. */
+  check("intsp case1: seek 20",
+        sqlite3BtreeTableMoveto(pCur, 20, 0, &res)==SQLITE_OK && res==0);
+  check("intsp case1: pCur valid on tree before insert",
+        prollyCursorIsValid(&pCur->pCur));
+  check("intsp case1: insert 25",
+        insertIntSavePos(pCur, 25, "new25", 25)==SQLITE_OK);
+  check("intsp case1: tree cursor released",
+        !prollyCursorIsValid(&pCur->pCur));
+  check("intsp case1: IntegerKey is 25",
+        sqlite3BtreeIntegerKey(pCur)==25);
+  checkIntPayload("intsp case1", pCur, "new25", 25);
+  {
+    i64 aWant[] = { 30, 40 };
+    int i;
+    for(i=0; i<2; i++){
+      rc = sqlite3BtreeNext(pCur, 0);
+      check("intsp case1: Next rc", rc==SQLITE_OK);
+      if( rc!=SQLITE_OK ) break;
+      check("intsp case1: Next key", sqlite3BtreeIntegerKey(pCur)==aWant[i]);
+    }
+    check("intsp case1: Next EOF", sqlite3BtreeNext(pCur, 0)==SQLITE_DONE);
+  }
+
+  /* Case 2: Position on committed tree row 30, deferred BTREE_SAVEPOSITION
+  ** insert at earlier rowid 15, then Previous(). */
+  check("intsp case2: seek 30",
+        sqlite3BtreeTableMoveto(pCur, 30, 0, &res)==SQLITE_OK && res==0);
+  check("intsp case2: insert 15",
+        insertIntSavePos(pCur, 15, "new15", 15)==SQLITE_OK);
+  check("intsp case2: IntegerKey is 15",
+        sqlite3BtreeIntegerKey(pCur)==15);
+  checkIntPayload("intsp case2", pCur, "new15", 15);
+  check("intsp case2: Prev -> 10",
+        sqlite3BtreePrevious(pCur, 0)==SQLITE_OK
+        && sqlite3BtreeIntegerKey(pCur)==10);
+  check("intsp case2: Prev BOF", sqlite3BtreePrevious(pCur, 0)==SQLITE_DONE);
+
+  /* Case 3: Position on committed zero-tailed tree row 20, deferred
+  ** BTREE_SAVEPOSITION overwrite at the same rowid 20. */
+  check("intsp case3: seek 20",
+        sqlite3BtreeTableMoveto(pCur, 20, 0, &res)==SQLITE_OK && res==0);
+  check("intsp case3: overwrite 20",
+        insertIntSavePos(pCur, 20, "ovr20", 20)==SQLITE_OK);
+  check("intsp case3: IntegerKey is 20",
+        sqlite3BtreeIntegerKey(pCur)==20);
+  checkIntPayload("intsp case3", pCur, "ovr20", 20);
+  check("intsp case3: Next -> 25",
+        sqlite3BtreeNext(pCur, 0)==SQLITE_OK
+        && sqlite3BtreeIntegerKey(pCur)==25);
+  check("intsp case3: Prev -> 20",
+        sqlite3BtreePrevious(pCur, 0)==SQLITE_OK
+        && sqlite3BtreeIntegerKey(pCur)==20);
+  checkIntPayload("intsp case3 after prev", pCur, "ovr20", 20);
+
+  /* Case 4: Position on committed tree row 10, deferred BTREE_SAVEPOSITION
+  ** insert at rowid 35, then trigger saveAllCursors via a write on pCur2. */
+  check("intsp case4: seek 10",
+        sqlite3BtreeTableMoveto(pCur, 10, 0, &res)==SQLITE_OK && res==0);
+  check("intsp case4: insert 35",
+        insertIntSavePos(pCur, 35, "ins35", 35)==SQLITE_OK);
+  check("intsp case4: pCur2 insert 50 triggers saveAllCursors",
+        insertIntSavePos(pCur2, 50, "ins50", 50)==SQLITE_OK);
+  check("intsp case4: pCur saved at 35",
+        pCur->eState==CURSOR_REQUIRESEEK && pCur->nKey==35);
+  {
+    u8 aWant[128];
+    u8 aChk[128];
+    int nWant = makeTextIntRecord(aWant, "ins35", 35);
+    memset(aChk, 0, sizeof(aChk));
+    check("intsp case4: PayloadChecked restores 35",
+          sqlite3BtreePayloadChecked(pCur, 0, (u32)nWant, aChk)==SQLITE_OK
+          && memcmp(aChk, aWant, (size_t)nWant)==0);
+    check("intsp case4: restored key is 35",
+          sqlite3BtreeIntegerKey(pCur)==35);
+  }
+  check("intsp case4: Next -> 40",
+        sqlite3BtreeNext(pCur, 0)==SQLITE_OK
+        && sqlite3BtreeIntegerKey(pCur)==40);
+  check("intsp case4: Next -> 50",
+        sqlite3BtreeNext(pCur, 0)==SQLITE_OK
+        && sqlite3BtreeIntegerKey(pCur)==50);
+
+  /* Case 5: Position on committed tree row 10, deferred BTREE_SAVEPOSITION
+  ** insert at rowid 36, then Delete(pCur) must delete 36 and preserve 10. */
+  check("intsp case5: seek 10",
+        sqlite3BtreeTableMoveto(pCur, 10, 0, &res)==SQLITE_OK && res==0);
+  check("intsp case5: insert 36",
+        insertIntSavePos(pCur, 36, "del36", 36)==SQLITE_OK);
+  check("intsp case5: delete 36",
+        sqlite3BtreeDelete(pCur, 0)==SQLITE_OK);
+  check("intsp case5: row 10 preserved",
+        sqlite3BtreeTableMoveto(pCur, 10, 0, &res)==SQLITE_OK && res==0);
+  check("intsp case5: row 36 deleted",
+        sqlite3BtreeTableMoveto(pCur, 36, 0, &res)==SQLITE_OK && res!=0);
+
+  /* Case 6: Last() (BTCF_AtLast) followed by deferred BTREE_SAVEPOSITION
+  ** insert at earlier rowid 12, then Next() must visit all later rows. */
+  check("intsp case6: Last",
+        sqlite3BtreeLast(pCur, &res)==SQLITE_OK && res==0);
+  check("intsp case6: insert 12",
+        insertIntSavePos(pCur, 12, "ins12", 12)==SQLITE_OK);
+  check("intsp case6: BTCF_AtLast cleared",
+        (pCur->curFlags & BTCF_AtLast)==0);
+  check("intsp case6: Next -> 15",
+        sqlite3BtreeNext(pCur, 0)==SQLITE_OK
+        && sqlite3BtreeIntegerKey(pCur)==15);
+
+  sqlite3BtreeCloseCursor(pCur2);
+  sqlite3BtreeCloseCursor(pCur);
+  sqlite3_free(pCur2);
+  sqlite3_free(pCur);
+  check("intsp: commit", sqlite3BtreeCommit(pBt)==SQLITE_OK);
+  sqlite3BtreeLeaveAll(db);
+  sqlite3_close(db);
+  removeDb(zDb);
+}
+
 int main(void){
   sqlite3_mem_methods wrapMem;
   if( sqlite3_config(SQLITE_CONFIG_GETMALLOC, &gRealMem)==SQLITE_OK ){
@@ -731,6 +952,7 @@ int main(void){
 
   runCachedSeekKeyTests();
   runAtLastSeekClearTests();
+  runIntKeySavePosTests();
 
   printf("prolly_btree_saveposition_test: %d passed, %d failed\n", nPass, nFail);
   return nFail ? 1 : 0;
