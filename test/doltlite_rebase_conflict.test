@@ -262,4 +262,90 @@ foreach {operation expected_err} {
   }
 }
 
+# Verify continuing after a conflict on an 'edit' step still enters the edit
+# pause (both when more steps follow and when it is the final step).
+foreach has_tail {1 0} {
+  foreach edit_mode {amend staged} {
+    reset_db
+    execsql {
+      CREATE TABLE t(id INT PRIMARY KEY, v INT);
+      INSERT INTO t VALUES(1, 1);
+      SELECT dolt_commit('-Am', 'base');
+      SELECT dolt_checkout('-b', 'feat');
+      UPDATE t SET v = 2 WHERE id = 1;
+      SELECT dolt_commit('-am', 'feat 1');
+    }
+    if {$has_tail} {
+      execsql {
+        INSERT INTO t VALUES(2, 20);
+        SELECT dolt_commit('-am', 'feat 2');
+      }
+    }
+    execsql {
+      SELECT dolt_checkout('main');
+      UPDATE t SET v = 9 WHERE id = 1;
+      SELECT dolt_commit('-am', 'main diverge');
+      SELECT dolt_checkout('feat');
+      BEGIN;
+      SELECT dolt_rebase('-i', 'main');
+      UPDATE dolt_rebase SET action = 'edit' WHERE commit_message = 'feat 1';
+    }
+    set prefix rebase-edit-conflict-tail${has_tail}-${edit_mode}
+    do_test $prefix-conflict {
+      set res [catchsql {SELECT dolt_rebase('--continue')}]
+      list [lindex $res 0] [db one {SELECT count(*) FROM dolt_conflicts}]
+    } {1 1}
+    do_test $prefix-resolve-enters-edit-pause {
+      execsql {
+        SELECT dolt_conflicts_resolve('--theirs', 't');
+        SELECT dolt_add('.');
+      }
+      set res [catchsql {SELECT dolt_rebase('--continue')}]
+      list [lindex $res 0] \
+           [string match {*edit action paused*} [lindex $res 1]] \
+           [db one {SELECT count(*) FROM dolt_rebase}] \
+           [db one {SELECT active_branch()}]
+    } [list 0 1 $has_tail dolt_rebase_feat]
+    if {$edit_mode eq "amend"} {
+      execsql {
+        INSERT INTO t VALUES(3, 30);
+        SELECT dolt_commit('--amend', '-am', 'feat 1 amended');
+      }
+    } else {
+      execsql {
+        INSERT INTO t VALUES(3, 30);
+        SELECT dolt_add('.');
+      }
+    }
+    do_test $prefix-finish {
+      set res [catchsql {SELECT dolt_rebase('--continue')}]
+      execsql {COMMIT}
+      list [lindex $res 0] [string match {*Successfully rebased*} [lindex $res 1]]
+    } {0 1}
+    set expected_rows [expr {$has_tail ? {1 2 2 20 3 30} : {1 2 3 30}}]
+    do_execsql_test $prefix-rows {
+      SELECT id, v FROM t ORDER BY id;
+    } $expected_rows
+    if {$edit_mode eq "amend"} {
+      set expected_log [expr {$has_tail
+        ? {{feat 2} {feat 1 amended} {main diverge}}
+        : {{feat 1 amended} {main diverge}}}]
+    } else {
+      set expected_log [expr {$has_tail
+        ? {{feat 2} {feat 1} {feat 1} {main diverge}}
+        : {{feat 1} {feat 1} {main diverge}}}]
+    }
+    set log_limit [llength $expected_log]
+    do_execsql_test $prefix-log "
+      SELECT message FROM dolt_log LIMIT $log_limit;
+    " $expected_log
+    do_execsql_test $prefix-clean {
+      SELECT active_branch();
+      SELECT count(*) FROM dolt_status;
+      SELECT count(*) FROM dolt_branches WHERE name = 'dolt_rebase_feat';
+      PRAGMA integrity_check;
+    } {feat 0 0 ok}
+  }
+}
+
 finish_test
