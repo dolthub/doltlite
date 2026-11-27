@@ -443,10 +443,13 @@ static int gcMarkDrain(
     }
 
     if( localOnly ){
-      int has = 0;
-      rc = chunkStoreHas(cs, &current.hash, &has);
+      int i = -1;
+      /* Only chunks in the local index snapshot have visited bits in
+      ** q->marked; source-cache chunks are not tracked and must not be
+      ** walked here. */
+      rc = csIndexSpoolFind(q->marked->pIndex, &current.hash, &i);
       if( rc!=SQLITE_OK ) break;
-      if( !has ){
+      if( i<0 ){
         *pPartial = 1;
         continue;
       }
