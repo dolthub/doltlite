@@ -5443,6 +5443,10 @@ static int vec1DecodeModel(
   if( nCodebook>0 ){
     if( (pMod->hdr.flags & VEC1_MODEL_BITQUANT)==0 ){
       pMod->nCodeElem = (pMod->hdr.nElem + nCodebook-1)/nCodebook;
+      if( (u64)(nCodebook-1) * (u64)pMod->nCodeElem >= (u64)pMod->hdr.nElem ){
+        *pzErr = sqlite3_mprintf("vec1: model is corrupt");
+        return SQLITE_ERROR;
+      }
       pMod->aModel = (float*)pCsr;
       pCsr += (nCodebook*pMod->nCodeElem*VEC1_PQ_CODEBOOK_SZ * sizeof_f32);
     }else{
@@ -8393,6 +8397,7 @@ static void vec1DecodeVector(
         (ii * VEC1_PQ_CODEBOOK_SZ + aCode[ii]) * pMod->nCodeElem
       ];
       int nCopy = MIN(pMod->nCodeElem, nElem - ii*pMod->nCodeElem);
+      if( nCopy<=0 ) break;
       memcpy(&aVec[ii * pMod->nCodeElem], aCopy, nCopy*sizeof_f32);
     }
   }
