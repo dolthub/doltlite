@@ -83,4 +83,41 @@ do_faultsim_test 1.6 -faults oom-transient -prep {
       {1 {dolt_hashof_db: commit load failed}}
 }
 
+catch {db close}
+forcedelete test_hashof_peer.db
+sqlite3 db1 test_hashof_peer.db
+sqlite3 db2 test_hashof_peer.db
+
+db1 eval {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+  CREATE INDEX idx ON t(v);
+  INSERT INTO t VALUES(1, 10);
+  SELECT dolt_commit('-Am', 'seed');
+}
+
+set peer_step 1
+foreach {label implicit explicit} {
+  db      {dolt_hashof_db()}           {dolt_hashof_db('WORKING')}
+  catalog {dolt_hashof_catalog()}      {dolt_hashof_catalog('WORKING')}
+  table   {dolt_hashof_table('t')}     {dolt_hashof_table('t', 'WORKING')}
+  index   {dolt_hashof_index('idx')}   {dolt_hashof_index('idx', 'WORKING')}
+} {
+  incr peer_step
+  set before [db1 one "SELECT $implicit"]
+  db2 eval "
+    INSERT INTO t VALUES($peer_step, [expr {$peer_step * 10}]);
+    SELECT dolt_commit('-Am', 'peer $label');
+  "
+  set after [db1 one "SELECT $implicit"]
+  set after_working [db1 one "SELECT $explicit"]
+  set peer_hash [db2 one "SELECT $implicit"]
+  do_test 2.$label-changed [list expr {$after ne $before}] 1
+  do_test 2.$label-matches-working [list expr {$after eq $after_working}] 1
+  do_test 2.$label-matches-peer [list expr {$after eq $peer_hash}] 1
+}
+
+db1 close
+db2 close
+forcedelete test_hashof_peer.db
+
 finish_test
