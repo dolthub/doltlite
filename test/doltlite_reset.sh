@@ -871,5 +871,29 @@ Error near line 8: no revert in progress" "$DB26"
 
 rm -f "$DB23" "$DB24" "$DB25" "$DB26"
 
+DB27=/tmp/test_reset_shadow_status_$$.db
+AUX27=/tmp/test_reset_shadow_aux_$$.db
+rm -f "$DB27" "$AUX27"
+python3 -c "import sqlite3
+c = sqlite3.connect('$AUX27')
+c.execute('CREATE TABLE dolt_status(table_name TEXT, status TEXT)')
+c.commit()
+c.close()"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-Am','init');
+ALTER TABLE t RENAME TO t2;" | $DOLTLITE "$DB27" > /dev/null 2>&1
+run_test "hard_reset_rename_ignores_attached_dolt_status" \
+  "ATTACH '$AUX27' AS aux;
+   SELECT dolt_reset('--hard');
+   SELECT count(*) FROM sqlite_master WHERE type='table' AND name='t';
+   SELECT count(*) FROM sqlite_master WHERE type='table' AND name='t2';
+   SELECT v FROM t WHERE id=1;" \
+  "0
+1
+0
+a" "$DB27"
+rm -f "$DB27" "$AUX27"
+
 
 dltest_finish
