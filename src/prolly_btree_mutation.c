@@ -367,6 +367,7 @@ void clearMergeCursorState(BtCursor *pCur){
   pCur->deferredMergedSeek = 0;
   pCur->mergeSrc = MERGE_SRC_TREE;
   pCur->mergeStepDir = 0;
+  pCur->curFlags &= ~BTCF_AtLast;
 }
 
 int currentMutMapEntry(BtCursor *pCur, ProllyMutMapEntry **ppEntry){

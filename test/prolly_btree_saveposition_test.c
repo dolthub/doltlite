@@ -508,6 +508,203 @@ static void runCachedSeekKeyTests(void){
   removeDb(zDb);
 }
 
+static void runAtLastSeekClearTests(void){
+  sqlite3 *db = 0;
+  Btree *pBt;
+  BtCursor *pCur = 0;
+  Table *pTab;
+  Index *pIdx;
+  KeyInfo *pKeyInfo = 0;
+  Parse sParse;
+  Pgno root = 0;
+  UnpackedRecord seekKey;
+  Mem aMem[2];
+  BtreePayload payload;
+  u8 aRec[128];
+  u8 aFirstKey[128];
+  int nFirstKey = 0;
+  int rc;
+  int res = 0;
+  int exact = 0;
+  char zGot[64];
+  const char *zDb = "savepos_atlast_seek.db";
+
+  removeDb(zDb);
+  rc = sqlite3_open(zDb, &db);
+  check("atlast: open", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ){ sqlite3_close(db); return; }
+
+  if( execSql(db,
+        "CREATE TABLE t_int(id INTEGER PRIMARY KEY, v TEXT);"
+        "INSERT INTO t_int VALUES(10,'a'),(20,'b'),(30,'c');"
+        "CREATE TABLE t_idx(id INTEGER PRIMARY KEY, k TEXT);"
+        "CREATE INDEX t_idx_k ON t_idx(k);"
+        "INSERT INTO t_idx VALUES(2,'b'),(4,'d'),(6,'f'),(8,'h');")!=SQLITE_OK ){
+    nFail++;
+    sqlite3_close(db);
+    removeDb(zDb);
+    return;
+  }
+
+  sqlite3BtreeEnterAll(db);
+  pBt = db->aDb[0].pBt;
+  pTab = sqlite3FindTable(db, "t_int", "main");
+  pIdx = sqlite3FindIndex(db, "t_idx_k", "main");
+  check("atlast: resolved table and index", pBt!=0 && pTab!=0 && pIdx!=0);
+  if( !pBt || !pTab || !pIdx ){
+    sqlite3BtreeLeaveAll(db);
+    sqlite3_close(db);
+    removeDb(zDb);
+    return;
+  }
+
+  pCur = sqlite3_malloc(sqlite3BtreeCursorSize());
+  check("atlast: alloc cursor", pCur!=0);
+  if( !pCur ){
+    sqlite3BtreeLeaveAll(db);
+    sqlite3_close(db);
+    removeDb(zDb);
+    return;
+  }
+  memset(pCur, 0, sqlite3BtreeCursorSize());
+
+  check("atlast: begin write txn", sqlite3BtreeBeginTrans(pBt, 1, 0)==SQLITE_OK);
+
+  /* 1. Intkey table with pending mutmap edit:
+  ** Last() sets BTCF_AtLast; TableMoveto() to an absent earlier key takes
+  ** the deferred-miss path (mmActive=1), and Next() must visit all rows. */
+  root = pTab->tnum;
+  check("atlast int: open cursor",
+        sqlite3BtreeCursor(pBt, root, BTREE_WRCSR, 0, pCur)==SQLITE_OK);
+  {
+    int nRec = makeTextIntRecord(aRec, "p", 25);
+    memset(&payload, 0, sizeof(payload));
+    payload.nKey = 25;
+    payload.pData = aRec;
+    payload.nData = nRec;
+    check("atlast int: pending insert 25",
+          sqlite3BtreeInsert(pCur, &payload, 0, 0)==SQLITE_OK);
+  }
+  check("atlast int: Last",
+        sqlite3BtreeLast(pCur, &res)==SQLITE_OK && res==0);
+  check("atlast int: Last key is 30", sqlite3BtreeIntegerKey(pCur)==30);
+  check("atlast int: BTCF_AtLast set after Last",
+        (pCur->curFlags & BTCF_AtLast)!=0);
+
+  check("atlast int: TableMoveto(5) deferred miss",
+        sqlite3BtreeTableMoveto(pCur, 5, 0, &res)==SQLITE_OK && res==-1);
+  check("atlast int: BTCF_AtLast cleared after TableMoveto",
+        (pCur->curFlags & BTCF_AtLast)==0);
+  {
+    i64 aWant[] = { 10, 20, 25, 30 };
+    int i;
+    for(i=0; i<4; i++){
+      rc = sqlite3BtreeNext(pCur, 0);
+      check("atlast int: Next rc", rc==SQLITE_OK);
+      if( rc!=SQLITE_OK ) break;
+      check("atlast int: Next key", sqlite3BtreeIntegerKey(pCur)==aWant[i]);
+    }
+    check("atlast int: Next EOF", sqlite3BtreeNext(pCur, 0)==SQLITE_DONE);
+  }
+
+  /* Also verify TableMoveto() to an existing committed key after Last(). */
+  check("atlast int: Last before exact hit",
+        sqlite3BtreeLast(pCur, &res)==SQLITE_OK && res==0);
+  check("atlast int: TableMoveto(10) exact hit",
+        sqlite3BtreeTableMoveto(pCur, 10, 0, &res)==SQLITE_OK && res==0);
+  check("atlast int: BTCF_AtLast cleared on exact hit",
+        (pCur->curFlags & BTCF_AtLast)==0);
+  {
+    i64 aWant[] = { 20, 25, 30 };
+    int i;
+    for(i=0; i<3; i++){
+      rc = sqlite3BtreeNext(pCur, 0);
+      check("atlast int exact: Next rc", rc==SQLITE_OK);
+      if( rc!=SQLITE_OK ) break;
+      check("atlast int exact: Next key", sqlite3BtreeIntegerKey(pCur)==aWant[i]);
+    }
+    check("atlast int exact: Next EOF", sqlite3BtreeNext(pCur, 0)==SQLITE_DONE);
+  }
+  sqlite3BtreeCloseCursor(pCur);
+
+  /* 2. Non-intkey index with pending mutmap edit:
+  ** Last() sets BTCF_AtLast; SeekMergedAtOrAfter() and IndexMoveto() must
+  ** clear BTCF_AtLast so subsequent Next() visits all remaining rows. */
+  memset(&sParse, 0, sizeof(sParse));
+  sParse.db = db;
+  pKeyInfo = sqlite3KeyInfoOfIndex(&sParse, pIdx);
+  check("atlast idx: KeyInfo", pKeyInfo!=0);
+  if( pKeyInfo ){
+    const u8 *pKey = 0;
+    int nKey = 0;
+    memset(pCur, 0, sqlite3BtreeCursorSize());
+    check("atlast idx: open cursor",
+          sqlite3BtreeCursor(pBt, pIdx->tnum, BTREE_WRCSR, pKeyInfo, pCur)==SQLITE_OK);
+    /* Capture sort key of first entry ('b') before adding pending edits. */
+    check("atlast idx: First",
+          sqlite3BtreeFirst(pCur, &res)==SQLITE_OK && res==0);
+    check("atlast idx: capture first sort key",
+          prollyBtCursorCurrentSortKey(pCur, &pKey, &nKey)==SQLITE_OK
+          && nKey>0 && nKey<=(int)sizeof(aFirstKey));
+    if( nKey>0 && nKey<=(int)sizeof(aFirstKey) ){
+      memcpy(aFirstKey, pKey, (size_t)nKey);
+      nFirstKey = nKey;
+    }
+
+    check("atlast idx: pending insert 'e'",
+          insertSavePos(pCur, "e", 5)==SQLITE_OK);
+
+    check("atlast idx: Last before SeekMergedAtOrAfter",
+          sqlite3BtreeLast(pCur, &res)==SQLITE_OK && res==0);
+    check("atlast idx: BTCF_AtLast set", (pCur->curFlags & BTCF_AtLast)!=0);
+    check("atlast idx: SeekMergedAtOrAfter('b')",
+          prollyBtCursorSeekMergedAtOrAfter(pCur, aFirstKey, nFirstKey, &exact)==SQLITE_OK
+          && exact==1);
+    check("atlast idx: BTCF_AtLast cleared by SeekMergedAtOrAfter",
+          (pCur->curFlags & BTCF_AtLast)==0);
+    check("atlast idx: current key is 'b'",
+          readCursorKey(pCur, zGot, (int)sizeof(zGot))==SQLITE_OK);
+    checkStr("atlast idx: current key str", zGot, "b");
+    {
+      const char *aWant[] = { "d", "e", "f", "h" };
+      checkRemainingForward("atlast idx merged", pCur, aWant, 4);
+    }
+
+    /* Last() followed by IndexMoveto() to an earlier key, then Next(). */
+    check("atlast idx: Last before IndexMoveto",
+          sqlite3BtreeLast(pCur, &res)==SQLITE_OK && res==0);
+    check("atlast idx: BTCF_AtLast set before IndexMoveto",
+          (pCur->curFlags & BTCF_AtLast)!=0);
+    memset(&seekKey, 0, sizeof(seekKey));
+    memset(aMem, 0, sizeof(aMem));
+    aMem[0].flags = MEM_Str | MEM_Term;
+    aMem[0].z = "d";
+    aMem[0].n = 1;
+    aMem[0].enc = SQLITE_UTF8;
+    seekKey.pKeyInfo = pKeyInfo;
+    seekKey.aMem = aMem;
+    seekKey.nField = 1;
+    seekKey.default_rc = 0;
+    check("atlast idx: IndexMoveto('d')",
+          sqlite3BtreeIndexMoveto(pCur, &seekKey, &res)==SQLITE_OK && res==0);
+    check("atlast idx: BTCF_AtLast cleared by IndexMoveto",
+          (pCur->curFlags & BTCF_AtLast)==0);
+    {
+      const char *aWant[] = { "e", "f", "h" };
+      checkRemainingForward("atlast idx moveto", pCur, aWant, 3);
+    }
+
+    sqlite3BtreeCloseCursor(pCur);
+    sqlite3KeyInfoUnref(pKeyInfo);
+  }
+
+  sqlite3_free(pCur);
+  check("atlast: commit", sqlite3BtreeCommit(pBt)==SQLITE_OK);
+  sqlite3BtreeLeaveAll(db);
+  sqlite3_close(db);
+  removeDb(zDb);
+}
+
 int main(void){
   sqlite3_mem_methods wrapMem;
   if( sqlite3_config(SQLITE_CONFIG_GETMALLOC, &gRealMem)==SQLITE_OK ){
@@ -533,6 +730,7 @@ int main(void){
       "t2_k");
 
   runCachedSeekKeyTests();
+  runAtLastSeekClearTests();
 
   printf("prolly_btree_saveposition_test: %d passed, %d failed\n", nPass, nFail);
   return nFail ? 1 : 0;
