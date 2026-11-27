@@ -105,26 +105,53 @@ static void doltliteDefaultBranchFunc(
   }
   if( argc==1 ){
     const char *zNew;
+    int hadExplicitTxn = !db->autoCommit;
+    int bHookApproved = 0;
     int rc;
+    if( doltliteCmdRejectInWriteStatement(ctx, "set default branch") ) return;
+    if( doltliteCmdRejectDetached(ctx) ) return;
+    if( doltliteCmdRejectReadOnly(ctx) ) return;
     if( sqlite3_value_type(argv[0])!=SQLITE_TEXT ){
-      sqlite3_result_error(ctx,
-        "dolt_default_branch(name): name must be text", -1);
+      doltliteVcResultError(ctx, db,
+        "dolt_default_branch(name): name must be text");
       return;
     }
     zNew = (const char*)sqlite3_value_text(argv[0]);
     if( !zNew || !zNew[0] ){
-      sqlite3_result_error(ctx, "branch name required", -1);
+      doltliteVcResultError(ctx, db, "branch name required");
+      return;
+    }
+    if( hadExplicitTxn && doltliteVcSealPrecheck(ctx, &bHookApproved) ){
+      (void)doltliteVcSealSavepointError(db);
       return;
     }
     rc = doltliteMutateRefs(db, mutateDefaultBranch, (void*)zNew);
+    if( rc==SQLITE_CONSTRAINT && doltliteSessionHasUnresolvedConflicts(db) ){
+      doltliteVcResultError(ctx, db,
+        "cannot update refs: unresolved merge conflicts");
+      return;
+    }
     if( rc==SQLITE_NOTFOUND ){
       char *zErr = sqlite3_mprintf("branch '%s' not found", zNew);
-      sqlite3_result_error(ctx, zErr ? zErr : "branch not found", -1);
+      doltliteVcResultError(ctx, db, zErr ? zErr : "branch not found");
       sqlite3_free(zErr);
       return;
     }
     if( rc!=SQLITE_OK ){
+      (void)doltliteVcSealSavepointError(db);
       sqlite3_result_error_code(ctx, rc);
+      return;
+    }
+    if( hadExplicitTxn ){
+      int (*xHook)(void*) = db->xCommitCallback;
+      if( bHookApproved ) db->xCommitCallback = 0;
+      rc = doltliteVcSealBranchStyleTxn(db);
+      db->xCommitCallback = xHook;
+    }else{
+      rc = doltliteVcSealAutocommitSavepoint(db);
+    }
+    if( rc!=SQLITE_OK ){
+      doltliteVcResultSealError(ctx, db, rc);
       return;
     }
     sqlite3_result_int(ctx, 0);
