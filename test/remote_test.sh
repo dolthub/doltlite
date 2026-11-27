@@ -2751,6 +2751,9 @@ echo "=== Relative parent segments and drive roots in file:// URLs ==="
 CP="$TMPDIR/rel_clean"
 mkdir -p "$CP/a/b/c"
 CP_REAL="$(cd "$CP" && pwd -P)"
+if command -v cygpath >/dev/null 2>&1; then
+  CP_REAL="$(cygpath -m "$CP_REAL")"
+fi
 DB_ABS="$(cd "$(dirname "$DB")" && pwd)/$(basename "$DB")"
 "$DB_ABS" "$CP/a/repo.db" <<ENDSQL >/dev/null
 CREATE TABLE t(id INTEGER PRIMARY KEY, loc TEXT);
