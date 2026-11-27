@@ -1084,6 +1084,101 @@ int csReplayWalTail(ChunkStore *cs, i64 iStart){
   return csReplayWalFrom(cs, iStart, 0, 0, 1, -1);
 }
 
+/* Verify that the file prefix up to cs->file.iFileSize still ends with
+** the sealed header or WAL root manifest matching pRefsHash. */
+int csVerifyWalTailPrefix(
+  const ChunkStore *cs,
+  const ProllyHash *pRefsHash
+){
+  u8 aRoot[1 + CHUNK_MANIFEST_SIZE];
+  i64 contentEnd;
+  i64 rootOff;
+  int hashState;
+  int rc;
+
+  if( cs->wal.nWalData==0 ){
+    u8 expected[CHUNK_MANIFEST_SIZE];
+    if( cs->file.iFileSize!=cs->wal.iWalOffset ) return SQLITE_MISMATCH;
+    rc = sqlite3OsRead(cs->file.pFile, aRoot+1, CHUNK_MANIFEST_SIZE, 0);
+    if( rc==SQLITE_IOERR_SHORT_READ ) return SQLITE_MISMATCH;
+    if( rc!=SQLITE_OK ) return rc;
+    csSerializeManifest(cs, expected);
+    memcpy(expected + CS_MANIFEST_REFS_HASH_OFF,
+           pRefsHash->data, PROLLY_HASH_SIZE);
+    csManifestSeal(expected, 0);
+    if( memcmp(aRoot+1, expected, sizeof(expected))!=0 ) return SQLITE_MISMATCH;
+    return SQLITE_OK;
+  }
+
+  contentEnd = cs->wal.iWalOffset + cs->wal.nWalData;
+  rootOff = contentEnd - (i64)sizeof(aRoot);
+  if( rootOff < cs->wal.iWalOffset ) return SQLITE_MISMATCH;
+  rc = sqlite3OsRead(cs->file.pFile, aRoot, (int)sizeof(aRoot), rootOff);
+  /* A short read means the file shrank (compaction/replacement): not
+  ** eligible, reload. Any other IO failure is a real error and must not
+  ** be absorbed by the reload retry. */
+  if( rc==SQLITE_IOERR_SHORT_READ ) return SQLITE_MISMATCH;
+  if( rc!=SQLITE_OK ) return rc;
+  if( aRoot[0]!=CS_WAL_TAG_ROOT ) return SQLITE_MISMATCH;
+  hashState = csManifestHashState(aRoot+1, rootOff);
+  if( hashState!=CS_MANIFEST_HASH_OK ){
+    hashState = csManifestHashStateOffsetless(aRoot+1);
+  }
+  if( hashState!=CS_MANIFEST_HASH_OK
+   || memcmp(aRoot + 1 + CS_MANIFEST_REFS_HASH_OFF,
+             pRefsHash->data, PROLLY_HASH_SIZE)!=0 ){
+    return SQLITE_MISMATCH;
+  }
+  return SQLITE_OK;
+}
+
+/* Replay records appended to the open inode past cs->file.iFileSize into a
+** disposable store so read-only probes can inspect newer branch tips without
+** mutating the live ChunkStore or its pinned snapshot. */
+int csReplayWalTailIntoTemp(ChunkStore *cs, ChunkStore *pTmp){
+  int rc;
+
+  memset(pTmp, 0, sizeof(*pTmp));
+  if( cs->staging.nRecentUncommitted>0 || cs->bRefsStale
+   || cs->corruptMidStream || cs->notADatabase || cs->file.pFile==0
+   || cs->wal.iWalOffset<=0
+   || (cs->wal.nWalData!=0
+       && cs->wal.nWalData < (i64)(1 + CHUNK_MANIFEST_SIZE)) ){
+    return SQLITE_MISMATCH;
+  }
+
+  rc = csVerifyWalTailPrefix(cs, &cs->refs.committedRefsHash);
+  if( rc!=SQLITE_OK ) return rc;
+
+  pTmp->readOnly = 1;
+  pTmp->file.pFile = cs->file.pFile;
+  pTmp->file.iFileSize = cs->file.iFileSize;
+  pTmp->index = cs->index;
+  pTmp->wal = cs->wal;
+  pTmp->refs.refsHash = cs->refs.committedRefsHash;
+  pTmp->refs.committedRefsHash = cs->refs.committedRefsHash;
+
+  if( cs->staging.nRecent > 0 ){
+    rc = csGrowRecent(pTmp, cs->staging.nRecent);
+    if( rc!=SQLITE_OK ) goto tail_tmp_err;
+    memcpy(pTmp->staging.aRecent, cs->staging.aRecent,
+           (size_t)cs->staging.nRecent * sizeof(ChunkIndexEntry));
+    memcpy(pTmp->staging.aRecentZeroTail, cs->staging.aRecentZeroTail,
+           (size_t)cs->staging.nRecent * sizeof(i64));
+    pTmp->staging.nRecent = cs->staging.nRecent;
+  }
+
+  rc = csReplayWalTail(pTmp, pTmp->file.iFileSize);
+  if( rc!=SQLITE_OK ) goto tail_tmp_err;
+  return SQLITE_OK;
+
+tail_tmp_err:
+  pTmp->file.pFile = 0;
+  memset(&pTmp->index, 0, sizeof(pTmp->index));
+  chunkStoreClose(pTmp);
+  return rc;
+}
+
 int csReplayWalSkipping(ChunkStore *cs, i64 iSkipStart, i64 iSkipEnd,
                         i64 iEnd){
   cs->wal.iCheckpointOffset = 0;
