@@ -157,6 +157,74 @@ int main(){
   remove(dbpath);
   remove(DOLTLITE_TEST_TMPDIR "/test_ancestor.db-chunks");
 
+  /* Autocommit peer refresh: db1 must see commits and branches created by db2
+  ** without needing a prior table query. */
+  {
+    sqlite3 *db1 = 0;
+    sqlite3 *db2 = 0;
+    const char *peer_dbpath = DOLTLITE_TEST_TMPDIR "/test_ancestor_peer.db";
+    char peer_c2_buf[128];
+    char peer_feat_buf[128];
+
+    remove(peer_dbpath);
+    remove(DOLTLITE_TEST_TMPDIR "/test_ancestor_peer.db-chunks");
+
+    check("peer: open db1", sqlite3_open(peer_dbpath, &db1)==SQLITE_OK);
+    check("peer: open db2", sqlite3_open(peer_dbpath, &db2)==SQLITE_OK);
+
+    check("peer: init table",
+          execSql(db1, "CREATE TABLE t1(a INTEGER PRIMARY KEY, b TEXT)")==SQLITE_OK);
+    check("peer: init row",
+          execSql(db1, "INSERT INTO t1 VALUES(1, 'init')")==SQLITE_OK);
+    check("peer: init commit",
+          execSql(db1, "SELECT dolt_commit('-Am', 'init')")==SQLITE_OK);
+
+    /* Prime db1's cached refs/HEAD before db2 writes. */
+    ancestor = queryScalarText(db1, "SELECT dolt_merge_base('HEAD', 'HEAD')");
+    check("peer: initial merge_base succeeds", strlen(ancestor)==40);
+
+    /* Peer db2 advances main, forks feature, and commits on both branches. */
+    check("peer: db2 insert c2",
+          execSql(db2, "INSERT INTO t1 VALUES(2, 'main-c2')")==SQLITE_OK);
+    check("peer: db2 commit c2",
+          execSql(db2, "SELECT dolt_commit('-Am', 'main c2')")==SQLITE_OK);
+    snprintf(peer_c2_buf, sizeof(peer_c2_buf), "%s",
+             queryScalarText(db2, "SELECT dolt_hashof('HEAD')"));
+
+    check("peer: db2 checkout -b feature",
+          execSql(db2, "SELECT dolt_checkout('-b', 'feature')")==SQLITE_OK);
+    check("peer: db2 insert feat",
+          execSql(db2, "INSERT INTO t1 VALUES(3, 'feat-c3')")==SQLITE_OK);
+    check("peer: db2 commit feat",
+          execSql(db2, "SELECT dolt_commit('-Am', 'feature c3')")==SQLITE_OK);
+    snprintf(peer_feat_buf, sizeof(peer_feat_buf), "%s",
+             queryScalarText(db2, "SELECT dolt_hashof('HEAD')"));
+
+    check("peer: db2 checkout main",
+          execSql(db2, "SELECT dolt_checkout('main')")==SQLITE_OK);
+    check("peer: db2 insert c4",
+          execSql(db2, "INSERT INTO t1 VALUES(4, 'main-c4')")==SQLITE_OK);
+    check("peer: db2 commit c4",
+          execSql(db2, "SELECT dolt_commit('-Am', 'main c4')")==SQLITE_OK);
+
+    /* db1 in autocommit mode must immediately resolve feature and return c2. */
+    ancestor = queryScalarText(db1, "SELECT dolt_merge_base('HEAD', 'feature')");
+    check("peer: db1 sees new branch and updated merge_base",
+          strcmp(ancestor, peer_c2_buf)==0);
+
+    /* Peer db2 merges feature into main; db1 must see the advanced merge base. */
+    check("peer: db2 merge feature",
+          execSql(db2, "SELECT dolt_merge('feature')")==SQLITE_OK);
+    ancestor = queryScalarText(db1, "SELECT dolt_merge_base('HEAD', 'feature')");
+    check("peer: db1 sees advanced merge_base after peer merge",
+          strcmp(ancestor, peer_feat_buf)==0);
+
+    sqlite3_close(db1);
+    sqlite3_close(db2);
+    remove(peer_dbpath);
+    remove(DOLTLITE_TEST_TMPDIR "/test_ancestor_peer.db-chunks");
+  }
+
   printf("\n%d passed, %d failed\n", nPass, nFail);
   return nFail>0 ? 1 : 0;
 }
