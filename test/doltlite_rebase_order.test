@@ -55,4 +55,86 @@ foreach depth {0 3} {
   }
 }
 
+# Verify infinite rebase_order values (+Inf / -Inf) survive plan rewrites
+# during both edit pauses and conflict pauses.
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+  INSERT INTO t VALUES(0, 0);
+  SELECT dolt_commit('-Am', 'base');
+  SELECT dolt_checkout('-b', 'feat');
+  INSERT INTO t VALUES(1, 1);
+  SELECT dolt_commit('-am', 'f1');
+  INSERT INTO t VALUES(2, 2);
+  SELECT dolt_commit('-am', 'f2');
+  INSERT INTO t VALUES(3, 3);
+  SELECT dolt_commit('-am', 'f3');
+  SELECT dolt_rebase('-i', 'main');
+  UPDATE dolt_rebase SET rebase_order = -9e999, action = 'edit'
+    WHERE commit_message = 'f3';
+  UPDATE dolt_rebase SET rebase_order = 9e999
+    WHERE commit_message = 'f2';
+}
+do_test rebase-order-inf-edit-pause {
+  set res [catchsql {SELECT dolt_rebase('--continue')}]
+  list [lindex $res 0] [string match {*edit action paused*} [lindex $res 1]]
+} {0 1}
+do_execsql_test rebase-order-inf-edit-remaining {
+  SELECT commit_message, rebase_order = 9e999 FROM dolt_rebase ORDER BY rebase_order;
+} {f1 0 f2 1}
+do_test rebase-order-inf-edit-finish {
+  set res [catchsql {SELECT dolt_rebase('--continue')}]
+  list [lindex $res 0] [string match {*Successfully rebased*} [lindex $res 1]]
+} {0 1}
+do_execsql_test rebase-order-inf-edit-log {
+  SELECT message FROM dolt_log LIMIT 3;
+} {f2 f1 f3}
+do_execsql_test rebase-order-inf-edit-integrity {
+  PRAGMA integrity_check;
+} {ok}
+
+reset_db
+execsql {
+  CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+  INSERT INTO t VALUES(1, 1);
+  SELECT dolt_commit('-Am', 'base');
+  SELECT dolt_checkout('-b', 'feat');
+  UPDATE t SET v = 2 WHERE id = 1;
+  SELECT dolt_commit('-am', 'f1');
+  INSERT INTO t VALUES(2, 20);
+  SELECT dolt_commit('-am', 'f2');
+  SELECT dolt_checkout('main');
+  UPDATE t SET v = 9 WHERE id = 1;
+  SELECT dolt_commit('-am', 'main diverge');
+  SELECT dolt_checkout('feat');
+  BEGIN;
+  SELECT dolt_rebase('-i', 'main');
+  UPDATE dolt_rebase SET rebase_order = -9e999 WHERE commit_message = 'f1';
+  UPDATE dolt_rebase SET rebase_order = 9e999 WHERE commit_message = 'f2';
+}
+do_test rebase-order-inf-conflict-pause {
+  set res [catchsql {SELECT dolt_rebase('--continue')}]
+  list [lindex $res 0] \
+       [string match {*data conflict*} [lindex $res 1]] \
+       [db one {SELECT count(*) FROM dolt_conflicts}]
+} {1 1 1}
+do_execsql_test rebase-order-inf-conflict-remaining {
+  SELECT commit_message, rebase_order = -9e999, rebase_order = 9e999
+    FROM dolt_rebase ORDER BY rebase_order;
+} {f1 1 0 f2 0 1}
+do_test rebase-order-inf-conflict-finish {
+  execsql {
+    SELECT dolt_conflicts_resolve('--theirs', 't');
+    SELECT dolt_add('.');
+  }
+  set res [catchsql {SELECT dolt_rebase('--continue')}]
+  execsql {COMMIT}
+  list [lindex $res 0] [string match {*Successfully rebased*} [lindex $res 1]]
+} {0 1}
+do_execsql_test rebase-order-inf-conflict-result {
+  SELECT id, v FROM t ORDER BY id;
+  SELECT message FROM dolt_log LIMIT 3;
+  PRAGMA integrity_check;
+} {1 2 2 20 f2 f1 {main diverge} ok}
+
 finish_test

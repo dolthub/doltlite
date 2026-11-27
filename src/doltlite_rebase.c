@@ -1245,6 +1245,7 @@ static int rebaseWritePlanRows(
   const RebasePlanRow *aPlan,
   int nPlan
 ){
+  sqlite3_stmt *pStmt = 0;
   int rc;
   int i;
 
@@ -1256,26 +1257,42 @@ static int rebaseWritePlanRows(
     "  commit_hash TEXT NOT NULL CHECK(dolt_rebase_commit_check(commit_hash)),"
     "  commit_message TEXT NOT NULL"
     ")");
+  if( rc!=SQLITE_OK || nPlan<=0 ) return rc;
+
+  rc = sqlite3_prepare_v2(
+      db, "INSERT INTO main.dolt_rebase VALUES (?1, ?2, ?3, ?4)", -1, &pStmt, 0);
   if( rc!=SQLITE_OK ) return rc;
 
   for(i=0; i<nPlan; i++){
     char zHex[PROLLY_HASH_SIZE*2+1];
-    char zOrder[64];
-    char *zSql;
+    const char *zAction = aPlan[i].zAction ? aPlan[i].zAction : "pick";
+    const char *zMsg = aPlan[i].zCommitMessage ? aPlan[i].zCommitMessage : "";
+    sqlite3_reset(pStmt);
+    sqlite3_clear_bindings(pStmt);
     doltliteHashToHex(&aPlan[i].commitHash, zHex);
-    sqlite3_snprintf(sizeof(zOrder), zOrder, "%!.17g", aPlan[i].order);
-    zSql = sqlite3_mprintf(
-      "INSERT INTO main.dolt_rebase VALUES (%s, %Q, %Q, %Q)",
-      zOrder,
-      aPlan[i].zAction ? aPlan[i].zAction : "pick",
-      zHex,
-      aPlan[i].zCommitMessage ? aPlan[i].zCommitMessage : "");
-    if( !zSql ) return SQLITE_NOMEM;
-    rc = sqlite3_exec(db, zSql, 0, 0, 0);
-    sqlite3_free(zSql);
-    if( rc!=SQLITE_OK ) return rc;
+    rc = sqlite3_bind_double(pStmt, 1, aPlan[i].order);
+    if( rc==SQLITE_OK ){
+      rc = sqlite3_bind_text(pStmt, 2, zAction, -1, SQLITE_TRANSIENT);
+    }
+    if( rc==SQLITE_OK ){
+      rc = sqlite3_bind_text(pStmt, 3, zHex, -1, SQLITE_TRANSIENT);
+    }
+    if( rc==SQLITE_OK ){
+      rc = sqlite3_bind_text(pStmt, 4, zMsg, -1, SQLITE_TRANSIENT);
+    }
+    if( rc!=SQLITE_OK ) break;
+    rc = sqlite3_step(pStmt);
+    if( rc!=SQLITE_DONE ){
+      if( rc==SQLITE_OK || rc==SQLITE_ROW ) rc = SQLITE_ERROR;
+      break;
+    }
+    rc = SQLITE_OK;
   }
-  return SQLITE_OK;
+  {
+    int rc2 = sqlite3_finalize(pStmt);
+    if( rc==SQLITE_OK ) rc = rc2;
+  }
+  return rc;
 }
 
 
@@ -2792,6 +2809,7 @@ static void doltliteRebasePausedContinue(
   int idx;
   int unstaged = 0;
   int bDropped = 0;
+  int committed = 0;
   int pausedAgain = 0;
   int rc;
   ProllyHash pauseCat;
@@ -2887,9 +2905,7 @@ static void doltliteRebasePausedContinue(
   rc = rebaseDropPlan(db);
   if( rc==SQLITE_OK ) bDropped = 1;
   if( rc==SQLITE_OK && idx<nPlan ){
-    int committed = 0;
     rc = rebaseCommitResolvedStep(db, &aPlan[idx], &committed);
-    (void)committed;
   }
   if( rc!=SQLITE_OK ){
     if( bDropped ){
@@ -2899,6 +2915,33 @@ static void doltliteRebasePausedContinue(
     sqlite3_free(zOrig);
     sqlite3_free(zWorking);
     sqlite3_result_error_code(context, rc);
+    return;
+  }
+
+  if( idx<nPlan && committed
+   && aPlan[idx].zAction && strcmp(aPlan[idx].zAction, "edit")==0 ){
+    int keepEmpty = (doltliteGetSessionRebaseFlags(db)
+                     & WS_REBASE_FLAG_EMPTY_KEEP)!=0;
+    rc = rebaseEnterEditPause(
+        db, context, aPlan + idx + 1, nPlan - idx - 1, &aPlan[idx],
+        &pauseCat, &pauseHead, zPauseOrig, zPauseReturn, keepEmpty);
+    if( rc!=SQLITE_OK ){
+      int arc = rebaseAbortPausedSession(db);
+      rebaseFreePlan(aPlan, nPlan);
+      sqlite3_free(zOrig);
+      sqlite3_free(zWorking);
+      if( arc!=SQLITE_OK ){
+        rebaseResultRecoveryFailure(context, arc);
+      }else{
+        doltliteCommandKeepEffects(db);
+        doltliteVcResultErrorCode(context, db,
+            "rebase failed — branch restored to pre-rebase state", rc);
+      }
+      return;
+    }
+    rebaseFreePlan(aPlan, nPlan);
+    sqlite3_free(zOrig);
+    sqlite3_free(zWorking);
     return;
   }
 
