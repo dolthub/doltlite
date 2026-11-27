@@ -775,4 +775,52 @@ run_test_error_match "at_wor_missing_table_null_pk" \
   "table not found: w at HEAD~1" "$DBPKE"
 rm -f "$DBPKE"
 
+DBJOIN=/tmp/test_at_join_order_$$.db; rm -f "$DBJOIN"
+$DOLTLITE "$DBJOIN" <<'SQL' >/dev/null
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'one');
+SELECT dolt_commit('-Am', 'c1');
+SELECT dolt_tag('c1');
+INSERT INTO t VALUES (2, 'two');
+SELECT dolt_commit('-Am', 'c2');
+SELECT dolt_tag('c2');
+CREATE TABLE refs(r TEXT);
+INSERT INTO refs VALUES ('c1'), ('c2');
+CREATE TABLE pad(x INT);
+INSERT INTO pad VALUES (1);
+SQL
+
+run_test "at_join_valid_outer_refs" \
+  "SELECT refs.r, a.id, a.v FROM refs JOIN dolt_at_t(refs.r) a ORDER BY refs.r, a.id;" \
+  "c1|1|one
+c2|1|one
+c2|2|two" "$DBJOIN"
+
+run_test "at_join_reordered_inner_refs" \
+  "SELECT refs.r, a.id, a.v FROM dolt_at_t(refs.r) a JOIN refs ORDER BY refs.r, a.id;" \
+  "c1|1|one
+c2|1|one
+c2|2|two" "$DBJOIN"
+
+run_test "at_join_reordered_pk_eq" \
+  "SELECT refs.r, a.id, a.v FROM dolt_at_t(refs.r) a JOIN refs WHERE a.id = 2 ORDER BY refs.r, a.id;" \
+  "c2|2|two" "$DBJOIN"
+
+run_test "at_join_reordered_multi_table" \
+  "SELECT r1.r, a.id, a.v FROM dolt_at_t(r1.r) a, refs r1, pad p1, pad p2, pad p3 ORDER BY r1.r, a.id;" \
+  "c1|1|one
+c2|1|one
+c2|2|two" "$DBJOIN"
+
+run_test "at_join_correlated_subquery" \
+  "SELECT refs.r, (SELECT count(*) FROM dolt_at_t(refs.r)) FROM refs ORDER BY refs.r;" \
+  "c1|1
+c2|2" "$DBJOIN"
+
+run_test "at_cross_join_usable_and_unusable_ref" \
+  "SELECT refs.r, a.id, a.v FROM dolt_at_t('c1') a CROSS JOIN refs WHERE a.commit_ref = refs.r ORDER BY a.id;" \
+  "c1|1|one" "$DBJOIN"
+
+rm -f "$DBJOIN"
+
 dltest_finish
