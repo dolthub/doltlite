@@ -171,6 +171,7 @@ foreach {name sql} {
 foreach {name sql} {
   checkout {SELECT dolt_checkout('feat')}
   checkout-force {SELECT dolt_checkout('-B','feat')}
+  connect-branch {SELECT dolt_connect_branch('feat')}
   delete {SELECT dolt_branch('-D','feat')}
   rename {SELECT dolt_branch('-m','feat','renamed')}
   force-copy {SELECT dolt_branch('-f','-c','main','feat')}
