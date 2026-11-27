@@ -109,6 +109,48 @@ foreach {tn cols err} {
   " $err
 }
 
+#-------------------------------------------------------------------------
+# Verify buffered writer flushes on ALTER TABLE RENAME and frees on DROP
+# TABLE inside an open transaction.
+#
+reset_db
+vec1_load db
+
+do_execsql_test 4.0 {
+  CREATE VIRTUAL TABLE t1 USING vec1(vector, tag);
+  INSERT INTO t1(cmd, arg) VALUES('rebuild', '{index:"flat"}');
+  INSERT INTO t1(rowid, vector, tag) VALUES(1, vec1_from_json('[1,0,0,0]'), 'a');
+}
+
+do_execsql_test 4.1 {
+  BEGIN;
+    INSERT INTO t1(rowid, vector, tag) VALUES(2, vec1_from_json('[0,1,0,0]'), 'b');
+    ALTER TABLE t1 RENAME TO t2;
+  COMMIT;
+}
+
+do_execsql_test 4.2 {
+  SELECT rowid, tag FROM t2(vec1_from_json('[0,1,0,0]'), 2) ORDER BY distance;
+} {2 b 1 a}
+
+do_execsql_test 4.3 {
+  SELECT rowid FROM t2(vec1_from_json('[0,1,0,0]'), 2) WHERE tag='b';
+} {2}
+
+do_execsql_test 4.4 {
+  PRAGMA integrity_check;
+} {ok}
+
+do_execsql_test 4.5 {
+  CREATE VIRTUAL TABLE t3 USING vec1(vector, tag);
+  INSERT INTO t3(cmd, arg) VALUES('rebuild', '{index:"flat"}');
+  INSERT INTO t3(rowid, vector, tag) VALUES(1, vec1_from_json('[1,0,0,0]'), 'a');
+  BEGIN;
+    INSERT INTO t3(rowid, vector, tag) VALUES(2, vec1_from_json('[0,1,0,0]'), 'b');
+    DROP TABLE t3;
+  COMMIT;
+  PRAGMA integrity_check;
+} {ok}
 
 finish_test
 
