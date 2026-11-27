@@ -761,4 +761,40 @@ do_catchsql_test 10.9 {
   SELECT rowid FROM v1(vec1_from_json('[1,0,0,0,0,0,0,0]'), 2);
 } {1 {vec1: model is corrupt}}
 
+#-------------------------------------------------------------------------
+# PQ models whose codebook count exceeds the number of subspaces needed to
+# cover nElem (i.e. (nCodebook - 1) * nCodeElem >= nElem) must be rejected
+# by vec1DecodeModel() rather than accepted by rebuild and crashing later
+# during vector decoding.
+#
+reset_db
+vec1_load db
+
+do_execsql_test 11.0 {
+  CREATE VIRTUAL TABLE t USING vec1;
+  INSERT INTO t(rowid, vector) VALUES
+    (1, vec1_from_json('[1,0,0,0,0,0,0,0,0,0]')),
+    (2, vec1_from_json('[0,1,0,0,0,0,0,0,0,0]'));
+}
+
+# nElem=10, nCodebook=9 -> nCodeElem=2, (9-1)*2 = 16 >= 10 (payload: 9*2*256*4 = 18432 bytes)
+# nElem=10, nCodebook=6 -> nCodeElem=2, (6-1)*2 = 10 >= 10 (payload: 6*2*256*4 = 12288 bytes)
+foreach {tn ncb nzero} {
+  1 9 18432
+  2 6 12288
+} {
+  set blob_hex [vec1_make_model_hex 4 0x01 10 $ncb 0 1 $nzero]
+  do_catchsql_test 11.$tn "
+    INSERT INTO t(cmd, arg) VALUES('rebuild', X'$blob_hex');
+  " {1 {vec1: model is corrupt}}
+}
+
+do_execsql_test 11.3 {
+  SELECT rowid FROM t(vec1_from_json('[1,0,0,0,0,0,0,0,0,0]'), 2);
+} {1 2}
+
+do_execsql_test 11.4 {
+  PRAGMA integrity_check;
+} {ok}
+
 finish_test
