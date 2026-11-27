@@ -32,10 +32,12 @@ static int checkSubtree(
 
   rc = chunkStoreGetSparse(pStore, pHash, &pData, &nData, &nDataPhys);
   if( rc!=SQLITE_OK ){
-    *pzErr = sqlite3_mprintf(
-      "chunkStoreGetSparse failed rc=%d hash=%02x%02x%02x%02x%02x%02x%02x%02x",
-      rc, pHash->data[0], pHash->data[1], pHash->data[2], pHash->data[3],
-      pHash->data[4], pHash->data[5], pHash->data[6], pHash->data[7]);
+    if( pzErr ){
+      *pzErr = sqlite3_mprintf(
+        "chunkStoreGetSparse failed rc=%d hash=%02x%02x%02x%02x%02x%02x%02x%02x",
+        rc, pHash->data[0], pHash->data[1], pHash->data[2], pHash->data[3],
+        pHash->data[4], pHash->data[5], pHash->data[6], pHash->data[7]);
+    }
     return rc;
   }
 
@@ -49,15 +51,17 @@ static int checkSubtree(
       prollyHashCompute(pData, nData, &computed);
     }
     if( prollyHashCompare(&computed, pHash) != 0 ){
-      *pzErr = sqlite3_mprintf(
-        "chunk content does not hash to its store key: "
-        "expected=%02x%02x%02x%02x%02x%02x%02x%02x "
-        "computed=%02x%02x%02x%02x%02x%02x%02x%02x nData=%d",
-        pHash->data[0], pHash->data[1], pHash->data[2], pHash->data[3],
-        pHash->data[4], pHash->data[5], pHash->data[6], pHash->data[7],
-        computed.data[0], computed.data[1], computed.data[2], computed.data[3],
-        computed.data[4], computed.data[5], computed.data[6], computed.data[7],
-        nData);
+      if( pzErr ){
+        *pzErr = sqlite3_mprintf(
+          "chunk content does not hash to its store key: "
+          "expected=%02x%02x%02x%02x%02x%02x%02x%02x "
+          "computed=%02x%02x%02x%02x%02x%02x%02x%02x nData=%d",
+          pHash->data[0], pHash->data[1], pHash->data[2], pHash->data[3],
+          pHash->data[4], pHash->data[5], pHash->data[6], pHash->data[7],
+          computed.data[0], computed.data[1], computed.data[2], computed.data[3],
+          computed.data[4], computed.data[5], computed.data[6], computed.data[7],
+          nData);
+      }
       sqlite3_free(pData);
       return SQLITE_CORRUPT;
     }
@@ -65,36 +69,44 @@ static int checkSubtree(
 
   rc = prollyNodeParseSparse(&node, pData, nData, nDataPhys);
   if( rc!=SQLITE_OK ){
-    *pzErr = sqlite3_mprintf(
-      "prollyNodeParseSparse failed rc=%d nData=%d nDataPhys=%d level=%d count=%u flags=0x%02x"
-      " hash=%02x%02x%02x%02x%02x%02x%02x%02x",
-      rc, nData, nDataPhys,
-      nData>=5 ? (int)pData[4] : -1,
-      nData>=7 ? (unsigned)(pData[5] | (pData[6]<<8)) : 0u,
-      nData>=8 ? (unsigned)pData[7] : 0u,
-      pHash->data[0], pHash->data[1], pHash->data[2], pHash->data[3],
-      pHash->data[4], pHash->data[5], pHash->data[6], pHash->data[7]);
+    if( pzErr ){
+      *pzErr = sqlite3_mprintf(
+        "prollyNodeParseSparse failed rc=%d nData=%d nDataPhys=%d level=%d count=%u flags=0x%02x"
+        " hash=%02x%02x%02x%02x%02x%02x%02x%02x",
+        rc, nData, nDataPhys,
+        nDataPhys>=5 ? (int)pData[4] : -1,
+        nDataPhys>=7 ? (unsigned)(pData[5] | (pData[6]<<8)) : 0u,
+        nDataPhys>=8 ? (unsigned)pData[7] : 0u,
+        pHash->data[0], pHash->data[1], pHash->data[2], pHash->data[3],
+        pHash->data[4], pHash->data[5], pHash->data[6], pHash->data[7]);
+    }
     sqlite3_free(pData);
     return rc;
   }
 
   if( (node.flags & (PROLLY_NODE_INTKEY|PROLLY_NODE_BLOBKEY))
         != (flags & (PROLLY_NODE_INTKEY|PROLLY_NODE_BLOBKEY)) ){
-    *pzErr = sqlite3_mprintf("flags=0x%x expected=0x%x",
-                             (unsigned)node.flags, (unsigned)flags);
+    if( pzErr ){
+      *pzErr = sqlite3_mprintf("flags=0x%x expected=0x%x",
+                               (unsigned)node.flags, (unsigned)flags);
+    }
     sqlite3_free(pData);
     return SQLITE_CORRUPT;
   }
 
   if( expectedLevel>=0 && (int)node.level!=expectedLevel ){
-    *pzErr = sqlite3_mprintf("level=%d expected=%d",
-                             (int)node.level, expectedLevel);
+    if( pzErr ){
+      *pzErr = sqlite3_mprintf("level=%d expected=%d",
+                               (int)node.level, expectedLevel);
+    }
     sqlite3_free(pData);
     return SQLITE_CORRUPT;
   }
 
   if( node.nItems==0 ){
-    *pzErr = sqlite3_mprintf("empty non-root node level=%d", (int)node.level);
+    if( pzErr ){
+      *pzErr = sqlite3_mprintf("empty non-root node level=%d", (int)node.level);
+    }
     sqlite3_free(pData);
     return SQLITE_CORRUPT;
   }
@@ -114,9 +126,11 @@ static int checkSubtree(
                                 pPrevKey, nPrevKey, iPrevKey,
                                 (u8*)pKey, nKey, iKey);
       if( c>=0 ){
-        *pzErr = sqlite3_mprintf(
-          "keys not strictly ascending at level=%d idx=%d cmp=%d",
-          (int)node.level, i, c);
+        if( pzErr ){
+          *pzErr = sqlite3_mprintf(
+            "keys not strictly ascending at level=%d idx=%d cmp=%d",
+            (int)node.level, i, c);
+        }
         sqlite3_free(pPrevKey);
         sqlite3_free(pData);
         return SQLITE_CORRUPT;
@@ -129,7 +143,9 @@ static int checkSubtree(
       pPrevKey = sqlite3_malloc(nKey);
       if( !pPrevKey ){
         sqlite3_free(pData);
-        *pzErr = sqlite3_mprintf("OOM copying key");
+        if( pzErr ){
+          *pzErr = sqlite3_mprintf("OOM copying key");
+        }
         return SQLITE_NOMEM;
       }
       memcpy(pPrevKey, pKey, nKey);
@@ -170,9 +186,11 @@ static int checkSubtree(
                             pChildLastKey, nChildLastKey, iChildLastKey);
       sqlite3_free(pChildLastKey);
       if( c!=0 ){
-        *pzErr = sqlite3_mprintf(
-          "boundary mismatch at level=%d idx=%d cmp=%d",
-          (int)node.level, i, c);
+        if( pzErr ){
+          *pzErr = sqlite3_mprintf(
+            "boundary mismatch at level=%d idx=%d cmp=%d",
+            (int)node.level, i, c);
+        }
         sqlite3_free(pPrevKey);
         sqlite3_free(pData);
         return SQLITE_CORRUPT;

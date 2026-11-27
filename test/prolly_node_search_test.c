@@ -1,4 +1,7 @@
 #include "prolly_node.h"
+#include "prolly_check.h"
+#include "chunk_store.h"
+#include "lib/test_tmpdir.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -156,6 +159,71 @@ static void testFinishSparseOverflow(void){
   prollyNodeBuilderFree(&builder);
 }
 
+#ifdef DOLTLITE_PROLLY_CHECK
+static void testProllyCheckSparseAndNullErr(void){
+  static const u8 aCorruptPrefix[7] = {
+    0xde, 0xad, 0xbe, 0xef, 0x02, 0x03, 0x04
+  };
+  static const int aPhysLen[4] = { 0, 4, 5, 7 };
+  sqlite3_vfs *pVfs = sqlite3_vfs_find(0);
+  const char *zPath = DOLTLITE_TEST_TMPDIR "/prolly_check_sparse_test.db";
+  ChunkStore cs;
+  ProllyHash h;
+  u8 aEmptyNode[8];
+  char *zErr = 0;
+  int rc;
+  int i;
+
+  check("prolly_check_vfs", pVfs!=0);
+  if( !pVfs ) return;
+  pVfs->xDelete(pVfs, zPath, 0);
+
+  memset(&cs, 0, sizeof(cs));
+  rc = chunkStoreOpen(&cs, pVfs, zPath,
+                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+  check("prolly_check_store_open", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) return;
+
+  /* Missing root hash with NULL pzErr must fail cleanly without crashing. */
+  memset(&h, 0xab, sizeof(h));
+  rc = prollyCheckTree(&cs, &h, PROLLY_NODE_INTKEY, 0);
+  check("prolly_check_missing_null_err", rc!=SQLITE_OK);
+
+  /* Corrupt sparse chunks with nData >= 8 and nDataPhys < 8 must not
+  ** over-read pData when formatting parse failure diagnostics, and must
+  ** also handle NULL pzErr cleanly. */
+  for(i=0; i<4; i++){
+    int nPhys = aPhysLen[i];
+    i64 nZeroTail = 16 - nPhys;
+    rc = chunkStorePutSparse(&cs, aCorruptPrefix, nPhys, nZeroTail, &h);
+    check("prolly_check_put_sparse", rc==SQLITE_OK);
+    if( rc!=SQLITE_OK ) continue;
+
+    zErr = 0;
+    rc = prollyCheckTree(&cs, &h, PROLLY_NODE_INTKEY, &zErr);
+    check("prolly_check_sparse_corrupt_err", rc==SQLITE_CORRUPT && zErr!=0);
+    sqlite3_free(zErr);
+
+    rc = prollyCheckTree(&cs, &h, PROLLY_NODE_INTKEY, 0);
+    check("prolly_check_sparse_corrupt_null_err", rc==SQLITE_CORRUPT);
+  }
+
+  /* Empty node (nItems == 0) with NULL pzErr must return SQLITE_CORRUPT. */
+  memset(aEmptyNode, 0, sizeof(aEmptyNode));
+  PROLLY_PUT_U32(aEmptyNode, PROLLY_NODE_MAGIC);
+  aEmptyNode[7] = PROLLY_NODE_INTKEY;
+  rc = chunkStorePut(&cs, aEmptyNode, sizeof(aEmptyNode), &h);
+  check("prolly_check_put_empty_node", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    rc = prollyCheckTree(&cs, &h, PROLLY_NODE_INTKEY, 0);
+    check("prolly_check_empty_node_null_err", rc==SQLITE_CORRUPT);
+  }
+
+  chunkStoreClose(&cs);
+  pVfs->xDelete(pVfs, zPath, 0);
+}
+#endif
+
 int main(void){
   int i;
   sqlite3_initialize();
@@ -166,6 +234,9 @@ int main(void){
   testKeys(255, 64);
   testKeys(1024, 64);
   testFinishSparseOverflow();
+#ifdef DOLTLITE_PROLLY_CHECK
+  testProllyCheckSparseAndNullErr();
+#endif
   printf("%d passed, %d failed\n", nPass, nFail);
   return nFail ? 1 : 0;
 }
