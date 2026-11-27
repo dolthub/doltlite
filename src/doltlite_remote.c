@@ -3190,16 +3190,15 @@ int doltliteClone(
   SavedRefsState savedRefs;
   ProllyHashSet leaves;
   int refsDetached = 0;
+  int haveOldRefsMeta = 0;
   int locked = 0;
-  u8 oldRefsStale;
+  u8 oldRefsStale = 0;
   int rc;
 
-  memcpy(&oldRefsHash, refsTableGetHash(&pLocal->refs), sizeof(ProllyHash));
-  memcpy(&oldCommittedRefsHash, &pLocal->refs.committedRefsHash,
-         sizeof(ProllyHash));
+  memset(&oldRefsHash, 0, sizeof(oldRefsHash));
+  memset(&oldCommittedRefsHash, 0, sizeof(oldCommittedRefsHash));
   memset(&savedRefs, 0, sizeof(savedRefs));
   memset(&leaves, 0, sizeof(leaves));
-  oldRefsStale = pLocal->bRefsStale;
   pRemote->zMissingChunkError[0] = 0;
   if( pbMissingBranch ) *pbMissingBranch = 0;
   if( pbOccupied ) *pbOccupied = 0;
@@ -3263,6 +3262,11 @@ int doltliteClone(
       if( locked ) chunkStoreUnlock(pLocal);
       return SQLITE_ERROR;
     }
+    memcpy(&oldRefsHash, refsTableGetHash(&pLocal->refs), sizeof(ProllyHash));
+    memcpy(&oldCommittedRefsHash, &pLocal->refs.committedRefsHash,
+           sizeof(ProllyHash));
+    oldRefsStale = pLocal->bRefsStale;
+    haveOldRefsMeta = 1;
   }
   if( rc==SQLITE_OK && nRoots>0 ){
     rc = remoteValidateGraphEx(pLocal, aRoots, nRoots, 0, &leaves, 0);
@@ -3341,10 +3345,12 @@ clone_restore_refs:
     csRestoreSavedRefsState(pLocal, &savedRefs);
     memset(&savedRefs, 0, sizeof(savedRefs));
   }
-  refsTableSetHash(&pLocal->refs, &oldRefsHash);
-  memcpy(&pLocal->refs.committedRefsHash, &oldCommittedRefsHash,
-         sizeof(ProllyHash));
-  pLocal->bRefsStale = oldRefsStale;
+  if( haveOldRefsMeta ){
+    refsTableSetHash(&pLocal->refs, &oldRefsHash);
+    memcpy(&pLocal->refs.committedRefsHash, &oldCommittedRefsHash,
+           sizeof(ProllyHash));
+    pLocal->bRefsStale = oldRefsStale;
+  }
   if( locked ) chunkStoreUnlock(pLocal);
   return rc;
 }
