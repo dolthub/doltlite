@@ -33,7 +33,7 @@ int doltliteConnHandshakeStep(DoltliteConn *conn);
 DoltliteConn *doltliteConnFromFd(int clientFd);
 #endif
 
-/* >0 bytes, 0 on EOF, -1 on error, -2 if a nonblocking read would wait. */
+/* >0 bytes, 0 on EOF, -1 on error, -2 want read, -3 want write. */
 int doltliteConnReadNonblock(DoltliteConn *conn, void *buf, int nbuf);
 
 int doltliteConnWriteAll(DoltliteConn *conn, const void *buf, int nbuf);

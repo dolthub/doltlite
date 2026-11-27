@@ -254,7 +254,8 @@ static int connReadOnce(DoltliteConn *c, void *buf, int nbuf) {
   } else {
     n = connRecv(c, (unsigned char *)buf, (size_t)nbuf);
   }
-  if (n == MBEDTLS_ERR_SSL_WANT_READ || n == MBEDTLS_ERR_SSL_WANT_WRITE) return -2;
+  if (n == MBEDTLS_ERR_SSL_WANT_READ) return -2;
+  if (n == MBEDTLS_ERR_SSL_WANT_WRITE) return -3;
   if (c->useTls && n == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) return 0;
   if (n < 0) return -1;
   return n;
@@ -265,7 +266,7 @@ int doltliteConnRead(DoltliteConn *c, void *buf, int nbuf) {
   for (;;) {
     if (connApplyDeadline(c) != 0) return -1;
     n = connReadOnce(c, buf, nbuf);
-    if (n == -2) continue;
+    if (n == -2 || n == -3) continue;
     return n;
   }
 }

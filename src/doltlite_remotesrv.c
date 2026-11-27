@@ -2107,7 +2107,11 @@ static int pendingIngest(DoltliteServer *pSrv, PendingConn *p){
     }else{
       n = doltliteSocketRecv(p->fd, p->aBuf + p->nBuf, space);
     }
-    if( n==-2 ) return 0;
+    if( n==-2 || n==-3 ){
+      p->bWantWrite = (n==-3);
+      return 0;
+    }
+    p->bWantWrite = 0;
     if( n<=0 ){
       pendingClose(pSrv, p);
       return 1;
@@ -2144,7 +2148,11 @@ static int pendingIngest(DoltliteServer *pSrv, PendingConn *p){
       if( nRead>(int)sizeof(aData) ) nRead = sizeof(aData);
       n = p->conn ? doltliteConnReadNonblock(p->conn, aData, nRead)
                   : doltliteSocketRecv(p->fd, aData, nRead);
-      if( n==-2 ) return 0;
+      if( n==-2 || n==-3 ){
+        p->bWantWrite = (n==-3);
+        return 0;
+      }
+      p->bWantWrite = 0;
       if( n<=0 ){
         p->requestStatus = 400;
       }else if( pendingAppendBody(pSrv, p, aData, n)!=SQLITE_OK ){
