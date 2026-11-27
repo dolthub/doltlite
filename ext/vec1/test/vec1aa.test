@@ -259,6 +259,21 @@ do_catchsql_test 7.4 {
   UPDATE v1 SET x='sometextvaluABCD';
 } {1 {vec1: unexpected vector type TEXT, expected BLOB}}
 
+# Non-BLOB query vectors (including TEXT and INTEGER whose UTF-8 byte length
+# matches nElem * 4) must be rejected with a type error rather than silently
+# interpreted as raw float32 bytes.
+do_catchsql_test 7.5 {
+  SELECT rowid FROM v1('sometextvaluABCD', 1);
+} {1 {vec1: unexpected vector type TEXT, expected BLOB}}
+do_catchsql_test 7.6 {
+  SELECT rowid FROM v1(1234567890123456, 1);
+} {1 {vec1: unexpected vector type INTEGER, expected BLOB}}
+do_catchsql_test 7.7 {
+  SELECT rowid FROM v1(1.5, 1);
+} {1 {vec1: unexpected vector type FLOAT, expected BLOB}}
+do_catchsql_test 7.8 {
+  SELECT rowid FROM v1(NULL, 1);
+} {1 {vec1: unexpected vector type NULL, expected BLOB}}
 
 finish_test
 

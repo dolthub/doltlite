@@ -24,7 +24,7 @@ do_execsql_test 1.0 {
 
 do_catchsql_test 1.1 {
   SELECT * FROM v1(:q) 
-} {1 {vec1: unexpected vector blob size 0 bytes, expected 64}}
+} {1 {vec1: unexpected vector type NULL, expected BLOB}}
 
 set q [db one {SELECT random_vector(16)}]
 foreach {tn sql} {
