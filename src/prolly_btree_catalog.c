@@ -943,19 +943,23 @@ static int loadSchemaCatalogRows(
       char *zType = 0, *zName = 0, *zTblName = 0, *zSql = 0;
       i64 iRootpage = 0;
       doltliteParseRecord(pVal, nVal, &ri);
-      if( ri.nField<5 ){ rc = SQLITE_CORRUPT; break; }
-      rc = dlRecordTextField(pVal, nVal, &ri, 0, &zType);
-      if( rc!=SQLITE_OK ) break;
-      rc = dlRecordTextField(pVal, nVal, &ri, 1, &zName);
-      if( rc!=SQLITE_OK ){ sqlite3_free(zType); break; }
-      rc = dlRecordTextField(pVal, nVal, &ri, 2, &zTblName);
-      if( rc!=SQLITE_OK ){ sqlite3_free(zType); sqlite3_free(zName); break; }
-      iRootpage = dlRecordIntField(pVal, nVal, &ri, 3);
-      rc = dlRecordTextField(pVal, nVal, &ri, 4, &zSql);
-      if( rc!=SQLITE_OK ){
-        sqlite3_free(zType); sqlite3_free(zName); sqlite3_free(zTblName); break;
+      if( ri.nField<5 ){
+        rc = SQLITE_CORRUPT;
+      }else{
+        rc = dlRecordTextField(pVal, nVal, &ri, 0, &zType);
+        if( rc==SQLITE_OK ) rc = dlRecordTextField(pVal, nVal, &ri, 1, &zName);
+        if( rc==SQLITE_OK ) rc = dlRecordTextField(pVal, nVal, &ri, 2, &zTblName);
+        if( rc==SQLITE_OK ) iRootpage = dlRecordIntField(pVal, nVal, &ri, 3);
+        if( rc==SQLITE_OK ) rc = dlRecordTextField(pVal, nVal, &ri, 4, &zSql);
       }
       doltliteRecordInfoClear(&ri);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(zType);
+        sqlite3_free(zName);
+        sqlite3_free(zTblName);
+        sqlite3_free(zSql);
+        break;
+      }
       if( nRows>=nAlloc ){
         i64 nNew = nAlloc ? (i64)nAlloc * 2 : (i64)16;
         SchemaCatalogRow *aNew;

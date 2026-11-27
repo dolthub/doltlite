@@ -24212,6 +24212,149 @@ static void run_http_pending_refs_overlong_branch(void){
   free(zLongBranch);
 }
 
+static void run_catalog_wide_master_oom_no_leak(void){
+  char dbpath[512];
+  sqlite3 *db = 0;
+  ChunkStore *cs;
+  ProllyCache cache;
+  ProllyMutMap mm;
+  ProllyMutator mut;
+  ProllyHash emptyRoot;
+  struct TableEntry aTables[1];
+  u8 aRec[128];
+  const char *zType = "table";
+  const char *zName = "t";
+  const char *zSql = "CREATE TABLE t(x INT)";
+  int pos = 0;
+  int i;
+  int rc;
+  sqlite3_mem_methods wrapMem;
+  u8 *pOut = 0;
+  int nOut = 0;
+  int nAllocs = 0;
+  int nFailed = 0;
+  int nLeaked = 0;
+  int k;
+
+  printf("=== Catalog Wide Master Record OOM No Leak Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "catalog_wide_master_oom");
+  removeDbFiles(dbpath);
+
+  /* Build a valid SQLite record with 40 fields (> inline limit 32):
+  ** fields 0..4 are the standard sqlite_master columns, fields 5..39 are NULL. */
+  aRec[pos++] = 41;
+  aRec[pos++] = (u8)(13 + 2 * (int)strlen(zType));
+  aRec[pos++] = (u8)(13 + 2 * (int)strlen(zName));
+  aRec[pos++] = (u8)(13 + 2 * (int)strlen(zName));
+  aRec[pos++] = 1;
+  aRec[pos++] = (u8)(13 + 2 * (int)strlen(zSql));
+  for(i=5; i<40; i++){
+    aRec[pos++] = 0;
+  }
+  memcpy(aRec + pos, zType, strlen(zType)); pos += (int)strlen(zType);
+  memcpy(aRec + pos, zName, strlen(zName)); pos += (int)strlen(zName);
+  memcpy(aRec + pos, zName, strlen(zName)); pos += (int)strlen(zName);
+  aRec[pos++] = 2;
+  memcpy(aRec + pos, zSql, strlen(zSql)); pos += (int)strlen(zSql);
+
+  sqlite3_shutdown();
+  rc = sqlite3_config(SQLITE_CONFIG_GETMALLOC, &gNonlocalOrigMem);
+  check("wide_master_oom_getmalloc", rc==SQLITE_OK);
+  wrapMem = gNonlocalOrigMem;
+  wrapMem.xMalloc = nonlocalOomMalloc;
+  wrapMem.xRealloc = nonlocalOomRealloc;
+  rc = sqlite3_config(SQLITE_CONFIG_MALLOC, &wrapMem);
+  check("wide_master_oom_setmalloc", rc==SQLITE_OK);
+  rc = sqlite3_initialize();
+  check("wide_master_oom_init", rc==SQLITE_OK);
+
+  gNonlocalFailCountdown = -1;
+  rc = open_db(dbpath, &db);
+  check("wide_master_oom_open", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    rc = execSql(db, "CREATE TABLE t(x INT);");
+    check("wide_master_oom_create_table", rc==SQLITE_OK);
+
+    cs = doltliteGetChunkStore(db);
+    memset(&emptyRoot, 0, sizeof(emptyRoot));
+    memset(&cache, 0, sizeof(cache));
+    rc = prollyCacheInit(&cache, 16);
+    check("wide_master_oom_cache_init", rc==SQLITE_OK);
+    if( rc==SQLITE_OK ){
+      rc = prollyMutMapInit(&mm, 1);
+      check("wide_master_oom_mutmap_init", rc==SQLITE_OK);
+      if( rc==SQLITE_OK ){
+        rc = prollyMutMapInsert(&mm, 0, 0, 1, aRec, pos);
+        check("wide_master_oom_mutmap_insert", rc==SQLITE_OK);
+        memset(&mut, 0, sizeof(mut));
+        mut.pStore = cs;
+        mut.pCache = &cache;
+        mut.oldRoot = emptyRoot;
+        mut.pEdits = &mm;
+        mut.flags = PROLLY_NODE_INTKEY;
+        if( rc==SQLITE_OK ){
+          rc = prollyMutateFlush(&mut);
+          check("wide_master_oom_mut_flush", rc==SQLITE_OK);
+        }
+        prollyMutMapFree(&mm);
+      }
+      prollyCacheFree(&cache);
+    }
+
+    if( rc==SQLITE_OK ){
+      memset(aTables, 0, sizeof(aTables));
+      aTables[0].iTable = 1;
+      aTables[0].root = mut.newRoot;
+      aTables[0].flags = PROLLY_NODE_INTKEY;
+
+      rc = doltliteSerializeCatalogEntriesWithFallbackSchema(
+        db, aTables, 1, 0, 0, 0, &pOut, &nOut
+      );
+      check("wide_master_oom_warmup", rc==SQLITE_OK && pOut!=0 && nOut>0);
+      sqlite3_free(pOut);
+      pOut = 0;
+      nOut = 0;
+
+      gNonlocalFailCountdown = -1;
+      gNonlocalAllocCount = 0;
+      rc = doltliteSerializeCatalogEntriesWithFallbackSchema(
+        db, aTables, 1, 0, 0, 0, &pOut, &nOut
+      );
+      nAllocs = gNonlocalAllocCount;
+      check("wide_master_oom_measure", rc==SQLITE_OK && nAllocs>0);
+      sqlite3_free(pOut);
+      pOut = 0;
+      nOut = 0;
+
+      for(k=0; k<nAllocs; k++){
+        sqlite3_int64 memBefore = sqlite3_memory_used();
+        gNonlocalFailCountdown = k;
+        rc = doltliteSerializeCatalogEntriesWithFallbackSchema(
+          db, aTables, 1, 0, 0, 0, &pOut, &nOut
+        );
+        gNonlocalFailCountdown = -1;
+        if( pOut ){
+          sqlite3_free(pOut);
+          pOut = 0;
+        }
+        nOut = 0;
+        if( rc!=SQLITE_OK ) nFailed++;
+        if( sqlite3_memory_used()!=memBefore ) nLeaked++;
+      }
+      check("wide_master_oom_exercised_failures", nFailed>0);
+      check("wide_master_oom_no_memory_leak", nLeaked==0);
+    }
+
+    sqlite3_close(db);
+    db = 0;
+  }
+
+  sqlite3_shutdown();
+  sqlite3_config(SQLITE_CONFIG_MALLOC, &gNonlocalOrigMem);
+  sqlite3_initialize();
+  removeDbFiles(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "refs_vtab_snapshot_stability", "Refs Vtab Snapshot Stability Test", run_refs_vtab_snapshot_stability },
   { "storage_format_v12", "Storage Format Version 12 Test", run_storage_format_v12 },
@@ -24527,7 +24670,8 @@ static const RegressionCase aCases[] = {
   { "wal_checkpoint_fallback_restores_manifest", "WAL Checkpoint Fallback Restores Manifest Test", run_wal_checkpoint_fallback_restores_manifest },
   { "sortkey_corrupt_record_bounds", "Sortkey Corrupt Record Bounds Test", run_sortkey_corrupt_record_bounds },
   { "sortkey_large_record_header", "Sortkey Large Record Header Test", run_sortkey_large_record_header },
-  { "http_pending_refs_overlong_branch", "HTTP Pending Refs Overlong Branch Test", run_http_pending_refs_overlong_branch }
+  { "http_pending_refs_overlong_branch", "HTTP Pending Refs Overlong Branch Test", run_http_pending_refs_overlong_branch },
+  { "catalog_wide_master_oom_no_leak", "Catalog Wide Master Record OOM No Leak Test", run_catalog_wide_master_oom_no_leak }
 };
 
 static int run_case_by_name(const char *zName){
