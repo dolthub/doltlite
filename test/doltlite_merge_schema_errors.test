@@ -171,6 +171,9 @@ do_faultsim_test merge-schema-errors-oom-adopt -faults oom-transient -prep {
   if {$testrc==0 && $testresult ne "40"} {
     error "rc=0 result=$testresult"
   }
+  if {$testrc!=0 && [string match {*conflict*} $testresult]} {
+    error "OOM misreported as conflict: $testresult"
+  }
 }
 
 reset_db
@@ -204,6 +207,30 @@ do_faultsim_test merge-schema-errors-oom-dual-col -faults oom-transient -prep {
   }
   if {$testrc==0 && $testresult ne "40"} {
     error "rc=0 result=$testresult"
+  }
+  if {$testrc!=0 && [string match {*conflict*} $testresult]} {
+    error "OOM misreported as conflict: $testresult"
+  }
+}
+
+do_faultsim_test merge-schema-errors-oom-dual-col-txn -faults oom-transient -prep {
+  faultsim_restore_and_reopen
+  db eval BEGIN
+} -body {
+  db one {SELECT length(dolt_merge('side'))}
+} -test {
+  if {$testnfail==0 && ($testrc!=0 || $testresult ne "40")} {
+    error "nfail=0 rc=$testrc result=$testresult"
+  }
+  if {$testrc==0 && $testresult ne "40"} {
+    error "rc=0 result=$testresult"
+  }
+  if {$testrc!=0 && [string match {*conflict*} $testresult]} {
+    error "OOM misreported as conflict: $testresult"
+  }
+  set nsc [db one {SELECT count(*) FROM dolt_schema_conflicts}]
+  if {$nsc != 0} {
+    error "OOM recorded $nsc bogus schema conflicts (rc=$testrc result=$testresult)"
   }
 }
 
