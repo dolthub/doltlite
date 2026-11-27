@@ -23578,6 +23578,73 @@ static void run_remote_refs_error_rollback(void){
   sqlite3_close(dbClone);
   dbClone = 0;
 
+  /* When a peer initializes a clean root commit after connection A opens an
+  ** empty target, a failed clone on A must restore the post-refresh refs
+  ** hashes rather than A's stale pre-refresh all-zero hashes. */
+  {
+    char zPeerClone[256];
+    ChunkStore csA;
+    sqlite3 *dbB = 0;
+    ChunkStore *csB = 0;
+    ProllyHash peerRefsHash;
+    ProllyHash peerCommittedHash;
+    memset(&csA, 0, sizeof(csA));
+    memset(&peerRefsHash, 0, sizeof(peerRefsHash));
+    memset(&peerCommittedHash, 0, sizeof(peerCommittedHash));
+
+    make_dbpath(zPeerClone, sizeof(zPeerClone), "remote_refs_rb_peer_root");
+    removeDbFiles(zPeerClone);
+
+    check("remote_refs_rb: open empty target A",
+          chunkStoreOpen(&csA, sqlite3_vfs_find(0), zPeerClone,
+              SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB)
+          ==SQLITE_OK);
+    check("remote_refs_rb: target A starts with empty refsHash",
+          prollyHashIsEmpty(refsTableGetHash(&csA.refs)));
+    check("remote_refs_rb: target A starts with empty committedRefsHash",
+          prollyHashIsEmpty(&csA.refs.committedRefsHash));
+
+    check("remote_refs_rb: open peer B",
+          open_db(zPeerClone, &dbB)==SQLITE_OK);
+    check("remote_refs_rb: peer B materializes clean root commit",
+          execSql(dbB, "SELECT dolt_hashof('HEAD');")==SQLITE_OK);
+    csB = dbB ? doltliteGetChunkStore(dbB) : 0;
+    check("remote_refs_rb: peer B store", csB!=0);
+    if( csB ){
+      memcpy(&peerRefsHash, refsTableGetHash(&csB->refs), sizeof(ProllyHash));
+      memcpy(&peerCommittedHash, &csB->refs.committedRefsHash,
+             sizeof(ProllyHash));
+      check("remote_refs_rb: peer B has non-empty refsHash",
+            !prollyHashIsEmpty(&peerRefsHash));
+      check("remote_refs_rb: peer B has non-empty committedRefsHash",
+            !prollyHashIsEmpty(&peerCommittedHash));
+      check("remote_refs_rb: peer B root commit is unoccupied",
+            doltliteCloneTargetOccupied(csB)==0);
+    }
+    sqlite3_close(dbB);
+    dbB = 0;
+
+    pRemote = doltliteFsRemoteOpen(sqlite3_vfs_find(0), zRemote);
+    check("remote_refs_rb: open remote for peer-root clone", pRemote!=0);
+    if( pRemote ){
+      missingBranch = 0;
+      occupied = 0;
+      rc = doltliteClone(&csA, pRemote, zUrl, "nonexistent", "origin", 0,
+                         &missingBranch, &occupied);
+      check("remote_refs_rb: peer-root clone fails on missing branch",
+            rc!=SQLITE_OK && missingBranch==1 && occupied==0);
+      check("remote_refs_rb: peer-root clone restores post-refresh refsHash",
+            prollyHashCompare(refsTableGetHash(&csA.refs), &peerRefsHash)==0);
+      check("remote_refs_rb: peer-root clone restores post-refresh committedRefsHash",
+            prollyHashCompare(&csA.refs.committedRefsHash,
+                              &peerCommittedHash)==0);
+      pRemote->xClose(pRemote);
+      pRemote = 0;
+    }
+    chunkStoreClose(&csA);
+    removeDbFiles(zPeerClone);
+  }
+
   memset(&cs, 0, sizeof(cs));
   gFailSyncOnce = 0;
   gFailHits = 0;
