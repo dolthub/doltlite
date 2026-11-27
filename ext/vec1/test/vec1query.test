@@ -199,6 +199,53 @@ do_execsql_test 2.4 {
   PRAGMA integrity_check;
 } {ok}
 
+#-------------------------------------------------------------------------
+# Test KANN queries when ROTATE, WHT, and COS are all disabled and
+# nCodebook * nCodeElem != nElem (padded codebooks).
+#
+do_execsql_test 3.0 {
+  CREATE VIRTUAL TABLE v3 USING vec1(v);
+  WITH s(i) AS (
+    SELECT 1 UNION ALL SELECT i+1 FROM s WHERE i<600
+  )
+  INSERT INTO v3(rowid, v) SELECT i, random_vector(32) FROM s;
+  INSERT INTO v3(cmd, arg) VALUES('rebuild', (
+    SELECT vec1_train(v, '{quantizer:"pq", distance:"l2", wht:0, codesize:11}')
+    FROM v3
+  ));
+} {}
+
+do_execsql_test 3.1 {
+  SELECT rowid IN (
+    SELECT rowid FROM v3(o.v, '{K:10}')
+  ) FROM v3 AS o WHERE rowid = 42;
+} {1}
+
+do_execsql_test 3.2 {
+  PRAGMA integrity_check;
+} {ok}
+
+do_execsql_test 3.3 {
+  CREATE VIRTUAL TABLE v4 USING vec1(v);
+  WITH s(i) AS (
+    SELECT 1 UNION ALL SELECT i+1 FROM s WHERE i<100
+  )
+  INSERT INTO v4(rowid, v) SELECT i, random_vector(20) FROM s;
+  INSERT INTO v4(cmd, arg) VALUES('rebuild', (
+    SELECT vec1_train(v, '{quantizer:"bq", distance:"l2", wht:0}')
+    FROM v4
+  ));
+} {}
+
+do_execsql_test 3.4 {
+  SELECT rowid IN (
+    SELECT rowid FROM v4(o.v, '{K:10}')
+  ) FROM v4 AS o WHERE rowid = 17;
+} {1}
+
+do_execsql_test 3.5 {
+  PRAGMA integrity_check;
+} {ok}
 
 finish_test
 
