@@ -1497,6 +1497,39 @@ static int gcVacuumIntoAbsolute(sqlite3_vfs *pVfs, char **pzPath){
   return rc==SQLITE_OK ? SQLITE_NOMEM : rc;
 }
 
+/* Compare a canonicalized destination path against the source database path
+** so VACUUM INTO targeting the same file fails immediately instead of
+** acquiring the destination sidecar lock and deadlocking against the source
+** graph lock. */
+static int gcVacuumIntoSamePath(
+  sqlite3_vfs *pSrcVfs,
+  const char *zSrc,
+  const char *zDestAbs,
+  int *pbSame
+){
+  char *zSrcAbs = 0;
+  int rc;
+
+  *pbSame = 0;
+  if( !zSrc || !zDestAbs ) return SQLITE_OK;
+  rc = chunkStoreDupFilenameDoubleNul(zSrc, &zSrcAbs);
+  if( rc!=SQLITE_OK ) return rc;
+  if( pSrcVfs ){
+    rc = gcVacuumIntoAbsolute(pSrcVfs, &zSrcAbs);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zSrcAbs);
+      return rc;
+    }
+  }
+#if SQLITE_OS_WIN
+  *pbSame = sqlite3_stricmp(zSrcAbs, zDestAbs)==0;
+#else
+  *pbSame = strcmp(zSrcAbs, zDestAbs)==0;
+#endif
+  sqlite3_free(zSrcAbs);
+  return SQLITE_OK;
+}
+
 static int gcVacuumIntoOpenRc(int rc){
   int base = rc & 0xff;
   return base==SQLITE_CANTOPEN || base==SQLITE_READONLY;
@@ -1654,6 +1687,31 @@ int doltliteGcVacuumInto(
     sqlite3_free(zPath);
     sqlite3_free(zOwnedOut);
     return rc;
+  }
+
+  if( !bMem ){
+    int bSame = 0;
+    sqlite3_vfs *pSrcVfs = chunkFileGetVfs(&cs->file);
+    rc = gcVacuumIntoSamePath(pSrcVfs ? pSrcVfs : pVfs,
+                              chunkFileGetFilename(&cs->file),
+                              zPath, &bSame);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zPath);
+      sqlite3_free(zOwnedOut);
+      if( rc==SQLITE_NOMEM || rc==SQLITE_IOERR_NOMEM ){
+        *pzPhase = "out of memory";
+      }else{
+        sqlite3ErrorWithMsg(db, rc, "unable to open database: %s", zUser);
+        *pzPhase = sqlite3_errmsg(db);
+      }
+      return rc;
+    }
+    if( bSame ){
+      sqlite3_free(zPath);
+      sqlite3_free(zOwnedOut);
+      *pzPhase = "output file already exists";
+      return SQLITE_ERROR;
+    }
   }
 
   /* Reserve the destination before anything is examined or written there.

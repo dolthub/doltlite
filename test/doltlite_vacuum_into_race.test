@@ -144,6 +144,31 @@ do_test doltlite_vacuum_into_race-2.3 {
 } {7}
 ex2 close
 
+# VACUUM INTO targeting the same database file (relative or absolute path)
+# must fail immediately with "output file already exists" instead of
+# self-deadlocking on the lock sidecar for the duration of busy_timeout.
+sqlite3 db vir_source.db
+db eval {PRAGMA busy_timeout = 5000}
+do_test doltlite_vacuum_into_race-2.4 {
+  set us [lindex [time {
+    set rc [catch {db eval {VACUUM INTO 'vir_source.db'}} msg]
+  }] 0]
+  list $rc [db errorcode] $msg [expr {$us < 2000000}]
+} {1 1 {output file already exists} 1}
+
+do_test doltlite_vacuum_into_race-2.5 {
+  set absPath [file normalize vir_source.db]
+  set us [lindex [time {
+    set rc [catch {db eval {VACUUM INTO $absPath}} msg]
+  }] 0]
+  list $rc [db errorcode] $msg [expr {$us < 2000000}]
+} {1 1 {output file already exists} 1}
+
+do_test doltlite_vacuum_into_race-2.6 {
+  list [db eval {SELECT count(*) FROM source_rows}] [db eval {PRAGMA integrity_check}]
+} {1 ok}
+db close
+
 # Reset-database VACUUM must roll back its write transaction and release the
 # exclusive graph lock when commit fails with SQLITE_BUSY.
 forcedelete vir_reset.db .vir_reset.db-lock
