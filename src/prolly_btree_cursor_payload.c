@@ -107,8 +107,6 @@ int prollyBtreeCursorCurrentTreeValueCopy(
     int rc = cursorLoadFullLeaf(pCur, offset+amt);
     if( rc!=SQLITE_OK ) return rc;
     prollyBtreeCursorCurrentTreeValueSpan(pCur, &pData, &nData, &nAvail);
-    memcpy(pBuf, pData + offset, amt);
-    return SQLITE_OK;
   }
   if( amt>0 ){
     u32 nPrefix = offset < (u32)nAvail ? (u32)nAvail - offset : 0;
