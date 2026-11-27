@@ -54,5 +54,41 @@ do_execsql_test 2.0 {
   FROM v1;
 }
 
+# Verify OPQ with wht:1 behaves consistently across batched rebuild,
+# single-vector insert/delete, KANN queries, and integrity_check.
+do_execsql_test 3.0 {
+  DROP TABLE IF EXISTS v1;
+  CREATE VIRTUAL TABLE v1 USING vec1(v);
+  WITH s(i) AS (
+    SELECT 1 UNION ALL SELECT i+1 FROM s WHERE i<520
+  )
+  INSERT INTO v1(rowid, v) SELECT i, random_vector(16) FROM s;
+
+  INSERT INTO v1(cmd, arg)
+  SELECT
+    'rebuild',
+    vec1_train(v, '{"quantizer":"opq", "wht":1, "codesize":4, "nbucket":4}')
+  FROM v1;
+}
+
+do_execsql_test 3.1 {
+  PRAGMA integrity_check;
+} {ok}
+
+do_execsql_test 3.2 {
+  SELECT count(*) FROM v1((SELECT v FROM v1 WHERE rowid=1), 10);
+} {10}
+
+do_execsql_test 3.3 {
+  SELECT rowid FROM v1((SELECT v FROM v1 WHERE rowid=1), 10)
+  WHERE rowid=1;
+} {1}
+
+do_execsql_test 3.4 {
+  INSERT INTO v1(rowid, v) VALUES(521, random_vector(16));
+  DELETE FROM v1 WHERE rowid IN (1, 10, 25, 519, 520, 521);
+  PRAGMA integrity_check;
+} {ok}
+
 finish_test
 

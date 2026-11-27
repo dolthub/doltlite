@@ -5307,7 +5307,7 @@ static void vec1TrainFinal(sqlite3_context *pCtx){
   flags = VEC1_MODEL_INDEX 
         | ((p->nBucket>0 && p->bResidual) ? VEC1_MODEL_RESIDUAL : 0)
         | ((p->eQuant==VEC1_QUANTIZE_OPQ) ? VEC1_MODEL_ROTATE : 0)
-        | (p->bWHT ? VEC1_MODEL_WHT : 0)
+        | ((p->bWHT && p->eQuant!=VEC1_QUANTIZE_OPQ) ? VEC1_MODEL_WHT : 0)
         | ((p->eQuant==VEC1_QUANTIZE_BQ) ? VEC1_MODEL_BITQUANT : 0);
   vec1HeaderWrite(aByte, flags, 
       p->tv.nElem, p->nCodesize, p->nBucket, p->eDistance
@@ -11153,7 +11153,9 @@ static void vec1TransformInputVectorN(
       }
     }
 
-    if( pMod->hdr.flags & VEC1_MODEL_WHT ){
+    if( (pMod->hdr.flags & VEC1_MODEL_ROTATE)==0
+     && (pMod->hdr.flags & VEC1_MODEL_WHT)
+    ){
       for(vv=0; vv<VEC1_MULTIMATCH_NVEC; vv++){
         vec1ApplyWHT(aRot[vv], nElem);
       }
