@@ -586,6 +586,14 @@ void doltConnectBranchFunc(
     return;
   }
 
+  if( doltliteStoreSiblingBranch(db, zBranch, 1) ){
+    char *zErr = sqlite3_mprintf(
+        "branch '%s' is attached in this connection", zBranch);
+    sqlite3_result_error(ctx, zErr ? zErr : "branch is attached", -1);
+    sqlite3_free(zErr);
+    return;
+  }
+
   zCurrentBranch = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
   if( !zCurrentBranch ){
     sqlite3_result_error_code(ctx, SQLITE_NOMEM);

@@ -118,6 +118,35 @@ check_match "connect_inside_insert_select_rejected" "cannot connect_branch while
 res=$("$DOLTLITE" "$DB" "SELECT active_branch(); SELECT id, v FROM t ORDER BY id;")
 check_eq "connect_inside_dml_leaves_branch_and_table_intact" $'main\n1|main' "$res"
 
+setup_db "$DB"
+res=$("$DOLTLITE" "$DB" "ATTACH '$DB/feat' AS f; SELECT dolt_connect_branch('feat');" 2>&1 || true)
+check_match "connect_attached_branch_rejected" "branch 'feat' is attached in this connection" "$res"
+res=$("$DOLTLITE" -bail "$DB" <<SQL 2>&1 || true
+ATTACH '$DB/feat' AS f;
+SELECT dolt_connect_branch('main');
+SELECT active_branch();
+SELECT v FROM t WHERE id=1;
+SELECT v FROM f.t WHERE id=1;
+DETACH f;
+SELECT dolt_connect_branch('feat');
+SELECT active_branch();
+SELECT v FROM t WHERE id=1;
+SQL
+)
+check_eq "connect_after_detach_succeeds" $'0\nmain\nmain\nfeat\n0\nfeat\nfeat' "$res"
+res=$("$DOLTLITE" "$DB" <<SQL 2>&1
+ATTACH '$DB/feat' AS f;
+SELECT dolt_connect_branch('feat');
+SELECT active_branch();
+SELECT v FROM t WHERE id=1;
+DETACH f;
+SELECT dolt_connect_branch('feat');
+SELECT active_branch();
+SQL
+)
+check_match "connect_attached_branch_leaves_main_and_recovers_after_detach_err" "branch 'feat' is attached in this connection" "$res"
+check_eq "connect_attached_branch_leaves_main_and_recovers_after_detach_out" $'main\nmain\n0\nfeat' "$(printf '%s\n' "$res" | grep -v "branch 'feat' is attached in this connection")"
+
 rm -f "$DB"
 
 echo ""
