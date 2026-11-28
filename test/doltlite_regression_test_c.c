@@ -23501,6 +23501,134 @@ static void run_clean_close_marker_respects_shared_lock(void){
   removeDbFiles(dbpath);
 }
 
+static void run_readonly_disk_branch_probes(void){
+  ChunkStore csA, csB, csVerify;
+  ProllyHash h1, h2, ws1, ws2, chunkHash, tip, ws;
+  static const u8 payload1[] = "readonly-probe-payload-1";
+  static const u8 payload2[] = "readonly-probe-payload-2";
+  sqlite3_vfs *pVfs = sqlite3_vfs_find(0);
+  sqlite3_int64 sizeBefore = 0, sizeAfter = 0;
+  u8 *bufBefore = 0, *bufAfter = 0;
+  int found = 0, exists = 0;
+  char dbpath[256];
+
+  printf("=== Readonly Disk Branch Probes Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_readonly_disk_branch_probes");
+  removeDbFiles(dbpath);
+  memset(&csA, 0, sizeof(csA));
+  memset(&csB, 0, sizeof(csB));
+  memset(&csVerify, 0, sizeof(csVerify));
+  prollyHashCompute("tip-1", 5, &h1);
+  prollyHashCompute("tip-2", 5, &h2);
+  prollyHashCompute("ws-1", 4, &ws1);
+  prollyHashCompute("ws-2", 4, &ws2);
+
+  check("rdp_open_a",
+        chunkStoreOpen(&csA, pVfs, dbpath,
+                       SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("rdp_add_branch", chunkStoreAddBranch(&csA, "main", &h1)==SQLITE_OK);
+  check("rdp_set_ws1", chunkStoreSetBranchWorkingSet(&csA, "main", &ws1)==SQLITE_OK);
+  check("rdp_put_1",
+        chunkStorePut(&csA, payload1, (int)sizeof(payload1), &chunkHash)==SQLITE_OK);
+  check("rdp_ser_1", chunkStoreSerializeRefs(&csA)==SQLITE_OK);
+  check("rdp_commit_1", chunkStoreCommit(&csA)==SQLITE_OK);
+
+  check("rdp_open_b",
+        chunkStoreOpen(&csB, pVfs, dbpath,
+                       SQLITE_OPEN_READWRITE|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+
+  check("rdp_upd_branch", chunkStoreUpdateBranch(&csA, "main", &h2)==SQLITE_OK);
+  check("rdp_set_ws2", chunkStoreSetBranchWorkingSet(&csA, "main", &ws2)==SQLITE_OK);
+  check("rdp_put_2",
+        chunkStorePut(&csA, payload2, (int)sizeof(payload2), &chunkHash)==SQLITE_OK);
+  check("rdp_ser_2", chunkStoreSerializeRefs(&csA)==SQLITE_OK);
+  check("rdp_commit_2", chunkStoreCommit(&csA)==SQLITE_OK);
+  check("rdp_not_clean_after_commit", csA.wal.cleanCloseMarker==0);
+
+  check("rdp_size_before",
+        csA.file.pFile->pMethods->xFileSize(csA.file.pFile, &sizeBefore)==SQLITE_OK
+        && sizeBefore>0);
+  bufBefore = sqlite3_malloc64((sqlite3_uint64)sizeBefore);
+  bufAfter = sqlite3_malloc64((sqlite3_uint64)sizeBefore);
+  check("rdp_alloc", bufBefore!=0 && bufAfter!=0);
+  if( bufBefore && bufAfter ){
+    check("rdp_read_before",
+          csA.file.pFile->pMethods->xRead(csA.file.pFile, bufBefore, (int)sizeBefore, 0)==SQLITE_OK);
+
+    found = 0;
+    memset(&tip, 0, sizeof(tip));
+    check("rdp_read_tip",
+          chunkStoreReadDiskBranchTip(&csB, "main", &tip, &found)==SQLITE_OK
+          && found==1 && prollyHashCompare(&tip, &h2)==0);
+    check("rdp_tip_no_mutate",
+          csA.file.pFile->pMethods->xFileSize(csA.file.pFile, &sizeAfter)==SQLITE_OK
+          && sizeAfter==sizeBefore
+          && csA.file.pFile->pMethods->xRead(csA.file.pFile, bufAfter, (int)sizeBefore, 0)==SQLITE_OK
+          && memcmp(bufBefore, bufAfter, (size_t)sizeBefore)==0);
+
+    found = 0;
+    memset(&ws, 0, sizeof(ws));
+    check("rdp_read_disk_ws",
+          chunkStoreReadDiskBranchWorkingSet(&csB, "main", &ws, &found)==SQLITE_OK
+          && found==1 && prollyHashCompare(&ws, &ws2)==0);
+    check("rdp_disk_ws_no_mutate",
+          csA.file.pFile->pMethods->xFileSize(csA.file.pFile, &sizeAfter)==SQLITE_OK
+          && sizeAfter==sizeBefore
+          && csA.file.pFile->pMethods->xRead(csA.file.pFile, bufAfter, (int)sizeBefore, 0)==SQLITE_OK
+          && memcmp(bufBefore, bufAfter, (size_t)sizeBefore)==0);
+
+    found = 0;
+    memset(&ws, 0, sizeof(ws));
+    check("rdp_read_pub_ws",
+          chunkStoreReadPublishedBranchWorkingSet(&csB, "main", &ws, &found)==SQLITE_OK
+          && found==1 && prollyHashCompare(&ws, &ws2)==0);
+    check("rdp_pub_ws_no_mutate",
+          csA.file.pFile->pMethods->xFileSize(csA.file.pFile, &sizeAfter)==SQLITE_OK
+          && sizeAfter==sizeBefore
+          && csA.file.pFile->pMethods->xRead(csA.file.pFile, bufAfter, (int)sizeBefore, 0)==SQLITE_OK
+          && memcmp(bufBefore, bufAfter, (size_t)sizeBefore)==0);
+
+    check("rdp_open_verify",
+          chunkStoreOpen(&csVerify, pVfs, dbpath,
+                         SQLITE_OPEN_READONLY|SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+    check("rdp_still_unmarked", csVerify.wal.cleanCloseMarker==0);
+    chunkStoreClose(&csVerify);
+  }
+
+  chunkStoreClose(&csA);
+  removeDbFiles(dbpath);
+  exists = 1;
+  check("rdp_removed",
+        pVfs->xAccess(pVfs, dbpath, SQLITE_ACCESS_EXISTS, &exists)==SQLITE_OK
+        && exists==0);
+
+  check("rdp_tip_missing_cantopen",
+        chunkStoreReadDiskBranchTip(&csB, "main", &tip, &found)==SQLITE_CANTOPEN);
+  exists = 1;
+  check("rdp_tip_no_create",
+        pVfs->xAccess(pVfs, dbpath, SQLITE_ACCESS_EXISTS, &exists)==SQLITE_OK
+        && exists==0);
+
+  check("rdp_disk_ws_missing_cantopen",
+        chunkStoreReadDiskBranchWorkingSet(&csB, "main", &ws, &found)==SQLITE_CANTOPEN);
+  exists = 1;
+  check("rdp_disk_ws_no_create",
+        pVfs->xAccess(pVfs, dbpath, SQLITE_ACCESS_EXISTS, &exists)==SQLITE_OK
+        && exists==0);
+
+  check("rdp_pub_ws_missing_cantopen",
+        chunkStoreReadPublishedBranchWorkingSet(&csB, "main", &ws, &found)==SQLITE_CANTOPEN);
+  exists = 1;
+  check("rdp_pub_ws_no_create",
+        pVfs->xAccess(pVfs, dbpath, SQLITE_ACCESS_EXISTS, &exists)==SQLITE_OK
+        && exists==0);
+
+  chunkStoreClose(&csB);
+  sqlite3_free(bufBefore);
+  sqlite3_free(bufAfter);
+  removeDbFiles(dbpath);
+}
+
 static void armSyncFailBeforeRefInstall(void *pArg){
   (void)pArg;
   gFailHits = 0;
@@ -24671,7 +24799,8 @@ static const RegressionCase aCases[] = {
   { "sortkey_corrupt_record_bounds", "Sortkey Corrupt Record Bounds Test", run_sortkey_corrupt_record_bounds },
   { "sortkey_large_record_header", "Sortkey Large Record Header Test", run_sortkey_large_record_header },
   { "http_pending_refs_overlong_branch", "HTTP Pending Refs Overlong Branch Test", run_http_pending_refs_overlong_branch },
-  { "catalog_wide_master_oom_no_leak", "Catalog Wide Master Record OOM No Leak Test", run_catalog_wide_master_oom_no_leak }
+  { "catalog_wide_master_oom_no_leak", "Catalog Wide Master Record OOM No Leak Test", run_catalog_wide_master_oom_no_leak },
+  { "readonly_disk_branch_probes", "Readonly Disk Branch Probes Test", run_readonly_disk_branch_probes }
 };
 
 static int run_case_by_name(const char *zName){
