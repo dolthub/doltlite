@@ -14,6 +14,11 @@ static int tryReplaceBatchLeafDirect(
   ProllyHash*, int*, u8**
 );
 
+static int prollyNodeKeyFlagsMatch(const ProllyNode *pNode, u8 flags){
+  return (pNode->flags & (PROLLY_NODE_INTKEY | PROLLY_NODE_BLOBKEY))
+      == (flags & (PROLLY_NODE_INTKEY | PROLLY_NODE_BLOBKEY));
+}
+
 static int parentChildSubtreeCount(
   ChunkStore *pStore,
   ProllyCache *pCache,
@@ -218,16 +223,11 @@ static int streamingMergeNode(
       rc = prollyLoadNode(pMut->pStore, pCache, &childHash, &pChildEntry);
       if( rc!=SQLITE_OK ) return rc;
 
-#ifdef DOLTLITE_PROLLY_CHECK
-      if( pChildEntry->node.level != pNode->level - 1 ){
-        fprintf(stderr,
-                "doltlite: E8 invariant: parent level=%d but child level=%d "
-                "(expected %d)\n",
-                (int)pNode->level, (int)pChildEntry->node.level,
-                (int)pNode->level - 1);
-        abort();
+      if( pChildEntry->node.level != pNode->level - 1
+       || !prollyNodeKeyFlagsMatch(&pChildEntry->node, pMut->flags) ){
+        prollyCacheRelease(pCache, pChildEntry);
+        return SQLITE_CORRUPT;
       }
-#endif
       if( pChildEntry->node.level == 0 ){
         rc = SQLITE_NOTFOUND;
         if( prollyChunkerLevelsBelowEmpty(pChunker, 1) ){
@@ -283,6 +283,13 @@ static int streamingMerge(
       sqlite3_free(pRootData);
       return rc;
     }
+  }
+
+  if( pRootNode->level >= PROLLY_CURSOR_MAX_DEPTH
+   || !prollyNodeKeyFlagsMatch(pRootNode, pMut->flags) ){
+    if( pRootEntry ) prollyCacheRelease(pCache, pRootEntry);
+    sqlite3_free(pRootData);
+    return SQLITE_CORRUPT;
   }
 
   rc = prollyMutMapIterFirst(&iter, pMut->pEdits);
@@ -1484,7 +1491,13 @@ static int replaceBatchNodeNoRechunk(
 
       pChildEntry = prollyCacheGetPrefix(pMut->pCache, &childHash, 0);
       rc = SQLITE_NOTFOUND;
-      if( pChildEntry && pChildEntry->node.nValuePrefix ){
+      if( pChildEntry
+       && (pChildEntry->node.level != pNode->level - 1
+           || !prollyNodeKeyFlagsMatch(&pChildEntry->node, pMut->flags)) ){
+        prollyCacheRelease(pMut->pCache, pChildEntry);
+        pChildEntry = 0;
+        rc = SQLITE_CORRUPT;
+      }else if( pChildEntry && pChildEntry->node.nValuePrefix ){
         nLeafData = pChildEntry->node.nData;
         rc = tryReplaceBatchLeafDirect(pMut, &pChildEntry->node, pIter,
                                        childIsLast, &newChildHash,
@@ -1501,7 +1514,10 @@ static int replaceBatchNodeNoRechunk(
           rc = SQLITE_OK;
         }
         if( rc==SQLITE_OK ){
-          if( bHold && pChildEntry->node.level==0 ){
+          if( pChildEntry->node.level != pNode->level - 1
+           || !prollyNodeKeyFlagsMatch(&pChildEntry->node, pMut->flags) ){
+            rc = SQLITE_CORRUPT;
+          }else if( bHold && pChildEntry->node.level==0 ){
             rc = replaceBatchLeafNoRechunk(pMut, &pChildEntry->node, pIter,
                                            childIsLast, &newChildHash,
                                            &childChanged,
@@ -1608,6 +1624,12 @@ static int tryReplaceBatchNoRechunk(ProllyMutator *pMut){
       sqlite3_free(pRootData);
       return rc;
     }
+  }
+
+  if( pRootNode->level >= PROLLY_CURSOR_MAX_DEPTH
+   || !prollyNodeKeyFlagsMatch(pRootNode, pMut->flags) ){
+    rc = SQLITE_CORRUPT;
+    goto replace_batch_cleanup;
   }
 
   rc = prollyMutMapIterFirst(&iter, pMut->pEdits);
