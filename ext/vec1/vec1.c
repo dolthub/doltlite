@@ -9033,7 +9033,7 @@ static int vec1FilterArraySize(
   int iArg = 1;
   int rc = SQLITE_OK;
 
-  for(ii=0; idxStr[ii]; ii++){
+  for(ii=0; rc==SQLITE_OK && idxStr[ii]; ii++){
     char c = idxStr[ii];
     if( c==VEC1_OP_IN ){
       sqlite3_value *pDummy = 0;
@@ -9156,6 +9156,10 @@ static int vec1SetupKANNQuery(
 
   /* Determine the required size of the Vec1Query.aFilter[] array. */
   rc = vec1FilterArraySize(idxStr, argv, &nMax);
+  if( rc!=SQLITE_OK ){
+    *ppOut = 0;
+    return rc;
+  }
   
   p = (Vec1Query*)vec1MallocZero(
         sizeof(Vec1Query)                          /* Vec1Query object itself */
@@ -9231,7 +9235,7 @@ static int vec1SetupKANNQuery(
   /* Process remaining constraints, if any. */
   if( rc==SQLITE_OK && idxStr[iIdxStr]!='\0' ){
     char c;
-    while( (c = idxStr[iIdxStr++])!='\0' ){
+    while( rc==SQLITE_OK && (c = idxStr[iIdxStr++])!='\0' ){
       sqlite3_value *pVal = argv[iArg++];
       if( c==VEC1_OP_LIMIT ){
         i64 iVal = sqlite3_value_int64(pVal);
@@ -9730,40 +9734,44 @@ static void vec1DistanceStats(sqlite3_context *ctx, Vec1Csr *pCsr){
       const float *aTransform = 0;
       char *zEnc = 0;
   
-      if( pMod->hdr.nBucket>0 || pMod->hdr.nCodebook>0 ){
-        aTransform = vec1TransformInputVector(pMod, pTab->aTmpVec, aVec); 
-        fNorm = vec1VectorNorm2(aTransform, nElem);
-      }
-  
-      /* Find bucket and coarse error if applicable. */
-      if( pMod->hdr.nBucket>0 ){
-        iBucket = vec1BestMatchSimple(
-            pMod->aCentroid, pMod->hdr.nBucket, aTransform, nElem, &fCoarseError
-        );
-        if( aTransform!=pTab->aTmpVec ){
-          memcpy(pTab->aTmpVec, aTransform, nElem*sizeof_f32);
-          aTransform = pTab->aTmpVec;
+      if( nVec!=(nElem*sizeof_f32) ){
+        rc = VEC1_CORRUPT;
+      }else{
+        if( pMod->hdr.nBucket>0 || pMod->hdr.nCodebook>0 ){
+          aTransform = vec1TransformInputVector(pMod, pTab->aTmpVec, aVec); 
+          fNorm = vec1VectorNorm2(aTransform, nElem);
         }
-        if( pTab->mod.hdr.flags & VEC1_MODEL_RESIDUAL ){
-          vec1SubInPlace(pTab->aTmpVec, &pMod->aCentroid[iBucket*nElem], nElem);
+    
+        /* Find bucket and coarse error if applicable. */
+        if( pMod->hdr.nBucket>0 ){
+          iBucket = vec1BestMatchSimple(
+              pMod->aCentroid, pMod->hdr.nBucket, aTransform, nElem, &fCoarseError
+          );
+          if( aTransform!=pTab->aTmpVec ){
+            memcpy(pTab->aTmpVec, aTransform, nElem*sizeof_f32);
+            aTransform = pTab->aTmpVec;
+          }
+          if( pTab->mod.hdr.flags & VEC1_MODEL_RESIDUAL ){
+            vec1SubInPlace(pTab->aTmpVec, &pMod->aCentroid[iBucket*nElem], nElem);
+          }
         }
-      }
-  
-      /* Find reconstruction error if applicable. */
-      if( pMod->hdr.nCodebook>0 ){
-        rc = vec1QuantizeReconstructionError2(
-            pMod, aTransform, &zEnc, &fReconError
+    
+        /* Find reconstruction error if applicable. */
+        if( pMod->hdr.nCodebook>0 ){
+          rc = vec1QuantizeReconstructionError2(
+              pMod, aTransform, &zEnc, &fReconError
+          );
+        }
+    
+        pCsr->zDistance = vec1MPrintf(&rc, 
+            "{bucket:%d, coarse_error:%f, reconstruction_error:%f, code: %s}",
+            iBucket, 
+            fNorm==0.0 ? 0.0 : sqrt(fCoarseError/fNorm), 
+            fNorm==0.0 ? 0.0 : sqrt(fReconError/fNorm),
+            zEnc ? zEnc : "null"
         );
+        sqlite3_free(zEnc);
       }
-  
-      pCsr->zDistance = vec1MPrintf(&rc, 
-          "{bucket:%d, coarse_error:%f, reconstruction_error:%f, code: %s}",
-          iBucket, 
-          fNorm==0.0 ? 0.0 : sqrt(fCoarseError/fNorm), 
-          fNorm==0.0 ? 0.0 : sqrt(fReconError/fNorm),
-          zEnc ? zEnc : "null"
-      );
-      sqlite3_free(zEnc);
     }
     sqlite3_free(pFree);
   }

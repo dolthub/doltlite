@@ -100,4 +100,42 @@ foreach {tn expr} {
   }
 }
 
+# OOM during KANN query setup with a TEXT/BLOB meta-filter followed by an
+# IN meta-filter must not overwrite rc and crash in vec1MetaValueFilter.
+reset_db
+vec1_load db
+
+do_execsql_test 7.0 {
+  CREATE VIRTUAL TABLE t1 USING vec1(v, a, b);
+  WITH s(i) AS ( SELECT 1 UNION ALL SELECT i+1 FROM s WHERE i<100 )
+  INSERT INTO t1(rowid, v, a, b) SELECT i, rvec(16, i), 'tag_'||i, i % 5 FROM s;
+  INSERT INTO t1(cmd, arg) VALUES('rebuild', '{index:"flat"}');
+}
+
+faultsim_save_and_close
+
+do_faultsim_test 7 -faults oom* -prep {
+  faultsim_restore_and_reopen
+  vec1_load db
+} -body {
+  execsql {
+    SELECT rowid FROM t1(rvec(16, 1), '{K:10}')
+    WHERE a='tag_1' AND b IN (1, 2, 3);
+  }
+} -test {
+  faultsim_test_result {0 1} {1 {out of memory}}
+}
+
+do_faultsim_test 8 -faults oom* -prep {
+  faultsim_restore_and_reopen
+  vec1_load db
+} -body {
+  execsql {
+    SELECT rowid FROM t1(rvec(16, 1), '{K:10}')
+    WHERE a=CAST('tag_1' AS BLOB) AND b IN (1, 2, 3);
+  }
+} -test {
+  faultsim_test_result {0 {}} {1 {out of memory}}
+}
+
 finish_test
