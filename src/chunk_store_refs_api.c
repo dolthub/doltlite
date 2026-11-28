@@ -330,7 +330,7 @@ int chunkStoreReadDiskBranchTip(ChunkStore *cs, const char *zName,
   }
 
   rc = chunkStoreOpen(&tmp, cs->file.pVfs, cs->file.zFilename,
-                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
+                      SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB);
   if( rc!=SQLITE_OK ) return rc;
   if( chunkStoreFindBranch(&tmp, zName, pTip)==SQLITE_OK ) *pFound = 1;
   chunkStoreClose(&tmp);
@@ -341,7 +341,7 @@ static int csOpenDiskBranchWorkingSet(ChunkStore *cs, const char *zName,
                                       ProllyHash *pWorkingSet, int *pFound){
   ChunkStore tmp;
   int rc = chunkStoreOpen(&tmp, cs->file.pVfs, cs->file.zFilename,
-                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
+                      SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB);
   if( rc!=SQLITE_OK ) return rc;
   if( chunkStoreGetBranchWorkingSet(&tmp, zName, pWorkingSet)==SQLITE_OK ){
     *pFound = 1;
