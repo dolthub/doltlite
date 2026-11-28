@@ -1711,13 +1711,36 @@ static int joinedPrepare(Btree *pAny, JoinedReload **pa, int *pn){
   return rc;
 }
 
-static void joinedFail(JoinedReload *a, int n, int rc){
+static void joinedFail(Btree *pAny, JoinedReload *a, int n, int rc){
+  sqlite3 *db = pAny->db;
   int i;
-  for(i=0; i<n; i++){
-    Btree *q = a[i].p;
+  for(i=0; db && i<db->nDb; i++){
+    Btree *q = db->aDb[i].pBt;
+    Btree *pReload = 0;
+    int noReload = 0;
+    int *pbHave = &noReload;
+    int j;
+    if( !doltliteBtreeSameStore(pAny, q)
+     || (!q->bJoinedPublish && !q->bJoinedStaged) ){
+      continue;
+    }
+    for(j=0; j<n; j++){
+      if( a[j].p==q ){
+        pReload = &a[j].reload;
+        pbHave = &a[j].bHave;
+        break;
+      }
+    }
     (void)commitPhaseTwoFailRestore(q, q->pBt, rc, &q->pJoinedCat,
-                                    &a[i].reload, &a[i].bHave);
+                                    pReload, pbHave);
     commitJoinedForget(q);
+    if( rc!=SQLITE_BUSY ) q->bJoinedPublish = 0;
+  }
+  for(i=0; i<n; i++){
+    if( a[i].bHave ){
+      catFree(&a[i].reload.cat);
+      a[i].bHave = 0;
+    }
   }
   sqlite3_free(a);
 }
@@ -1751,7 +1774,7 @@ static int commitJoinedPublish(Btree *pLast){
   rc = joinedPrepare(pLast, &a, &n);
   if( rc==SQLITE_OK ) rc = commitChunkStore(pLast->pBt, 1);
   if( rc!=SQLITE_OK ){
-    joinedFail(a, n, rc);
+    joinedFail(pLast, a, n, rc);
     return rc;
   }
   doltliteVcCommandInstalled(pLast->db);
@@ -1918,7 +1941,10 @@ static SQLITE_NOINLINE int commitPhaseTwoWrite(Btree *p, BtShared *pBt){
 
   if( p->bJoinedPublish ){
     rc = commitJoinedStage(p, pBt);
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ){
+      joinedFail(p, 0, 0, rc);
+      return rc;
+    }
     if( commitJoinedPending(p) ) return SQLITE_OK;
     return commitJoinedPublish(p);
   }

@@ -566,4 +566,67 @@ foreach {name sql refused} {
 }
 catch {db eval {DETACH o}}
 
+# OOM during a 3-branch joined commit (including schema reload prep and
+# staging on later siblings) must roll back and unlock all siblings.
+if {[info commands sqlite3_memdebug_fail] ne ""} {
+  mb_reset
+  db eval {SELECT dolt_branch('dev')}
+  db close
+  file copy -force test.db multi-branch-oom-base.db
+
+  set oom_before {{1:base ok} {1:base ok} {1:base ok}}
+  set oom_after {{1:base,2:main ok} {1:base,3:feat ok} {1:base,4:dev ok}}
+  set oom_failed 0
+  for {set iFail 1} {$iFail <= 250} {incr iFail} {
+    forcedelete test.db
+    file copy -force multi-branch-oom-base.db test.db
+    sqlite3 db test.db
+    db eval "ATTACH '[file normalize test.db]/feat' AS f"
+    db eval "ATTACH '[file normalize test.db]/dev' AS d"
+    db eval {
+      BEGIN;
+      CREATE TABLE main.s1(x);
+      INSERT INTO main.t VALUES(2,'main');
+      CREATE TABLE f.s2(x);
+      INSERT INTO f.t VALUES(3,'feat');
+      CREATE TABLE d.s3(x);
+      INSERT INTO d.t VALUES(4,'dev');
+    }
+    sqlite3_memdebug_fail $iFail -repeat 0
+    set res [catchsql COMMIT]
+    set nLeft [sqlite3_memdebug_pending]
+    sqlite3_memdebug_fail -1
+    if {[lindex $res 0]} {
+      incr oom_failed
+      if {![sqlite3_get_autocommit db]} {catchsql ROLLBACK}
+      do_test multi-branch-oom-$iFail.peer-unlocked {
+        sqlite3 peer [file normalize test.db]/dev
+        set pr [catchsql {INSERT INTO t VALUES(99,'peer')} peer]
+        peer close
+        set pr
+      } {0 {}}
+      do_test multi-branch-oom-$iFail.disk-clean {
+        list [mb_disk main] [mb_disk feat] [mb_disk dev]
+      } [list {1:base ok} {1:base ok} {1:base,99:peer ok}]
+      do_test multi-branch-oom-$iFail.reuse {
+        catchsql {
+          BEGIN;
+          INSERT INTO main.t VALUES(20,'m2');
+          INSERT INTO f.t VALUES(30,'f2');
+          COMMIT;
+        }
+      } {0 {}}
+    } else {
+      do_test multi-branch-oom-$iFail.landed {
+        list [mb_disk main] [mb_disk feat] [mb_disk dev]
+      } $oom_after
+    }
+    db close
+    if {$nLeft > 0} break
+  }
+  do_test multi-branch-oom-exercised {expr {$oom_failed > 0}} 1
+  forcedelete multi-branch-oom-base.db
+  sqlite3 db test.db
+}
+
 finish_test
