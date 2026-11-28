@@ -23510,11 +23510,14 @@ static void run_readonly_disk_branch_probes(void){
   sqlite3_int64 sizeBefore = 0, sizeAfter = 0;
   u8 *bufBefore = 0, *bufAfter = 0;
   int found = 0, exists = 0;
-  char dbpath[256];
+  char dbpath[256], missingpath[256];
+  char *zOrigFilename = 0;
 
   printf("=== Readonly Disk Branch Probes Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_readonly_disk_branch_probes");
+  make_dbpath(missingpath, sizeof(missingpath), "test_readonly_disk_branch_probes_missing");
   removeDbFiles(dbpath);
+  removeDbFiles(missingpath);
   memset(&csA, 0, sizeof(csA));
   memset(&csB, 0, sizeof(csB));
   memset(&csVerify, 0, sizeof(csVerify));
@@ -23596,37 +23599,41 @@ static void run_readonly_disk_branch_probes(void){
   }
 
   chunkStoreClose(&csA);
-  removeDbFiles(dbpath);
   exists = 1;
-  check("rdp_removed",
-        pVfs->xAccess(pVfs, dbpath, SQLITE_ACCESS_EXISTS, &exists)==SQLITE_OK
+  check("rdp_missing_absent",
+        pVfs->xAccess(pVfs, missingpath, SQLITE_ACCESS_EXISTS, &exists)==SQLITE_OK
         && exists==0);
+
+  zOrigFilename = csB.file.zFilename;
+  csB.file.zFilename = missingpath;
 
   check("rdp_tip_missing_cantopen",
         chunkStoreReadDiskBranchTip(&csB, "main", &tip, &found)==SQLITE_CANTOPEN);
   exists = 1;
   check("rdp_tip_no_create",
-        pVfs->xAccess(pVfs, dbpath, SQLITE_ACCESS_EXISTS, &exists)==SQLITE_OK
+        pVfs->xAccess(pVfs, missingpath, SQLITE_ACCESS_EXISTS, &exists)==SQLITE_OK
         && exists==0);
 
   check("rdp_disk_ws_missing_cantopen",
         chunkStoreReadDiskBranchWorkingSet(&csB, "main", &ws, &found)==SQLITE_CANTOPEN);
   exists = 1;
   check("rdp_disk_ws_no_create",
-        pVfs->xAccess(pVfs, dbpath, SQLITE_ACCESS_EXISTS, &exists)==SQLITE_OK
+        pVfs->xAccess(pVfs, missingpath, SQLITE_ACCESS_EXISTS, &exists)==SQLITE_OK
         && exists==0);
 
   check("rdp_pub_ws_missing_cantopen",
         chunkStoreReadPublishedBranchWorkingSet(&csB, "main", &ws, &found)==SQLITE_CANTOPEN);
   exists = 1;
   check("rdp_pub_ws_no_create",
-        pVfs->xAccess(pVfs, dbpath, SQLITE_ACCESS_EXISTS, &exists)==SQLITE_OK
+        pVfs->xAccess(pVfs, missingpath, SQLITE_ACCESS_EXISTS, &exists)==SQLITE_OK
         && exists==0);
 
+  csB.file.zFilename = zOrigFilename;
   chunkStoreClose(&csB);
   sqlite3_free(bufBefore);
   sqlite3_free(bufAfter);
   removeDbFiles(dbpath);
+  removeDbFiles(missingpath);
 }
 
 static void armSyncFailBeforeRefInstall(void *pArg){
