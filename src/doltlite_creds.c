@@ -155,7 +155,21 @@ int doltliteBase64UrlDecode(const char *in, unsigned char **out, size_t *outlen)
   for (i = 0; i < inlen; i++) {
     char c = in[i];
     int v;
-    if (c == '=') break;
+    if (c == '=') {
+      size_t rem = inlen - i;
+      size_t j;
+      if (inlen % 4 != 0 || (rem != 1 && rem != 2)) {
+        sqlite3_free(buf);
+        return 1;
+      }
+      for (j = i + 1; j < inlen; j++) {
+        if (in[j] != '=') {
+          sqlite3_free(buf);
+          return 1;
+        }
+      }
+      break;
+    }
     v = b64urlVal(c);
     if (v < 0) {
       sqlite3_free(buf);
