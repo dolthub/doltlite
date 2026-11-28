@@ -299,19 +299,27 @@ static int diffIterActivateRange(
   if( pSeekNode && (pIter->flags & PROLLY_NODE_INTKEY) ){
     i64 seekKey = prollyNodeIntKey(pSeekNode, iSeekItem);
     rc = prollyCursorSeekInt(pIter->pCurOld, seekKey, &emO);
-    if( rc==SQLITE_OK && emO==0 ) rc = prollyCursorNext(pIter->pCurOld);
+    if( rc==SQLITE_OK && emO<=0 && prollyCursorIsValid(pIter->pCurOld) ){
+      rc = prollyCursorNext(pIter->pCurOld);
+    }
     if( rc==SQLITE_OK ){
       rc = prollyCursorSeekInt(pIter->pCurNew, seekKey, &emN);
-      if( rc==SQLITE_OK && emN==0 ) rc = prollyCursorNext(pIter->pCurNew);
+      if( rc==SQLITE_OK && emN<=0 && prollyCursorIsValid(pIter->pCurNew) ){
+        rc = prollyCursorNext(pIter->pCurNew);
+      }
     }
   }else if( pSeekNode ){
     const u8 *pSK; int nSK;
     prollyNodeKey(pSeekNode, iSeekItem, &pSK, &nSK);
     rc = prollyCursorSeekBlob(pIter->pCurOld, pSK, nSK, &emO);
-    if( rc==SQLITE_OK && emO==0 ) rc = prollyCursorNext(pIter->pCurOld);
+    if( rc==SQLITE_OK && emO<=0 && prollyCursorIsValid(pIter->pCurOld) ){
+      rc = prollyCursorNext(pIter->pCurOld);
+    }
     if( rc==SQLITE_OK ){
       rc = prollyCursorSeekBlob(pIter->pCurNew, pSK, nSK, &emN);
-      if( rc==SQLITE_OK && emN==0 ) rc = prollyCursorNext(pIter->pCurNew);
+      if( rc==SQLITE_OK && emN<=0 && prollyCursorIsValid(pIter->pCurNew) ){
+        rc = prollyCursorNext(pIter->pCurNew);
+      }
     }
   }else{
     rc = prollyCursorFirst(pIter->pCurOld, &emO);

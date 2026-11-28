@@ -278,25 +278,37 @@ static int fmCursorRecover(
   }else{
     if( fm->flags & PROLLY_NODE_INTKEY ){
       rc = prollyCursorSeekInt(&curA, iSeekKey, &res);
-      if( rc == SQLITE_OK && res == 0 ) rc = prollyCursorNext(&curA);
+      if( rc == SQLITE_OK && res <= 0 && prollyCursorIsValid(&curA) ){
+        rc = prollyCursorNext(&curA);
+      }
       if( rc == SQLITE_OK ){
         rc = prollyCursorSeekInt(&curO, iSeekKey, &res);
-        if( rc == SQLITE_OK && res == 0 ) rc = prollyCursorNext(&curO);
+        if( rc == SQLITE_OK && res <= 0 && prollyCursorIsValid(&curO) ){
+          rc = prollyCursorNext(&curO);
+        }
       }
       if( rc == SQLITE_OK ){
         rc = prollyCursorSeekInt(&curT, iSeekKey, &res);
-        if( rc == SQLITE_OK && res == 0 ) rc = prollyCursorNext(&curT);
+        if( rc == SQLITE_OK && res <= 0 && prollyCursorIsValid(&curT) ){
+          rc = prollyCursorNext(&curT);
+        }
       }
     }else{
       rc = prollyCursorSeekBlob(&curA, pSeekKey, nSeekKey, &res);
-      if( rc == SQLITE_OK && res == 0 ) rc = prollyCursorNext(&curA);
+      if( rc == SQLITE_OK && res <= 0 && prollyCursorIsValid(&curA) ){
+        rc = prollyCursorNext(&curA);
+      }
       if( rc == SQLITE_OK ){
         rc = prollyCursorSeekBlob(&curO, pSeekKey, nSeekKey, &res);
-        if( rc == SQLITE_OK && res == 0 ) rc = prollyCursorNext(&curO);
+        if( rc == SQLITE_OK && res <= 0 && prollyCursorIsValid(&curO) ){
+          rc = prollyCursorNext(&curO);
+        }
       }
       if( rc == SQLITE_OK ){
         rc = prollyCursorSeekBlob(&curT, pSeekKey, nSeekKey, &res);
-        if( rc == SQLITE_OK && res == 0 ) rc = prollyCursorNext(&curT);
+        if( rc == SQLITE_OK && res <= 0 && prollyCursorIsValid(&curT) ){
+          rc = prollyCursorNext(&curT);
+        }
       }
     }
   }
@@ -388,7 +400,16 @@ static int fmEmitChild(
   if( pSplice ){
     /* Share structure only when the chunker is aligned at this parent level. */
     if( prollyChunkerLevelsBelowEmpty(pCh, parentLevel) ){
+      ProllyCacheEntry *pEntry = 0;
       u64 spliceCount = 0;
+      rc = prollyLoadNode(fm->pStore, fm->pCache, pSplice, &pEntry);
+      if( rc != SQLITE_OK ) return rc;
+      if( (int)pEntry->node.level != parentLevel - 1
+       || (pEntry->node.flags & FM_KEY_FLAGS) != (fm->flags & FM_KEY_FLAGS) ){
+        prollyCacheRelease(fm->pCache, pEntry);
+        return SQLITE_CORRUPT;
+      }
+      prollyCacheRelease(fm->pCache, pEntry);
       rc = prollySubtreeCount(fm->pStore, fm->pCache, pSplice, &spliceCount);
       if( rc != SQLITE_OK ) return rc;
       return prollyChunkerAddAtLevelWithCount(pCh, parentLevel,
