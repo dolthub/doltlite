@@ -772,6 +772,224 @@ static void test_diff_corrupt_child_flags(void){
   closeStore(&cs, &cache, path);
 }
 
+static void test_corrupt_spliced_child(void){
+  ChunkStore cs;
+  ProllyCache cache;
+  ProllyHash empty, leafA, leaf20A, leaf20O, leaf20T;
+  ProllyHash badLevelChild, badFlagsChild;
+  ProllyHash ancRoot, oursRoot, theirsRoot, merged;
+  u8 recA[] = {2, 15, 'a'};
+  u8 recO[] = {2, 15, 'o'};
+  u8 recT[] = {2, 15, 't'};
+  u8 shortKey[1] = {'x'};
+  int rc, handled = 0;
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wm_corrupt_splice";
+
+  rc = openStore(&cs, &cache, path);
+  check("corrupt_splice: open", rc==SQLITE_OK);
+  memset(&empty, 0, sizeof(empty));
+
+  rc = insertInt(&cs, &cache, &empty, 1, recA, sizeof(recA), &leafA);
+  check("corrupt_splice: leafA", rc==SQLITE_OK);
+  rc = insertInt(&cs, &cache, &empty, 20, recA, sizeof(recA), &leaf20A);
+  check("corrupt_splice: leaf20A", rc==SQLITE_OK);
+  rc = insertInt(&cs, &cache, &empty, 20, recO, sizeof(recO), &leaf20O);
+  check("corrupt_splice: leaf20O", rc==SQLITE_OK);
+  rc = insertInt(&cs, &cache, &empty, 20, recT, sizeof(recT), &leaf20T);
+  check("corrupt_splice: leaf20T", rc==SQLITE_OK);
+
+  /* Case 1: spliced child 0 has wrong level (level 1 under a level-1 parent)
+  ** while chunker is empty below parentLevel so the splice fast path runs. */
+  rc = putSingleEntryNode(&cs, 1, 10, leafA.data, PROLLY_HASH_SIZE,
+                          &badLevelChild);
+  check("corrupt_splice: badLevelChild", rc==SQLITE_OK);
+  rc = putTwoChildNode(&cs, 1, 10, &leafA, 20, &leaf20A, &ancRoot);
+  check("corrupt_splice: level ancRoot", rc==SQLITE_OK);
+  rc = putTwoChildNode(&cs, 1, 10, &badLevelChild, 20, &leaf20O, &oursRoot);
+  check("corrupt_splice: level oursRoot", rc==SQLITE_OK);
+  rc = putTwoChildNode(&cs, 1, 10, &badLevelChild, 20, &leaf20T, &theirsRoot);
+  check("corrupt_splice: level theirsRoot", rc==SQLITE_OK);
+
+  memset(&merged, 0, sizeof(merged));
+  handled = -1;
+  rc = prollyThreeWayMergeFast(&cs, &cache, &ancRoot, &oursRoot, &theirsRoot,
+                               PROLLY_NODE_INTKEY, &merged, &handled);
+  check("corrupt_splice: wrong level returns SQLITE_CORRUPT",
+        rc==SQLITE_CORRUPT);
+  check("corrupt_splice: wrong level not handled", handled==0);
+
+  /* Case 2: spliced child 0 has wrong key flags (BLOBKEY under INTKEY parent)
+  ** while chunker is empty below parentLevel so the splice fast path runs. */
+  rc = putBlobKeyNode(&cs, 0, shortKey, 1, recT, sizeof(recT), &badFlagsChild);
+  check("corrupt_splice: badFlagsChild", rc==SQLITE_OK);
+  rc = putTwoChildNode(&cs, 1, 10, &leafA, 20, &leaf20A, &ancRoot);
+  check("corrupt_splice: flags ancRoot", rc==SQLITE_OK);
+  rc = putTwoChildNode(&cs, 1, 10, &badFlagsChild, 20, &leaf20O, &oursRoot);
+  check("corrupt_splice: flags oursRoot", rc==SQLITE_OK);
+  rc = putTwoChildNode(&cs, 1, 10, &badFlagsChild, 20, &leaf20T, &theirsRoot);
+  check("corrupt_splice: flags theirsRoot", rc==SQLITE_OK);
+
+  memset(&merged, 0, sizeof(merged));
+  handled = -1;
+  rc = prollyThreeWayMergeFast(&cs, &cache, &ancRoot, &oursRoot, &theirsRoot,
+                               PROLLY_NODE_INTKEY, &merged, &handled);
+  check("corrupt_splice: wrong flags returns SQLITE_CORRUPT",
+        rc==SQLITE_CORRUPT);
+  check("corrupt_splice: wrong flags not handled", handled==0);
+
+  closeStore(&cs, &cache, path);
+}
+
+static void test_cursor_recover_corrupt_boundary(void){
+  ChunkStore cs;
+  ProllyCache cache;
+  ProllyHash empty, leaf5A, leaf5B, leaf20A, leaf20O, leaf25T;
+  ProllyHash oldRoot, newRoot, ancRoot, oursRoot, theirsRoot, merged;
+  ProllyHash bLeafA, bLeafB, bLeafCA, bLeafCO, bLeafDT;
+  ProllyHash bOldRoot, bNewRoot, bAncRoot, bOursRoot, bTheirsRoot, bMerged;
+  ProllyDiffIter iter;
+  ProllyDiffChange *pCh = 0;
+  ProllyCursor cur;
+  u8 recA[] = {2, 15, 'a'};
+  u8 recB[] = {2, 15, 'b'};
+  u8 recO[] = {2, 15, 'o'};
+  u8 recT[] = {2, 15, 't'};
+  u8 kAA[2] = {'a','a'};
+  u8 kBB[2] = {'b','b'};
+  u8 kCC[2] = {'c','c'};
+  u8 kDD[2] = {'d','d'};
+  int rc, res = 0, handled = 0;
+  int nChanges, nRows;
+  i64 seenKeys[4];
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_3wm_corrupt_boundary";
+
+  rc = openStore(&cs, &cache, path);
+  check("corrupt_boundary: open", rc==SQLITE_OK);
+  memset(&empty, 0, sizeof(empty));
+
+  /* INTKEY: child 0 has shared boundary key 10, exceeding its subtree max key 5. */
+  rc = insertInt(&cs, &cache, &empty, 5, recA, sizeof(recA), &leaf5A);
+  check("corrupt_boundary: leaf5A", rc==SQLITE_OK);
+  rc = insertInt(&cs, &cache, &empty, 5, recB, sizeof(recB), &leaf5B);
+  check("corrupt_boundary: leaf5B", rc==SQLITE_OK);
+  rc = insertInt(&cs, &cache, &empty, 20, recA, sizeof(recA), &leaf20A);
+  check("corrupt_boundary: leaf20A", rc==SQLITE_OK);
+  rc = insertInt(&cs, &cache, &empty, 20, recO, sizeof(recO), &leaf20O);
+  check("corrupt_boundary: leaf20O", rc==SQLITE_OK);
+  rc = insertInt(&cs, &cache, &leaf20A, 25, recT, sizeof(recT), &leaf25T);
+  check("corrupt_boundary: leaf25T", rc==SQLITE_OK);
+
+  /* Diff INTKEY: child 0 emits MODIFY 5, then child 1 diverges (20 vs 25). */
+  rc = putTwoChildNode(&cs, 1, 10, &leaf5A, 20, &leaf20A, &oldRoot);
+  check("corrupt_boundary: diff int oldRoot", rc==SQLITE_OK);
+  rc = putTwoChildNode(&cs, 1, 10, &leaf5B, 25, &leaf25T, &newRoot);
+  check("corrupt_boundary: diff int newRoot", rc==SQLITE_OK);
+
+  rc = prollyDiffIterOpen(&iter, &cs, &cache, &oldRoot, &newRoot,
+                          PROLLY_NODE_INTKEY, PROLLY_NODE_INTKEY);
+  check("corrupt_boundary: diff int open", rc==SQLITE_OK);
+  nChanges = 0;
+  if( rc==SQLITE_OK ){
+    while( (rc = prollyDiffIterStep(&iter, &pCh))==SQLITE_ROW ){
+      if( nChanges<4 ) seenKeys[nChanges] = pCh->intKey;
+      nChanges++;
+    }
+    check("corrupt_boundary: diff int done", rc==SQLITE_DONE);
+    check("corrupt_boundary: diff int no duplicate key 5", nChanges==2);
+    check("corrupt_boundary: diff int keys [5,25]",
+          nChanges==2 && seenKeys[0]==5 && seenKeys[1]==25);
+    prollyDiffIterClose(&iter);
+  }
+
+  /* Three-way merge INTKEY: child 0 splices leaf5A, then child 1 diverges. */
+  rc = putTwoChildNode(&cs, 1, 10, &leaf5A, 20, &leaf20A, &ancRoot);
+  check("corrupt_boundary: merge int ancRoot", rc==SQLITE_OK);
+  rc = putTwoChildNode(&cs, 1, 10, &leaf5A, 20, &leaf20O, &oursRoot);
+  check("corrupt_boundary: merge int oursRoot", rc==SQLITE_OK);
+  rc = putTwoChildNode(&cs, 1, 10, &leaf5A, 25, &leaf25T, &theirsRoot);
+  check("corrupt_boundary: merge int theirsRoot", rc==SQLITE_OK);
+
+  memset(&merged, 0, sizeof(merged));
+  handled = 0;
+  rc = prollyThreeWayMergeFast(&cs, &cache, &ancRoot, &oursRoot, &theirsRoot,
+                               PROLLY_NODE_INTKEY, &merged, &handled);
+  check("corrupt_boundary: merge int rc", rc==SQLITE_OK);
+  check("corrupt_boundary: merge int handled", handled==1);
+  if( rc==SQLITE_OK && handled==1 ){
+    prollyCursorInit(&cur, &cs, &cache, &merged, PROLLY_NODE_INTKEY);
+    rc = prollyCursorFirst(&cur, &res);
+    nRows = 0;
+    while( rc==SQLITE_OK && prollyCursorIsValid(&cur) ){
+      if( nRows<4 ) seenKeys[nRows] = prollyCursorIntKey(&cur);
+      nRows++;
+      rc = prollyCursorNext(&cur);
+    }
+    prollyCursorClose(&cur);
+    check("corrupt_boundary: merge int scan ok", rc==SQLITE_OK);
+    check("corrupt_boundary: merge int no duplicate key 5", nRows==3);
+    check("corrupt_boundary: merge int keys [5,20,25]",
+          nRows==3 && seenKeys[0]==5 && seenKeys[1]==20 && seenKeys[2]==25);
+  }
+
+  /* BLOBKEY: child 0 has shared boundary "bb", exceeding subtree max key "aa". */
+  rc = insertBlob(&cs, &cache, &empty, kAA, 2, recA, sizeof(recA), &bLeafA);
+  check("corrupt_boundary: bLeafA", rc==SQLITE_OK);
+  rc = insertBlob(&cs, &cache, &empty, kAA, 2, recB, sizeof(recB), &bLeafB);
+  check("corrupt_boundary: bLeafB", rc==SQLITE_OK);
+  rc = insertBlob(&cs, &cache, &empty, kCC, 2, recA, sizeof(recA), &bLeafCA);
+  check("corrupt_boundary: bLeafCA", rc==SQLITE_OK);
+  rc = insertBlob(&cs, &cache, &empty, kCC, 2, recO, sizeof(recO), &bLeafCO);
+  check("corrupt_boundary: bLeafCO", rc==SQLITE_OK);
+  rc = insertBlob(&cs, &cache, &bLeafCA, kDD, 2, recT, sizeof(recT), &bLeafDT);
+  check("corrupt_boundary: bLeafDT", rc==SQLITE_OK);
+
+  rc = putTwoBlobChildNode(&cs, 1, kBB, 2, &bLeafA, kCC, 2, &bLeafCA, &bOldRoot);
+  check("corrupt_boundary: diff blob oldRoot", rc==SQLITE_OK);
+  rc = putTwoBlobChildNode(&cs, 1, kBB, 2, &bLeafB, kDD, 2, &bLeafDT, &bNewRoot);
+  check("corrupt_boundary: diff blob newRoot", rc==SQLITE_OK);
+
+  rc = prollyDiffIterOpen(&iter, &cs, &cache, &bOldRoot, &bNewRoot,
+                          PROLLY_NODE_BLOBKEY, PROLLY_NODE_BLOBKEY);
+  check("corrupt_boundary: diff blob open", rc==SQLITE_OK);
+  nChanges = 0;
+  if( rc==SQLITE_OK ){
+    while( (rc = prollyDiffIterStep(&iter, &pCh))==SQLITE_ROW ){
+      nChanges++;
+    }
+    check("corrupt_boundary: diff blob done", rc==SQLITE_DONE);
+    check("corrupt_boundary: diff blob no duplicate key aa", nChanges==2);
+    prollyDiffIterClose(&iter);
+  }
+
+  rc = putTwoBlobChildNode(&cs, 1, kBB, 2, &bLeafA, kCC, 2, &bLeafCA, &bAncRoot);
+  check("corrupt_boundary: merge blob ancRoot", rc==SQLITE_OK);
+  rc = putTwoBlobChildNode(&cs, 1, kBB, 2, &bLeafA, kCC, 2, &bLeafCO, &bOursRoot);
+  check("corrupt_boundary: merge blob oursRoot", rc==SQLITE_OK);
+  rc = putTwoBlobChildNode(&cs, 1, kBB, 2, &bLeafA, kDD, 2, &bLeafDT, &bTheirsRoot);
+  check("corrupt_boundary: merge blob theirsRoot", rc==SQLITE_OK);
+
+  memset(&bMerged, 0, sizeof(bMerged));
+  handled = 0;
+  rc = prollyThreeWayMergeFast(&cs, &cache, &bAncRoot, &bOursRoot, &bTheirsRoot,
+                               PROLLY_NODE_BLOBKEY, &bMerged, &handled);
+  check("corrupt_boundary: merge blob rc", rc==SQLITE_OK);
+  check("corrupt_boundary: merge blob handled", handled==1);
+  if( rc==SQLITE_OK && handled==1 ){
+    prollyCursorInit(&cur, &cs, &cache, &bMerged, PROLLY_NODE_BLOBKEY);
+    rc = prollyCursorFirst(&cur, &res);
+    nRows = 0;
+    while( rc==SQLITE_OK && prollyCursorIsValid(&cur) ){
+      nRows++;
+      rc = prollyCursorNext(&cur);
+    }
+    prollyCursorClose(&cur);
+    check("corrupt_boundary: merge blob scan ok", rc==SQLITE_OK);
+    check("corrupt_boundary: merge blob no duplicate key aa", nRows==3);
+  }
+
+  closeStore(&cs, &cache, path);
+}
+
 int main(void){
   sqlite3_initialize();
   test_same_shape_still_handles();
@@ -783,6 +1001,8 @@ int main(void){
   test_diff_open_error_frees_prefetch_buf();
   test_diff_prefetch_frame_no_overlap();
   test_diff_corrupt_child_flags();
+  test_corrupt_spliced_child();
+  test_cursor_recover_corrupt_boundary();
   printf("%d passed, %d failed\n", nPass, nFail);
   return nFail>0 ? 1 : 0;
 }
