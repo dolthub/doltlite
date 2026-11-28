@@ -340,6 +340,29 @@ run_test_error_match "table_schema_conflict_still_refused" \
   "BEGIN; SELECT dolt_merge('b');
 SELECT dolt_conflicts_resolve('--theirs','t');" \
   "Unable to automatically resolve schema conflicts" "$DBV"
+
+# Repeated 'dolt_schemas' arguments must expand at most once (issue #5797).
+MULTI_BASE="CREATE TABLE log(x);
+CREATE VIEW v1 AS SELECT id FROM t;
+CREATE VIEW v2 AS SELECT v FROM t;
+CREATE TRIGGER tr AFTER INSERT ON t BEGIN INSERT INTO log VALUES(0); END;"
+MULTI_OURS="DROP VIEW v1; CREATE VIEW v1 AS SELECT 1 AS o FROM t;
+DROP VIEW v2; CREATE VIEW v2 AS SELECT 10 AS o FROM t;
+DROP TRIGGER tr; CREATE TRIGGER tr AFTER INSERT ON t BEGIN INSERT INTO log VALUES(1); END;"
+MULTI_THEIRS="DROP VIEW v1; CREATE VIEW v1 AS SELECT 2 AS th FROM t;
+DROP VIEW v2; CREATE VIEW v2 AS SELECT 20 AS th FROM t;
+DROP TRIGGER tr; CREATE TRIGGER tr AFTER INSERT ON t BEGIN INSERT INTO log VALUES(2); END;"
+for side in ours theirs; do
+  view_conflict_db "$DBV" "$MULTI_BASE" "$MULTI_OURS" "$MULTI_THEIRS"
+  if [ $side = ours ]; then
+    want="1|10|1|0"
+  else
+    want="2|20|2|0"
+  fi
+  out=$(printf "BEGIN;\nSELECT dolt_merge('b');\nSELECT dolt_conflicts_resolve('--%s','dolt_schemas','dolt_schemas','DOLT_SCHEMAS','dolt_schemas');\nCOMMIT;\nINSERT INTO t VALUES(2,20);\nSELECT 'MS|' || (SELECT * FROM v1 LIMIT 1) || '|' || (SELECT * FROM v2 LIMIT 1) || '|' || (SELECT group_concat(x) FROM log) || '|' || (SELECT count(*) FROM dolt_conflicts);\n" "$side" \
+        | $DOLTLITE "$DBV" 2>/dev/null | grep '^MS|')
+  dltest_assert_equal "repeated_dolt_schemas_resolve_${side}" "$out" "MS|$want"
+done
 rm -f "$DBV"
 
 # Multi-table FK-linked conflicts resolved with --theirs must validate FK

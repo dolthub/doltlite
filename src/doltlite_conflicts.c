@@ -1333,6 +1333,7 @@ static int conflictsExpandSchemasName(
   int nAll = 0;
   char **azOut = 0;
   int nOut = 0;
+  int bExpandedSchemas = 0;
   int i, j, rc = SQLITE_OK;
 
   *pnOut = 0;
@@ -1353,6 +1354,7 @@ static int conflictsExpandSchemasName(
   for(i=0; rc==SQLITE_OK && i<nIn; i++){
     int nViews = 0;
     if( sqlite3_stricmp(azIn[i], "dolt_schemas")==0 ){
+      if( bExpandedSchemas ) continue;
       for(j=0; rc==SQLITE_OK && j<nAll; j++){
         int eType = 0;
         char *zTheirs = 0;
@@ -1366,7 +1368,11 @@ static int conflictsExpandSchemasName(
           nViews++;
         }
       }
-      if( nViews>0 ) continue;
+      if( rc!=SQLITE_OK ) break;
+      if( nViews>0 ){
+        bExpandedSchemas = 1;
+        continue;
+      }
     }
     azOut[nOut] = sqlite3_mprintf("%s", azIn[i]);
     if( !azOut[nOut++] ) rc = SQLITE_NOMEM;
