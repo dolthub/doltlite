@@ -363,12 +363,6 @@ static int remoteSrvCommitPending(ChunkStore *pStore){
 #define SERVER_BODY_MIN_RATE     (64 * 1024)
 #define SERVER_BODY_BUFFER_MAX   (MAX_REQUEST_BYTES * SERVER_WORKERS)
 
-static i64 monotonicMs(void){
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return (i64)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
-}
-
 /* Grow *pp to need bytes, capped at MAX_RESPONSE_BYTES (realloc64). */
 static int remoteSrvGrowBuf(u8 **pp, i64 *pnAlloc, i64 need){
   i64 nNew;
@@ -862,7 +856,7 @@ static int remoteSrvRunHook(RemoteSrvHook *p, char **azEnv){
   struct pollfd pfd;
   int aIn[2], aOut[2];
   int nMsg = 0, bLine = 0, bEof = 0, status = 0, bReaped = 0;
-  i64 deadline = monotonicMs() + p->timeoutMs;
+  i64 deadline = doltliteMonotonicMs() + p->timeoutMs;
   pid_t pid;
 
   if( pipe(aIn)!=0 ) return 1;
@@ -898,7 +892,7 @@ static int remoteSrvRunHook(RemoteSrvHook *p, char **azEnv){
   pfd.fd = aOut[0];
   pfd.events = POLLIN;
   while( !bEof ){
-    i64 left = deadline - monotonicMs();
+    i64 left = deadline - doltliteMonotonicMs();
     int n;
     if( left<=0 ) break;
     pfd.revents = 0;
@@ -932,7 +926,7 @@ static int remoteSrvRunHook(RemoteSrvHook *p, char **azEnv){
       bReaped = 1;
     }else if( r<0 && errno!=EINTR ){
       return 1;
-    }else if( monotonicMs()>=deadline ){
+    }else if( doltliteMonotonicMs()>=deadline ){
       kill(-pid, SIGKILL);
       kill(pid, SIGKILL);
       while( waitpid(pid, &status, 0)<0 && errno==EINTR ){}
@@ -1414,7 +1408,7 @@ static int remoteDbAcquire(
   pthread_mutex_unlock(&pSrv->mutex);
 
   pthread_mutex_lock(&h->mu);
-  h->lastUseMs = monotonicMs();
+  h->lastUseMs = doltliteMonotonicMs();
 
   /* Drop any leftover staging from a failed prior request before refresh. */
   if( h->bOpen
@@ -2103,7 +2097,7 @@ static int pendingIngest(DoltliteServer *pSrv, PendingConn *p){
     }
     p->bHandshake = 0;
     p->bWantWrite = 0;
-    p->startMs = monotonicMs();
+    p->startMs = doltliteMonotonicMs();
   }
   while( p->nHeader==0 && p->nBuf < MAX_HEADER_SIZE-1 ){
     int n;
@@ -2140,7 +2134,7 @@ static int pendingIngest(DoltliteServer *pSrv, PendingConn *p){
         return 1;
       }
       p->nBuf = nHeader;
-      p->startMs = monotonicMs();
+      p->startMs = doltliteMonotonicMs();
     }
   }
   if( p->nHeader ){
@@ -2148,7 +2142,7 @@ static int pendingIngest(DoltliteServer *pSrv, PendingConn *p){
     int n;
     int nRead = p->contentLength-p->nBody;
     p->bReadAgain = 0;
-    if( monotonicMs()-p->startMs >= pendingBudget(pSrv, p) ){
+    if( doltliteMonotonicMs()-p->startMs >= pendingBudget(pSrv, p) ){
       p->requestStatus = 400;
     }else if( nRead>0 ){
       if( nRead>(int)sizeof(aData) ) nRead = sizeof(aData);
@@ -2195,7 +2189,7 @@ static int pendingAdd(
   p = &aPending[*pnPending];
   memset(p, 0, sizeof(*p));
   p->fd = clientFd;
-  p->startMs = monotonicMs();
+  p->startMs = doltliteMonotonicMs();
   if( pSrv->tls ){
     p->conn = doltliteConnServerAttach(pSrv->tls, clientFd);
     if( !p->conn ){
@@ -2252,7 +2246,7 @@ static void serverLoop(DoltliteServer *pSrv){
        || (p->bWantWrite && (ready & POLLOUT)!=0) ){
         remove = pendingIngest(pSrv, p);
       }
-      if( !remove && monotonicMs() - p->startMs > pendingBudget(pSrv, p) ){
+      if( !remove && doltliteMonotonicMs() - p->startMs > pendingBudget(pSrv, p) ){
         p->requestStatus = 400;
         if( !p->nHeader || pendingPromote(pSrv, p, p->nHeader)!=0 ){
           pendingClose(pSrv, p);
