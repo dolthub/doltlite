@@ -1083,12 +1083,13 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
     return SQLITE_OK;
   }else{
     doltliteGetSessionHead(db, &head);
-    if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
     pCur->singleCommit = 0;
   }
 
-  rc = doltliteCommitQueueInit(&pCur->queue, &head);
-  if( rc!=SQLITE_OK ) return rc;
+  if( !prollyHashIsEmpty(&head) ){
+    rc = doltliteCommitQueueInit(&pCur->queue, &head);
+    if( rc!=SQLITE_OK ) return rc;
+  }
 
   if( useStart ){
     pCur->phase = 1;
