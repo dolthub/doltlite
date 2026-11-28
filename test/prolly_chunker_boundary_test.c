@@ -8,6 +8,7 @@
 #include "prolly_hash.h"
 #include "prolly_xxhash.h"
 #include "prolly_chunker.h"
+#include "prolly_cursor.h"
 #include "prolly_mutate.h"
 #include "prolly_node.h"
 #include "chunk_store.h"
@@ -1644,6 +1645,254 @@ static void test_weibull_concurrent_init(void){
 }
 #endif
 
+static int putRawNode(
+  ChunkStore *pStore,
+  u8 level,
+  u8 flags,
+  int nItems,
+  const i64 *aIntKey,
+  const u8 *const *apKey,
+  const int *anKey,
+  const u8 *const *apVal,
+  const int *anVal,
+  const u64 *aCount,
+  ProllyHash *pOut
+){
+  ProllyNodeBuilder b;
+  u8 *pData = 0;
+  int nData = 0;
+  int i, rc = SQLITE_OK;
+
+  prollyNodeBuilderInit(&b, level, flags);
+  for(i=0; i<nItems && rc==SQLITE_OK; i++){
+    u8 kbuf[8];
+    const u8 *pK;
+    int nK;
+    if( flags & PROLLY_NODE_INTKEY ){
+      prollyEncodeIntKey(aIntKey[i], kbuf);
+      pK = kbuf;
+      nK = 8;
+    }else{
+      pK = apKey[i];
+      nK = anKey[i];
+    }
+    if( level>0 && aCount ){
+      rc = prollyNodeBuilderAddWithCount(&b, pK, nK, apVal[i], anVal[i], aCount[i]);
+    }else{
+      rc = prollyNodeBuilderAdd(&b, pK, nK, apVal[i], anVal[i]);
+    }
+  }
+  if( rc==SQLITE_OK ){
+    rc = prollyNodeBuilderFinish(&b, &pData, &nData);
+  }
+  if( rc==SQLITE_OK ){
+    rc = chunkStorePut(pStore, pData, nData, pOut);
+  }
+  sqlite3_free(pData);
+  prollyNodeBuilderFree(&b);
+  return rc;
+}
+
+static int runMutateEdits(
+  ChunkStore *pStore,
+  ProllyCache *pCache,
+  const ProllyHash *pRoot,
+  u8 flags,
+  ProllyMutMap *pEdits
+){
+  ProllyMutator mut;
+  memset(&mut, 0, sizeof(mut));
+  mut.pStore = pStore;
+  mut.pCache = pCache;
+  mut.oldRoot = *pRoot;
+  mut.pEdits = pEdits;
+  mut.flags = flags;
+  return prollyMutateFlush(&mut);
+}
+
+static void test_mutate_corrupt_validation(void){
+  ChunkStore cs;
+  ProllyCache cache;
+  ProllyMutMap delEdits, batchEdits;
+  ProllyHash validLeaf, blobLeaf, deepRoot, badSkipRoot, badSameLvlRoot;
+  ProllyHash badFlagChildRoot, batchBadLvlRoot, batchBadFlagRoot;
+  i64 aKeys16[16];
+  u8 aVals16[16][4];
+  const u8 *apVals16[16];
+  int anVals16[16];
+  u8 blobKey[1] = {'x'};
+  const u8 *pBlobKey = blobKey;
+  int nBlobKey = 1;
+  u8 val4[4] = {'a', 'b', 'c', 'd'};
+  const u8 *pVal4 = val4;
+  int nVal4 = 4;
+  i64 k1 = 1;
+  int i, rc;
+  const char *path = DOLTLITE_TEST_TMPDIR "/test_prolly_mutate_corrupt";
+
+  remove(path);
+  rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), path,
+                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+  check("mutate_corrupt: open store", rc==SQLITE_OK);
+  if( rc!=SQLITE_OK ) return;
+  rc = prollyCacheInit(&cache, 4 * 1024 * 1024);
+  check("mutate_corrupt: init cache", rc==SQLITE_OK);
+
+  for(i=0; i<16; i++){
+    aKeys16[i] = i + 1;
+    memset(aVals16[i], 'v', 4);
+    apVals16[i] = aVals16[i];
+    anVals16[i] = 4;
+  }
+  rc = putRawNode(&cs, 0, PROLLY_NODE_INTKEY, 16, aKeys16, 0, 0,
+                  apVals16, anVals16, 0, &validLeaf);
+  check("mutate_corrupt: validLeaf", rc==SQLITE_OK);
+
+  rc = putRawNode(&cs, 0, PROLLY_NODE_BLOBKEY, 1, 0, &pBlobKey, &nBlobKey,
+                  &pVal4, &nVal4, 0, &blobLeaf);
+  check("mutate_corrupt: blobLeaf", rc==SQLITE_OK);
+
+  /* Two deletes bypass single/pair/batch-insert fast paths into streamingMerge. */
+  rc = prollyMutMapInit(&delEdits, 1);
+  check("mutate_corrupt: init delEdits", rc==SQLITE_OK);
+  rc = prollyMutMapDelete(&delEdits, 0, 0, 1);
+  check("mutate_corrupt: delEdits 1", rc==SQLITE_OK);
+  rc = prollyMutMapDelete(&delEdits, 0, 0, 2);
+  check("mutate_corrupt: delEdits 2", rc==SQLITE_OK);
+
+  /* 1. streamingMerge: root level >= PROLLY_CURSOR_MAX_DEPTH */
+  {
+    const u8 *pChild = validLeaf.data;
+    int nChild = PROLLY_HASH_SIZE;
+    u64 cnt = 16;
+    rc = putRawNode(&cs, PROLLY_CURSOR_MAX_DEPTH, PROLLY_NODE_INTKEY, 1,
+                    &k1, 0, 0, &pChild, &nChild, &cnt, &deepRoot);
+    check("mutate_corrupt: build deepRoot", rc==SQLITE_OK);
+    rc = runMutateEdits(&cs, &cache, &deepRoot, PROLLY_NODE_INTKEY, &delEdits);
+    check("mutate_corrupt: streaming deep root returns SQLITE_CORRUPT",
+          rc==SQLITE_CORRUPT);
+  }
+
+  /* 2. streamingMerge: root key flags mismatch */
+  rc = runMutateEdits(&cs, &cache, &blobLeaf, PROLLY_NODE_INTKEY, &delEdits);
+  check("mutate_corrupt: streaming root key flags mismatch returns SQLITE_CORRUPT",
+        rc==SQLITE_CORRUPT);
+
+  /* 3. streamingMergeNode: skipped child level (level 2 -> level 0) */
+  {
+    const u8 *pChild = validLeaf.data;
+    int nChild = PROLLY_HASH_SIZE;
+    u64 cnt = 16;
+    i64 bound = 16;
+    rc = putRawNode(&cs, 2, PROLLY_NODE_INTKEY, 1,
+                    &bound, 0, 0, &pChild, &nChild, &cnt, &badSkipRoot);
+    check("mutate_corrupt: build badSkipRoot", rc==SQLITE_OK);
+    rc = runMutateEdits(&cs, &cache, &badSkipRoot, PROLLY_NODE_INTKEY, &delEdits);
+    check("mutate_corrupt: streaming skipped child level returns SQLITE_CORRUPT",
+          rc==SQLITE_CORRUPT);
+  }
+
+  /* 4. streamingMergeNode: same-level / non-decreasing child (level 1 -> level 1) */
+  {
+    ProllyHash lvl1Child;
+    const u8 *pChild = validLeaf.data;
+    int nChild = PROLLY_HASH_SIZE;
+    u64 cnt = 16;
+    i64 bound = 16;
+    rc = putRawNode(&cs, 1, PROLLY_NODE_INTKEY, 1,
+                    &bound, 0, 0, &pChild, &nChild, &cnt, &lvl1Child);
+    check("mutate_corrupt: build lvl1Child", rc==SQLITE_OK);
+    pChild = lvl1Child.data;
+    rc = putRawNode(&cs, 1, PROLLY_NODE_INTKEY, 1,
+                    &bound, 0, 0, &pChild, &nChild, &cnt, &badSameLvlRoot);
+    check("mutate_corrupt: build badSameLvlRoot", rc==SQLITE_OK);
+    rc = runMutateEdits(&cs, &cache, &badSameLvlRoot, PROLLY_NODE_INTKEY, &delEdits);
+    check("mutate_corrupt: streaming same-level child returns SQLITE_CORRUPT",
+          rc==SQLITE_CORRUPT);
+  }
+
+  /* 5. streamingMergeNode: child key flags mismatch (INTKEY parent -> BLOBKEY leaf) */
+  {
+    const u8 *pChild = blobLeaf.data;
+    int nChild = PROLLY_HASH_SIZE;
+    u64 cnt = 1;
+    i64 bound = 16;
+    rc = putRawNode(&cs, 1, PROLLY_NODE_INTKEY, 1,
+                    &bound, 0, 0, &pChild, &nChild, &cnt, &badFlagChildRoot);
+    check("mutate_corrupt: build badFlagChildRoot", rc==SQLITE_OK);
+    rc = runMutateEdits(&cs, &cache, &badFlagChildRoot, PROLLY_NODE_INTKEY, &delEdits);
+    check("mutate_corrupt: streaming child flags mismatch returns SQLITE_CORRUPT",
+          rc==SQLITE_CORRUPT);
+  }
+
+  /* 17 same-size replacements: batchReplacementProbe checks indices 0..15
+  ** (all in child 0 = validLeaf), then replaceBatchNodeNoRechunk descends
+  ** into child 1 (corrupt). */
+  rc = prollyMutMapInit(&batchEdits, 1);
+  check("mutate_corrupt: init batchEdits", rc==SQLITE_OK);
+  for(i=0; i<17 && rc==SQLITE_OK; i++){
+    u8 newVal[4] = {'w', 'x', 'y', 'z'};
+    rc = prollyMutMapInsert(&batchEdits, 0, 0, i + 1, newVal, 4);
+  }
+  check("mutate_corrupt: fill batchEdits", rc==SQLITE_OK);
+
+  /* 6. replaceBatchNodeNoRechunk: child wrong level (miss + cache hit) */
+  {
+    ProllyHash lvl1Child;
+    const u8 *pChild = validLeaf.data;
+    int nChild = PROLLY_HASH_SIZE;
+    u64 cnt1 = 16;
+    i64 b1 = 16;
+    i64 aBounds[2] = {16, 17};
+    const u8 *apChildren[2];
+    int anChildren[2] = {PROLLY_HASH_SIZE, PROLLY_HASH_SIZE};
+    u64 aCounts[2] = {16, 1};
+
+    rc = putRawNode(&cs, 1, PROLLY_NODE_INTKEY, 1,
+                    &b1, 0, 0, &pChild, &nChild, &cnt1, &lvl1Child);
+    check("mutate_corrupt: batch lvl1Child", rc==SQLITE_OK);
+    apChildren[0] = validLeaf.data;
+    apChildren[1] = lvl1Child.data;
+    rc = putRawNode(&cs, 1, PROLLY_NODE_INTKEY, 2,
+                    aBounds, 0, 0, apChildren, anChildren, aCounts,
+                    &batchBadLvlRoot);
+    check("mutate_corrupt: build batchBadLvlRoot", rc==SQLITE_OK);
+
+    rc = runMutateEdits(&cs, &cache, &batchBadLvlRoot, PROLLY_NODE_INTKEY, &batchEdits);
+    check("mutate_corrupt: batch child wrong level (cold) returns SQLITE_CORRUPT",
+          rc==SQLITE_CORRUPT);
+    rc = runMutateEdits(&cs, &cache, &batchBadLvlRoot, PROLLY_NODE_INTKEY, &batchEdits);
+    check("mutate_corrupt: batch child wrong level (cached) returns SQLITE_CORRUPT",
+          rc==SQLITE_CORRUPT);
+  }
+
+  /* 7. replaceBatchNodeNoRechunk: child key flags mismatch (miss + cache hit) */
+  {
+    i64 aBounds[2] = {16, 17};
+    const u8 *apChildren[2] = {validLeaf.data, blobLeaf.data};
+    int anChildren[2] = {PROLLY_HASH_SIZE, PROLLY_HASH_SIZE};
+    u64 aCounts[2] = {16, 1};
+
+    rc = putRawNode(&cs, 1, PROLLY_NODE_INTKEY, 2,
+                    aBounds, 0, 0, apChildren, anChildren, aCounts,
+                    &batchBadFlagRoot);
+    check("mutate_corrupt: build batchBadFlagRoot", rc==SQLITE_OK);
+
+    rc = runMutateEdits(&cs, &cache, &batchBadFlagRoot, PROLLY_NODE_INTKEY, &batchEdits);
+    check("mutate_corrupt: batch child flags mismatch (cold) returns SQLITE_CORRUPT",
+          rc==SQLITE_CORRUPT);
+    rc = runMutateEdits(&cs, &cache, &batchBadFlagRoot, PROLLY_NODE_INTKEY, &batchEdits);
+    check("mutate_corrupt: batch child flags mismatch (cached) returns SQLITE_CORRUPT",
+          rc==SQLITE_CORRUPT);
+  }
+
+  prollyMutMapFree(&batchEdits);
+  prollyMutMapFree(&delEdits);
+  prollyCacheFree(&cache);
+  chunkStoreClose(&cs);
+  remove(path);
+}
+
 int main(void){
   sqlite3_initialize();
   printf("Prolly chunker boundary golden tests\n");
@@ -1661,6 +1910,7 @@ int main(void){
   test_canonical_root_chain();
   test_sparse_canonical_root();
   test_append_history();
+  test_mutate_corrupt_validation();
 
   printf("\n%d passed, %d failed\n", nPass, nFail);
   return nFail>0 ? 1 : 0;
